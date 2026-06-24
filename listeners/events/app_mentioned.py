@@ -76,6 +76,6 @@ def handle_app_mentioned(
     except Exception as e:
         logger.exception(f"Failed to handle app mention: {e}")
         say(
-            text=f":warning: Something went wrong! ({e})",
+            text=f":warning: Something went wrong! ({type(e).__name__}: {e})",
             thread_ts=event.get("thread_ts") or event["ts"],
         )

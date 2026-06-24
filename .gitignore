@@ -50,3 +50,4 @@ pip
 .pytest_cache/
 .tox
 tmp.txt
+manifest.json
