@@ -14,6 +14,7 @@ from slack_sdk.oauth.state_store import FileOAuthStateStore
 
 from agent import get_model
 from listeners import register_listeners
+from agent.scheduler import start_scheduler
 
 load_dotenv(dotenv_path=".env", override=False)
 get_model()  # Fail fast if no AI provider key is configured
@@ -117,6 +118,7 @@ app = App(
 )
 
 register_listeners(app)
+start_scheduler(app)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))

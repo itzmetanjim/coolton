@@ -11,3 +11,4 @@ class AgentDeps:
     thread_ts: str
     message_ts: str
     user_token: str | None = None
+    custom_instructions: str = ""

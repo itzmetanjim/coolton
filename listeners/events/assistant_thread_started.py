@@ -3,9 +3,10 @@ from logging import Logger
 from slack_bolt.context.set_suggested_prompts import SetSuggestedPrompts
 
 SUGGESTED_PROMPTS = [
-    {"title": "Write a Message", "message": "Help me draft a message to my team"},
-    {"title": "Summarize", "message": "Can you help me summarize something?"},
-    {"title": "Brainstorm", "message": "I need help brainstorming ideas"},
+    {"title": "Search the web", "message": "Search the web for the latest on AI agents"},
+    {"title": "Generate an image", "message": "Generate an image of a mountain lake at sunset"},
+    {"title": "Write code", "message": "Write a Python script to fetch data from an API"},
+    {"title": "Summarize", "message": "Can you summarize the current thread?"},
 ]
 
 

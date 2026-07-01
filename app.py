@@ -8,6 +8,7 @@ from slack_sdk import WebClient
 
 from agent import get_model
 from listeners import register_listeners
+from agent.scheduler import start_scheduler
 
 load_dotenv(dotenv_path=".env", override=False)
 get_model()  # Fail fast if no AI provider key is configured
@@ -23,6 +24,7 @@ app = App(
 )
 
 register_listeners(app)
+start_scheduler(app)
 
 if __name__ == "__main__":
     SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN")).start()
