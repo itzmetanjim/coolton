@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "no-ai-slop": {
+      "source": "realrossmanngroup/no_ai_slop_writing_rules",
+      "sourceType": "github",
+      "skillPath": "skills/no-ai-slop/SKILL.md",
+      "computedHash": "7d70bdd2c4b8536e720438005e79751024ba1b9d84f1e6e01d8ede2468721ae1"
+    },
+    "rossmann-voice": {
+      "source": "realrossmanngroup/no_ai_slop_writing_rules",
+      "sourceType": "github",
+      "skillPath": "skills/rossmann-voice/SKILL.md",
+      "computedHash": "40a6bbc3241a8abd3d3f0b496edf58832a1ce7c73dd7a53484dbf802f59713c1"
+    }
+  }
+}
