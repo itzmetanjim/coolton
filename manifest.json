@@ -1,16 +1,17 @@
 {
   "display_information": {
-    "name": "coolton"
+    "name": "coolton (UNSTABLE BETA)",
+    "description": "coolton is a much cooler cooler ai than gorkie, this one is prod",
+    "background_color": "#083927"
   },
   "features": {
-    "assistant_view": {
-      "assistant_description": "cool cool coool ai cooler than gorkie, made by tanjim",
-      "suggested_prompts": []
-    },
     "app_home": {
       "home_tab_enabled": true,
       "messages_tab_enabled": true,
       "messages_tab_read_only_enabled": false
+    },
+    "assistant_view": {
+      "assistant_description": "cool cool coool ai cooler than gorkie, made by tanjim"
     },
     "bot_user": {
       "display_name": "coolton",
@@ -22,6 +23,21 @@
       "https://ngrok-free.app/slack/oauth_redirect"
     ],
     "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "chat:write",
+        "groups:history",
+        "im:history",
+        "im:read",
+        "im:write",
+        "channels:write.invites",
+        "groups:write",
+        "reactions:write",
+        "reactions:read",
+        "users:read",
+        "assistant:write"
+      ],
       "user": [
         "search:read",
         "channels:history",
@@ -43,25 +59,16 @@
         "canvases:read",
         "canvases:write",
         "users:read.email"
-      ],
-      "bot": [
-        "app_mentions:read",
-        "channels:history",
-        "chat:write",
-        "groups:history",
-        "im:history",
-        "im:read",
-        "im:write",
-        "channels:write.invites",
-        "groups:write",
-        "reactions:write",
-        "reactions:read",
-        "users:read",
-        "assistant:write"
       ]
     }
   },
   "settings": {
+    "socket_mode_enabled": true,
+    "org_deploy_enabled": true,
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://ngrok-free.app/slack/events"
+    },
     "event_subscriptions": {
       "request_url": "https://ngrok-free.app/slack/events",
       "bot_events": [
@@ -73,13 +80,7 @@
         "message.im"
       ]
     },
-    "interactivity": {
-      "is_enabled": true,
-      "request_url": "https://ngrok-free.app/slack/events"
-    },
-    "is_mcp_enabled": true,
-    "org_deploy_enabled": true,
-    "socket_mode_enabled": true,
-    "token_rotation_enabled": false
+    "token_rotation_enabled": false,
+    "is_mcp_enabled": true
   }
 }

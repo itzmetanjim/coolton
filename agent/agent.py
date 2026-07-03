@@ -8,7 +8,7 @@ import threading
 import requests
 from pydantic_ai import RunContext
 from pydantic_ai import Agent
-from pydantic_ai.mcp import MCPServerStreamableHTTP
+from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.capabilities import PrepareTools
 from dataclasses import replace
 from agent.deps import AgentDeps
@@ -865,12 +865,11 @@ def run_agent(text, deps, message_history=None):
                 if deps.user_token:
                     logger.info("Slack MCP Server enabled (user_token present)")
                     try:
-                        toolsets.append(
-                            MCPServerStreamableHTTP(
-                                SLACK_MCP_URL,
-                                headers={"Authorization": f"Bearer {deps.user_token}"},
-                            )
+                        transport = StreamableHttpTransport(
+                            SLACK_MCP_URL,
+                            headers={"Authorization": f"Bearer {deps.user_token}"},
                         )
+                        toolsets.append(MCPToolset(transport))
                     except Exception as e:
                         logger.exception(f"Failed to create MCP server: {e}")
                 else:
