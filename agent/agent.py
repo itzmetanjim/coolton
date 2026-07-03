@@ -770,6 +770,31 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str
         return f"Error: {str(e)}"
 
 
+@agent.tool
+def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, params: dict) -> str:
+    """Make an arbitrary Slack API call as the BOT (not cooltonUser).
+    
+    Uses SLACK_BOT_TOKEN. Use for bot-level actions like posting messages as the bot,
+    updating bot messages, managing bot's own reactions, etc.
+    
+    Args:
+        method: Slack API method (e.g., 'chat.postMessage', 'chat.update', 'reactions.add').
+        params: Dictionary of parameters for the method.
+    """
+    from agent.tools.slack_bot_api import slack_api_call_as_bot
+    return slack_api_call_as_bot(method, params)
+
+
+@agent.tool
+def leave_thread_tool(ctx: RunContext[AgentDeps]) -> str:
+    """Leave the current thread - bot will ignore all future messages in this thread until @mentioned again.
+    
+    Use this when you want to stop responding in a thread but still want to be available if mentioned.
+    """
+    from agent.leave_thread_store import leave_thread
+    return leave_thread(ctx.deps.channel_id, ctx.deps.thread_ts)
+
+
 def run_agent(text, deps, message_history=None):
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
     provider_order = []

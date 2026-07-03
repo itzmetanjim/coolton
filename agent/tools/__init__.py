@@ -16,6 +16,8 @@ from .data_analysis import (
     install_opencode_in_sandbox,
     run_python_data_analysis,
 )
+from .leave_thread import leave_thread_tool, rejoin_thread_tool
+from .slack_bot_api import slack_api_call_as_bot
 
 __all__ = [
     "add_emoji_reaction",
@@ -40,4 +42,7 @@ __all__ = [
     "run_opencode_in_sandbox",
     "install_opencode_in_sandbox",
     "run_python_data_analysis",
+    "leave_thread_tool",
+    "rejoin_thread_tool",
+    "slack_api_call_as_bot",
 ]
