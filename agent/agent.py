@@ -195,7 +195,7 @@ def get_model() -> str:
     elif os.environ.get("OPENAI_API_KEY"):
         _cached_model = "openai:gpt-4.1-mini"
     elif os.environ.get("OPENROUTER_API_KEY"):
-        _cached_model = "openrouter:moonshotai/kimi-k2.6"
+        _cached_model = "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"
     elif os.environ.get("CEREBRAS_API_KEY"):
         _cached_model = "cerebras:zai-glm-4.7"
     else:
