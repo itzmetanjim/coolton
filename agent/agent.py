@@ -864,11 +864,10 @@ def run_agent(text, deps, message_history=None):
                 # Create model object if custom base_url (BYOK, HCAI)
                 model_obj = None
                 if provider_config.get("base_url"):
-                    from pydantic_ai.models.openai import OpenAIModel
-                    from pydantic_ai.providers.openai import OpenAIProvider
-                    model_obj = OpenAIModel(
+                    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatCompatibleProvider
+                    model_obj = OpenAIChatModel(
                         provider_config["model"],
-                        provider=OpenAIProvider(
+                        provider=OpenAIChatCompatibleProvider(
                             base_url=provider_config["base_url"],
                             api_key=provider_config["api_key"],
                         ),
@@ -880,10 +879,8 @@ def run_agent(text, deps, message_history=None):
                         os.environ["ANTHROPIC_API_KEY"] = provider_config["api_key"]
                     elif provider_name == "openai":
                         os.environ["OPENAI_API_KEY"] = provider_config["api_key"]
-                    elif provider_name == "jams":
-                        os.environ["JAMS_API_KEY"] = provider_config["api_key"]
-                    elif provider_name == "openrouter_fb":
-                        os.environ["OPENROUTER_API_KEY_FALLBACK"] = provider_config["api_key"]
+                    elif provider_name in ("jams", "openrouter_fb"):
+                        os.environ["OPENROUTER_API_KEY"] = provider_config["api_key"]
                     elif provider_name == "cerebras":
                         os.environ["CEREBRAS_API_KEY"] = provider_config["api_key"]
                 
