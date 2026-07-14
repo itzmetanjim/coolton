@@ -194,14 +194,18 @@ def get_model() -> str:
         _cached_model = "anthropic:claude-sonnet-4-6"
     elif os.environ.get("OPENAI_API_KEY"):
         _cached_model = "openai:gpt-4.1-mini"
-    elif os.environ.get("OPENROUTER_API_KEY"):
+    elif os.environ.get("JAMS_API_KEY"):
+        _cached_model = "openrouter:moonshotai/kimi-k2.6"
+    elif os.environ.get("HCAI_API_KEY"):
+        _cached_model = "openai:moonshotai/kimi-k2.6"
+    elif os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
         _cached_model = "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"
     elif os.environ.get("CEREBRAS_API_KEY"):
         _cached_model = "cerebras:zai-glm-4.7"
     else:
         raise RuntimeError(
             "No AI provider configured. "
-            "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY."
+            "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or JAMS_API_KEY."
         )
     return _cached_model
 
@@ -808,8 +812,13 @@ def run_agent(text, deps, message_history=None):
         provider_order.append(("anthropic", {"model": "anthropic:claude-sonnet-4-6", "base_url": None, "api_key": os.environ["ANTHROPIC_API_KEY"]}))
     if os.environ.get("OPENAI_API_KEY"):
         provider_order.append(("openai", {"model": "openai:gpt-4.1-mini", "base_url": None, "api_key": os.environ["OPENAI_API_KEY"]}))
-    if os.environ.get("OPENROUTER_API_KEY"):
-        provider_order.append(("openrouter", {"model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY"]}))
+    if os.environ.get("JAMS_API_KEY"):
+        provider_order.append(("jams", {"model": "openrouter:moonshotai/kimi-k2.6", "base_url": None, "api_key": os.environ["JAMS_API_KEY"]}))
+    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
+    if HCAI_API_KEY:
+        provider_order.append(("hcai", {"model": "moonshotai/kimi-k2.6", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
+        provider_order.append(("openrouter_fb", {"model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
     if os.environ.get("CEREBRAS_API_KEY"):
         provider_order.append(("cerebras", {"model": "cerebras:zai-glm-4.7", "base_url": None, "api_key": os.environ["CEREBRAS_API_KEY"]}))
     
@@ -835,16 +844,16 @@ def run_agent(text, deps, message_history=None):
         error_str = str(error).lower()
         return any(retryable in error_str.lower() for retryable in retryable_errors)
 
-    last_error = None
+    all_errors = []
     
     for provider_name, provider_config in provider_order:
         for attempt in range(max_retries):
             try:
                 model_name = provider_config["model"]
                 
-                # Create model object if custom base_url (BYOK)
+                # Create model object if custom base_url (BYOK, HCAI)
                 model_obj = None
-                if provider_name == "byok" and provider_config.get("base_url"):
+                if provider_config.get("base_url"):
                     from pydantic_ai.models.openai import OpenAIModel
                     from pydantic_ai.providers.openai import OpenAIProvider
                     model_obj = OpenAIModel(
@@ -856,13 +865,15 @@ def run_agent(text, deps, message_history=None):
                     )
                 
                 # Set env vars for this provider
-                if provider_name != "byok" and provider_config.get("api_key"):
+                if provider_name not in ("byok", "hcai") and provider_config.get("api_key"):
                     if provider_name == "anthropic":
                         os.environ["ANTHROPIC_API_KEY"] = provider_config["api_key"]
                     elif provider_name == "openai":
                         os.environ["OPENAI_API_KEY"] = provider_config["api_key"]
-                    elif provider_name == "openrouter":
-                        os.environ["OPENROUTER_API_KEY"] = provider_config["api_key"]
+                    elif provider_name == "jams":
+                        os.environ["JAMS_API_KEY"] = provider_config["api_key"]
+                    elif provider_name == "openrouter_fb":
+                        os.environ["OPENROUTER_API_KEY_FALLBACK"] = provider_config["api_key"]
                     elif provider_name == "cerebras":
                         os.environ["CEREBRAS_API_KEY"] = provider_config["api_key"]
                 
@@ -925,7 +936,7 @@ def run_agent(text, deps, message_history=None):
                 return agent_dynamic.run_sync(**run_kwargs)
 
             except Exception as e:
-                last_error = e
+                all_errors.append(f"{provider_name}: {e}")
                 if is_retryable_error(e) and attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
                     logger.warning(f"{provider_name} attempt {attempt + 1} failed with retryable error: {e}. Retrying in {delay}s...")
@@ -939,7 +950,8 @@ def run_agent(text, deps, message_history=None):
         logger.warning(f"Provider {provider_name} exhausted all retries, trying next provider...")
     
     # All providers failed
-    raise RuntimeError(f"All AI providers failed. Last error: {last_error}")
+    errors_str = "\n".join(f"  - {err}" for err in all_errors)
+    raise RuntimeError(f"All AI providers failed.\n{errors_str}")
 
 
 def disable_strict_for_all_tools(ctx, tool_defs):
