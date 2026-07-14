@@ -825,6 +825,16 @@ def run_agent(text, deps, message_history=None):
     if not provider_order:
         raise RuntimeError("No AI provider configured.")
 
+    from agent.fallback_cache import get_working_provider, set_working_provider, clear_cache as _clear_cache
+
+    cached_provider = get_working_provider(deps.user_id)
+    if cached_provider:
+        for i, (name, _) in enumerate(provider_order):
+            if name == cached_provider:
+                provider_order.insert(0, provider_order.pop(i))
+                logger.info(f"Fallback cache: trying {cached_provider} first for {deps.user_id}")
+                break
+
     # Retry configuration
     max_retries = 3
     base_delay = 2.0
@@ -933,7 +943,9 @@ def run_agent(text, deps, message_history=None):
                 else:
                     run_kwargs["model"] = model_name
 
-                return agent_dynamic.run_sync(**run_kwargs)
+                result = agent_dynamic.run_sync(**run_kwargs)
+                set_working_provider(deps.user_id, provider_name)
+                return result
 
             except Exception as e:
                 all_errors.append(f"{provider_name}: {e}")
@@ -946,6 +958,11 @@ def run_agent(text, deps, message_history=None):
                     logger.warning(f"{provider_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
                     break  # Try next provider
         
+        # If the cached provider failed, clear the cache so next call starts fresh
+        if cached_provider and provider_name == cached_provider:
+            _clear_cache(deps.user_id)
+            logger.warning(f"Cached provider {cached_provider} failed, cleared cache")
+
         # All retries exhausted for this provider, try next provider
         logger.warning(f"Provider {provider_name} exhausted all retries, trying next provider...")
     

@@ -1,0 +1,12 @@
+{
+  "reminders": [
+    {
+      "id": "01e30cfd",
+      "user_id": "U09ASUK57K8",
+      "channel_id": "C0B7QEK0MQB",
+      "text": "test reminder from cooltonUser - 2 min test",
+      "due_at": 1783335569.2461038,
+      "sent": true
+    }
+  ]
+}

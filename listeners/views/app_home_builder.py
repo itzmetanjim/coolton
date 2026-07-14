@@ -145,7 +145,18 @@ def build_app_home_view(
         ],
     })
 
+    # Fallback cache section
     blocks.append({"type": "divider"})
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "*AI Fallback Cache*\nIf a provider fails, the bot remembers which one worked and skips ahead to it for 30 minutes."},
+    })
+    blocks.append({
+        "type": "actions",
+        "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "Clear Fallback Cache", "emoji": True}, "action_id": "fallback_cache_clear", "style": "danger"},
+        ],
+    })
 
     # MCP section
     if is_connected:

@@ -13,6 +13,7 @@ from .instructions_actions import (
     handle_instructions_open,
     handle_instructions_clear,
 )
+from .fallback_cache_actions import handle_fallback_cache_clear
 
 
 def register(app: App):
@@ -24,3 +25,4 @@ def register(app: App):
     app.action(re.compile(r"^byok_delete_(.+)$"))(byok_delete_pattern)
     app.action("instructions_open")(handle_instructions_open)
     app.action("instructions_clear")(handle_instructions_clear)
+    app.action("fallback_cache_clear")(handle_fallback_cache_clear)
