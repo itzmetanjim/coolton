@@ -32,7 +32,9 @@ logs/
 data/
 
 # Skills CLI install cache (npx skills add drops here; curated skills live in skills/)
-.agents/
+# Ignore the .agents dir by default but keep all skill directories tracked.
+.agents/*
+!.agents/skills/
 
 # Python
 __pycache__/

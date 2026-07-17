@@ -4,6 +4,8 @@ import random
 import base64
 import re
 import time
+import shutil
+import subprocess
 import threading
 import requests
 from pydantic_ai import RunContext
@@ -274,7 +276,14 @@ Use `slack_api_call` when you need to do something in Slack that has no built-in
 
 ## SKILLS
 You have access to on-demand **skills** (reusable playbooks with instructions and scripts). When a request matches a skill's description, call `list_skills` to see what's available, then `load_skill` to pull in its instructions before doing the work. Skills live in the repo's `skills/` directory — only load one when it's actually relevant.
-If the user wants a new skill installed from the skills.sh marketplace, use the `install_skill` tool with the package (e.g. `vercel-labs/agent-skills`) or a GitHub URL, optionally with a specific `skill` name. After installing, load it with `load_skill`.
+
+**IMPORTANT — the agent sandbox is isolated.** Any shell/CLI commands you run in your own sandbox (e.g. `npx skills ...`, `mkdir`, file writes) have **NO effect** on this agent and are thrown away. Never tell the user you "installed" or "created" a skill via sandbox commands. To actually change skills, you MUST use the dedicated tools below — these are the only things that touch the real skill files:
+- `install_skill(package, skill?)` — install a skill from the skills.sh marketplace (Vercel's Agent Skills CLI). Use when the user says "install a skill" or names a package/repo (e.g. `vercel-labs/agent-skills` or a GitHub URL). After installing, load it with `load_skill`.
+- `create_skill(name, description, body?)` — create a new custom skill in `skills/`. Use for "make a skill" / "turn this into a skill".
+- `rename_skill(old_name, new_name)` — rename an existing skill.
+- `delete_skill(name)` — permanently remove a skill.
+
+These tools only operate inside the known skill directories (`skills/` and `.agents/skills/`) and reject any path that tries to escape them, so never pass absolute paths or `..` — just the skill name. Skills installed via the CLI land in `.agents/skills/` (gitignored); curated skills live in `skills/` (committed). After any change, skills are reloaded automatically — use `list_skills` to confirm.
 
 ## WEB EMBED (send_web_embed_tool)
 Use to share a live webpage preview/embed. Uses Slack's video block.
@@ -987,6 +996,153 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
     # The CLI installs into .agents/skills/<name>; make sure it's picked up.
     out = proc.stdout or ""
     return f"Skill install complete.\n{out[-1200:]}"
+
+
+def _repo_root() -> str:
+    return os.path.abspath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _skill_dirs() -> list[str]:
+    root = _repo_root()
+    return [os.path.join(root, "skills"), os.path.join(root, ".agents", "skills")]
+
+
+def _is_within(path: str, parent: str) -> bool:
+    """True only if `path` is the same as or nested under `parent` (no traversal)."""
+    path = os.path.abspath(path)
+    parent = os.path.abspath(parent)
+    return path == parent or path.startswith(parent + os.sep)
+
+
+def _resolve_skill(name: str) -> str | None:
+    """Find the on-disk folder for a skill by name across known skill dirs.
+
+    Only direct children of a known skill dir are matched; names containing path
+    separators or traversal sequences are rejected (returns None).
+    """
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        return None
+    for base in _skill_dirs():
+        cand = os.path.join(base, name)
+        # cand must be a direct child of a known skill dir
+        if os.path.dirname(os.path.abspath(cand)) != os.path.abspath(base):
+            continue
+        if os.path.isdir(cand) and os.path.exists(os.path.join(cand, "SKILL.md")):
+            return cand
+    return None
+
+
+def _safe_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "-", name.strip().lower())
+
+
+@agent.tool
+def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: str = "") -> str:
+    """Create a new custom agent skill in the repo's `skills/` directory.
+
+    Use this when the user wants to "make a skill", "create a skill for X",
+    "turn this workflow into a skill", or save a reusable playbook. This writes
+    a proper SKILL.md (frontmatter + instructions) so the skill is immediately
+    discoverable via list_skills / load_skill. Do NOT use shell/CLI commands in
+    the sandbox to create skills — they have no effect on the agent.
+
+    Args:
+        name: Skill name (will be slugified, e.g. "My Cool Skill" -> "my-cool-skill").
+        description: One-line description; used for skill discovery. Describe when
+            the skill should trigger.
+        body: The skill's instructions/body (Markdown). If empty, a minimal
+            template is created for you to fill in later.
+    """
+    slug = _safe_name(name)
+    if not slug:
+        return "Error: invalid skill name."
+    target = os.path.join(_repo_root(), "skills", slug)
+    if not _is_within(target, os.path.join(_repo_root(), "skills")):
+        return "Error: invalid skill name (must not escape the skills directory)."
+    if os.path.exists(target):
+        return f"Error: a skill named '{slug}' already exists at {target}."
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as e:
+        return f"Error creating skill directory: {e}"
+    if not body.strip():
+        body = (
+            "# " + slug.replace("-", " ").title() + "\n\n"
+            "Describe the workflow, steps, and guidance for this skill here.\n"
+        )
+    content = (
+        "---\n"
+        f"name: {slug}\n"
+        f"description: {description.strip()}\n"
+        "---\n\n"
+        f"# {slug.replace('-', ' ').title()}\n\n"
+        f"{body.strip()}\n"
+    )
+    try:
+        with open(os.path.join(target, "SKILL.md"), "w") as f:
+            f.write(content)
+    except OSError as e:
+        return f"Error writing SKILL.md: {e}"
+    return (
+        f"Created skill '{slug}' at skills/{slug}/SKILL.md. "
+        "It is now available via list_skills / load_skill."
+    )
+
+
+@agent.tool
+def rename_skill(ctx: RunContext[AgentDeps], old_name: str, new_name: str) -> str:
+    """Rename an existing agent skill (moves its folder and updates frontmatter name).
+
+    Use this when the user wants to rename a skill. Operates on skills found in
+    the repo's `skills/` or `.agents/skills/` directories. Do NOT use sandbox
+    shell commands — they have no effect on the agent.
+
+    Args:
+        old_name: Current skill name/folder.
+        new_name: Desired new skill name (will be slugified).
+    """
+    src = _resolve_skill(old_name)
+    if not src:
+        return f"Error: skill '{old_name}' not found in any skill directory."
+    new_slug = _safe_name(new_name)
+    if not new_slug:
+        return "Error: invalid new skill name."
+    dst = os.path.join(os.path.dirname(src), new_slug)
+    if os.path.exists(dst):
+        return f"Error: a skill named '{new_slug}' already exists."
+    try:
+        os.rename(src, dst)
+        sk_md = os.path.join(dst, "SKILL.md")
+        if os.path.exists(sk_md):
+            with open(sk_md, "r") as f:
+                txt = f.read()
+            txt = re.sub(r"(?m)^name:\s*.*$", f"name: {new_slug}", txt, count=1)
+            with open(sk_md, "w") as f:
+                f.write(txt)
+    except OSError as e:
+        return f"Error renaming skill: {e}"
+    return f"Renamed skill '{old_name}' -> '{new_slug}'."
+
+
+@agent.tool
+def delete_skill(ctx: RunContext[AgentDeps], name: str) -> str:
+    """Delete an agent skill folder entirely from disk.
+
+    Use this when the user wants to remove/uninstall a skill. This is permanent.
+    Operates on skills in the repo's `skills/` or `.agents/skills/` directories.
+    Do NOT use sandbox shell commands — they have no effect on the agent.
+
+    Args:
+        name: Skill name/folder to delete.
+    """
+    src = _resolve_skill(name)
+    if not src:
+        return f"Error: skill '{name}' not found in any skill directory."
+    try:
+        shutil.rmtree(src)
+    except OSError as e:
+        return f"Error deleting skill: {e}"
+    return f"Deleted skill '{name}' from {src}."
 
 
 def run_agent(text, deps, message_history=None):

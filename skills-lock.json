@@ -7,6 +7,18 @@
       "skillPath": "skills/deploy-to-vercel/SKILL.md",
       "computedHash": "03e0eaaa9bf13ba1e7ffa387f5893de6f324c0868c627001f179395a8feaa7c9"
     },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "computedHash": "781bd6d3f9b19f8c9af6b53d8d0e4876d0183841b565db34ca7092ffa412d111"
+    },
+    "fusion-skill-authoring": {
+      "source": "equinor/fusion-skills",
+      "sourceType": "github",
+      "skillPath": "skills/fusion-skill-authoring/SKILL.md",
+      "computedHash": "8870da12468879080f218f421247b158941d28d162bd7ed299b8d8f1d4501cee"
+    },
     "no-ai-slop": {
       "source": "realrossmanngroup/no_ai_slop_writing_rules",
       "sourceType": "github",
