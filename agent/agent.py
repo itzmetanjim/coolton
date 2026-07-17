@@ -282,6 +282,17 @@ Use to create and share a Felix whiteboard (tldraw).
 
 ## HTML EMBED (send_html_embed_tool)
 Use to send custom HTML as a live embed. Good for quick demos and rendered previews.
+
+## SEND MESSAGE (send_message)
+Use `send_message` to send a message to the current thread mid-turn without ending your turn.
+- Useful for: progress updates, intermediate results, asking clarifying questions
+- Does NOT end your turn — you can keep calling tools and respond again
+
+## SKIP (skip)
+Use `skip` to end your turn without sending a final message.
+- Use when the user's request doesn't need a reply
+- Use when you've already responded via `send_message`
+- Only call this at the very end, when you have nothing more to add
 """
 
 _cached_model: str | None = None
@@ -901,6 +912,36 @@ def leave_thread_tool(ctx: RunContext[AgentDeps]) -> str:
     return leave_thread(ctx.deps.channel_id, ctx.deps.thread_ts)
 
 
+@agent.tool
+def send_message(ctx: RunContext[AgentDeps], text: str) -> str:
+    """Send a message to the current Slack thread mid-turn. Use this to post progress updates,
+    intermediate results, or messages that don't wait for the final response.
+    
+    Args:
+        text: The message content to send (Markdown supported).
+    """
+    try:
+        ctx.deps.client.chat_postMessage(
+            channel=ctx.deps.channel_id,
+            thread_ts=ctx.deps.thread_ts,
+            text=text,
+        )
+        return "Message sent."
+    except Exception as e:
+        return f"Failed to send message: {e}"
+
+
+@agent.tool
+def skip(ctx: RunContext[AgentDeps]) -> str:
+    """Skip sending the final response message at the end of your turn.
+    
+    Use this when the user's request doesn't need a reply, when you've already
+    responded via send_message, or when you have nothing to add.
+    """
+    ctx.deps.should_skip = True
+    return "Final message will be skipped."
+
+
 def run_agent(text, deps, message_history=None):
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
     provider_order = []
@@ -986,6 +1027,16 @@ def run_agent(text, deps, message_history=None):
         error_str = str(error).lower()
         return any(retryable in error_str.lower() for retryable in retryable_errors)
 
+    def is_fatal_error(error: Exception) -> bool:
+        error_str = str(error).lower()
+        fatal_patterns = [
+            "coroutine",
+            "has no len()",
+            "has no attribute",
+            "'module' object is not callable",
+        ]
+        return any(p in error_str for p in fatal_patterns)
+
     all_errors = []
     
     for provider_name, provider_config in provider_order:
@@ -1067,12 +1118,17 @@ def run_agent(text, deps, message_history=None):
                     tools=tool_functions,
                 )
 
+                capabilities = [PrepareTools(disable_strict_for_all_tools)]
+                if deps.plan_ts:
+                    from agent.plan_block import build_plan_hooks
+                    capabilities.append(build_plan_hooks())
+
                 run_kwargs = dict(
                     user_prompt=text,
                     deps=deps,
                     message_history=message_history,
                     toolsets=toolsets,
-                    capabilities=[PrepareTools(disable_strict_for_all_tools)],
+                    capabilities=capabilities,
                 )
                 if model_obj:
                     run_kwargs["model"] = model_obj
@@ -1084,6 +1140,9 @@ def run_agent(text, deps, message_history=None):
                 return result
 
             except Exception as e:
+                if is_fatal_error(e):
+                    logger.critical(f"Fatal error in {provider_name}: {e}")
+                    raise
                 all_errors.append(f"{provider_name}: {e}")
                 if is_retryable_error(e) and attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)

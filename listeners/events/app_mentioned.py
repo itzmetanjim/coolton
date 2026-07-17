@@ -64,19 +64,35 @@ def handle_app_mentioned(
             message_ts=event["ts"],
             user_token=context.user_token,
         )
+
+        from agent.plan_block import send_plan_message, finalize_plan_message
+        plan_ts = send_plan_message(deps)
+        deps.plan_ts = plan_ts
+
         result = run_agent(cleaned_text, deps, message_history=history)
 
-        # Stream response in thread with feedback buttons
-        streamer = say_stream()
-        streamer.append(markdown_text=result.output)
-        feedback_blocks = build_feedback_blocks()
-        streamer.stop(blocks=feedback_blocks)
+        if deps.should_skip:
+            if plan_ts:
+                finalize_plan_message(deps)
+        else:
+            finalize_plan_message(deps, result.output)
+
+            # Stream response in thread with feedback buttons
+            streamer = say_stream()
+            streamer.append(markdown_text=result.output)
+            feedback_blocks = build_feedback_blocks()
+            streamer.stop(blocks=feedback_blocks)
 
         # Store conversation history
         conversation_store.set_history(channel_id, thread_ts, result.all_messages())
 
     except Exception as e:
         logger.exception(f"Failed to handle app mention: {e}")
+        try:
+            from agent.plan_block import set_plan_error
+            set_plan_error(deps, str(e))
+        except Exception:
+            pass
         say(
             text=f":warning: Something went wrong! ({type(e).__name__}: {e})",
             thread_ts=event.get("thread_ts") or event["ts"],
