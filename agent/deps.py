@@ -15,3 +15,4 @@ class AgentDeps:
     plan_ts: str | None = None
     plan_tasks: dict = field(default_factory=dict)
     should_skip: bool = False
+    model_used: str = ""
