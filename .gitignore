@@ -31,6 +31,9 @@ logs/
 # OAuth
 data/
 
+# Skills CLI install cache (npx skills add drops here; curated skills live in skills/)
+.agents/
+
 # Python
 __pycache__/
 *.db

@@ -272,6 +272,10 @@ Use `slack_api_call` when you need to do something in Slack that has no built-in
 - Runs as cooltonUser (SLACK_USER_TOKEN)
 - Pass the Slack Web API method name and a params dict
 
+## SKILLS
+You have access to on-demand **skills** (reusable playbooks with instructions and scripts). When a request matches a skill's description, call `list_skills` to see what's available, then `load_skill` to pull in its instructions before doing the work. Skills live in the repo's `skills/` directory — only load one when it's actually relevant.
+If the user wants a new skill installed from the skills.sh marketplace, use the `install_skill` tool with the package (e.g. `vercel-labs/agent-skills`) or a GitHub URL, optionally with a specific `skill` name. After installing, load it with `load_skill`.
+
 ## WEB EMBED (send_web_embed_tool)
 Use to share a live webpage preview/embed. Uses Slack's video block.
 - ALMOST NEVER USE THIS. Use Whiteboard or HTML embeds instead.
@@ -942,6 +946,49 @@ def skip(ctx: RunContext[AgentDeps]) -> str:
     return "Final message will be skipped."
 
 
+@agent.tool
+def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> str:
+    """Install a new agent skill from the skills.sh marketplace (Vercel's Agent Skills CLI).
+
+    Run this when the user asks to "install a skill", "add a skill", or names a
+    skill package/repo they want (e.g. `vercel-labs/agent-skills`, or a GitHub URL).
+    After install, the skill is available immediately via load_skill / list_skills.
+
+    Args:
+        package: The skill package to install. Either `owner/repo` (e.g.
+            `vercel-labs/agent-skills`) or a full GitHub URL
+            (e.g. `https://github.com/vercel-labs/agent-skills`).
+        skill: Optional specific skill name inside a multi-skill repo. Leave empty
+            to install all skills in the package.
+    """
+    import shutil
+    import subprocess
+
+    cmd = ["npx", "-y", "skills@latest", "add", package, "-y"]
+    if skill:
+        cmd += ["-s", skill]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        return "Error: skill install timed out after 180s."
+    except FileNotFoundError:
+        return "Error: npx/node not found on this system."
+
+    if proc.returncode != 0:
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return f"Failed to install skill (exit {proc.returncode}):\n{out[-1500:]}"
+
+    # The CLI installs into .agents/skills/<name>; make sure it's picked up.
+    out = proc.stdout or ""
+    return f"Skill install complete.\n{out[-1200:]}"
+
+
 def run_agent(text, deps, message_history=None):
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
     provider_order = []
@@ -1122,6 +1169,14 @@ def run_agent(text, deps, message_history=None):
                 if deps.plan_ts:
                     from agent.plan_block import build_plan_hooks
                     capabilities.append(build_plan_hooks())
+
+                from pydantic_ai_skills import SkillsCapability
+                capabilities.append(
+                    SkillsCapability(
+                        directories=["skills", ".agents/skills"],
+                        auto_reload=True,
+                    )
+                )
 
                 run_kwargs = dict(
                     user_prompt=text,
