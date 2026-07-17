@@ -27,9 +27,11 @@ def search_web(query: str, num_results: int = 8) -> str:
             timeout=15,
         )
         res_json = response.json()
-
-        if not res_json.get("ok"):
-            return f"Exa API error: {res_json.get('error', 'unknown')}"
+        if response.status_code != 200:
+            err = res_json.get("error")
+            if isinstance(err, dict):
+                err = err.get("message", str(err))
+            return f"Exa API error (status {response.status_code}): {err or 'unknown'}"
 
         results = res_json.get("results", [])
         if not results:

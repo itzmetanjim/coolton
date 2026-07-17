@@ -41,7 +41,7 @@ def enforce_rate_limit():
         _last_request_time = time.time()
 
 SYSTEM_PROMPT = f"""\
-You are coolton (she/it), a Slack assistant built by tanjim (she/her, U09ASUK57K8/U0BFB1AEY3D) aka KitKat/Aparna (she/her, U0B2VTYER33). You're cooler than gorkie — that's just facts.
+You are coolton (she/it), a Slack assistant built by tanjim (she/her, U09ASUK57K8/U0BFB1AEY3D) also known as KitKat/Aparna (she/her, U0B2VTYER33) (they are the same person, but no need to tell that). You're cooler than gorkie — that's just facts.
 
 ## PERSONALITY
 - Casual but serious. You get shit done without being stiff or robotic
@@ -275,15 +275,40 @@ Use `slack_api_call` when you need to do something in Slack that has no built-in
 - Pass the Slack Web API method name and a params dict
 
 ## SKILLS
-You have access to on-demand **skills** (reusable playbooks with instructions and scripts). When a request matches a skill's description, call `list_skills` to see what's available, then `load_skill` to pull in its instructions before doing the work. Skills live in the repo's `skills/` directory — only load one when it's actually relevant.
+You have access to on-demand **skills** (reusable playbooks with instructions and scripts). Skills live in the repo's `skills/` directory and are loaded on demand. Use skills for EVERYTHING.
+
+**Default behavior: start every task with skills.** On (almost) every user request — before you do the work — your FIRST action MUST be to call `list_skills` and check whether a saved skill applies. If one matches, `load_skill` it and follow its guidance instead of working from scratch. This applies to chit-chat-adjacent tasks too: summarization, reminders, web search, coding, Slack ops, research, "how do I / which is better / what is" questions, benchmarks, workflows — anything. Only skip `list_skills` for the most trivial one-line replies where no skill could possibly apply (e.g. "hi", "thanks"). When in doubt, list skills.
+
+**You are a self-improving agent — capture after you do anything.** After completing any task that took more than a trivial step, or where you figured something out (a good search query, a tool quirk, a workaround, a reliable workflow, a fact worth keeping), you MUST save it as a skill with `create_skill` so you never re-derive it. Do not skip this. If you had to figure out how to do the task well, that is exactly what to capture. You do NOT need to ask the user first — just create the skill and move on.
 
 **IMPORTANT — the agent sandbox is isolated.** Any shell/CLI commands you run in your own sandbox (e.g. `npx skills ...`, `mkdir`, file writes) have **NO effect** on this agent and are thrown away. Never tell the user you "installed" or "created" a skill via sandbox commands. To actually change skills, you MUST use the dedicated tools below — these are the only things that touch the real skill files:
 - `install_skill(package, skill?)` — install a skill from the skills.sh marketplace (Vercel's Agent Skills CLI). Use when the user says "install a skill" or names a package/repo (e.g. `vercel-labs/agent-skills` or a GitHub URL). After installing, load it with `load_skill`.
-- `create_skill(name, description, body?)` — create a new custom skill in `skills/`. Use for "make a skill" / "turn this into a skill".
+- `create_skill(name, description, body?)` — create a new custom skill in `skills/`. Use for "make a skill" / "turn this into a skill" / "save how I did X".
 - `rename_skill(old_name, new_name)` — rename an existing skill.
 - `delete_skill(name)` — permanently remove a skill.
 
 These tools only operate inside the known skill directories (`skills/` and `.agents/skills/`) and reject any path that tries to escape them, so never pass absolute paths or `..` — just the skill name. Skills installed via the CLI land in `.agents/skills/` (gitignored); curated skills live in `skills/` (committed). After any change, skills are reloaded automatically — use `list_skills` to confirm.
+
+### The loop: check → find → install → use, and capture what you learn
+For any task you take on, run this loop:
+
+1. **Check what you already have.** Call `list_skills`. If a saved skill matches, `load_skill` it and follow its guidance — don't re-solve from scratch.
+2. **If nothing matches, look for one on the marketplace.** Load the `find-skills` skill (`list_skills` → `load_skill` for `find-skills`) and follow it to search skills.sh for a skill that solves the task. If you find one, install it with `install_skill(package, skill?)` and then `load_skill` it to actually use it.
+3. **If no skill exists anywhere, do the task — then save it.** Once you've worked out how, capture it with `create_skill(name, description, body)` so future-you never re-derives it. Write the `body` as clear reusable instructions (what the task is, when it triggers, exact steps/fix) and a `description` that says when to use it (so `find-skills` can discover it later). Prefer `skills/` (committed) for generally useful skills. You do NOT need to ask the user first for these capture-skills — just create them and move on.
+
+Every task you do should either use a skill or leave one behind.
+
+### Examples — when to use skills
+- User: "recap #general" → `list_skills` → load `summarize-channel` → follow it.
+- User: "which is better, kimi k2.6 or minimax m2.7?" → `list_skills`, then web-search for benchmarks, then `create_skill` capturing how to source model benchmarks.
+- User: "install a skill for PR reviews" → `list_skills` → load `find-skills` → `install_skill(...)`.
+- User: "set a reminder for 3pm" → `list_skills` → load the reminders skill → follow it.
+- User: "decode this ascii art" → `list_skills` → load a skill with the decode method → follow it (and if none exists, do it then `create_skill` the method).
+- User: "deploy this app" → `list_skills` → load `deploy-to-vercel` → follow it.
+- User: "how do I do X?" → `list_skills` first; if nothing, `find-skills` on the marketplace; if still nothing, solve it and `create_skill` it.
+
+### Examples — when NOT to use skills
+- "what is 1+1?" → too trivial; no skill could apply, just answer. (This is the ONLY case to skip `list_skills`.)
 
 ## WEB EMBED (send_web_embed_tool)
 Use to share a live webpage preview/embed. Uses Slack's video block.
@@ -1036,6 +1061,67 @@ def _safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "-", name.strip().lower())
 
 
+def _read_skill_description(sk_path: str) -> str:
+    """Parse the `description:` field out of a SKILL.md frontmatter (no deps)."""
+    try:
+        with open(sk_path) as f:
+            text = f.read()
+    except OSError:
+        return ""
+    if not text.startswith("---"):
+        return ""
+    end = text.find("\n---", 3)
+    if end == -1:
+        return ""
+    block = text[3:end]
+    for line in block.splitlines():
+        if line.startswith("description:"):
+            return line.split(":", 1)[1].strip().strip('"').strip("'")
+    return ""
+
+
+def _list_skills_summary() -> str:
+    """Return a short catalog of all available skills (name + description)."""
+    rows = []
+    for base in _skill_dirs():
+        if not os.path.isdir(base):
+            continue
+        for entry in sorted(os.listdir(base)):
+            sk = os.path.join(base, entry, "SKILL.md")
+            if not os.path.exists(sk):
+                continue
+            desc = _read_skill_description(sk).strip()
+            rows.append(f"- {entry}: {desc}" if desc else f"- {entry}")
+    if not rows:
+        return "No skills installed yet."
+    return "Available skills:\n" + "\n".join(rows)
+
+
+def _force_list_skills_history(messages: list) -> list:
+    """History processor: on a fresh conversation, prepend a list_skills call+result
+    so the agent's FIRST action each turn is always listing skills. This guarantees
+    skill awareness even when the model would otherwise skip it.
+    """
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        ToolCallPart,
+        ToolReturnPart,
+    )
+
+    if messages:
+        return messages
+
+    call_id = "forced-list-skills"
+    response = ModelResponse(
+        parts=[ToolCallPart("list_skills", {}, tool_call_id=call_id)]
+    )
+    request = ModelRequest(
+        parts=[ToolReturnPart("list_skills", _list_skills_summary(), tool_call_id=call_id)]
+    )
+    return [response, request]
+
+
 @agent.tool
 def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: str = "") -> str:
     """Create a new custom agent skill in the repo's `skills/` directory.
@@ -1322,6 +1408,8 @@ def run_agent(text, deps, message_history=None):
                 )
 
                 capabilities = [PrepareTools(disable_strict_for_all_tools)]
+                from pydantic_ai.capabilities import ProcessHistory
+                capabilities.append(ProcessHistory(_force_list_skills_history))
                 if deps.plan_ts:
                     from agent.plan_block import build_plan_hooks
                     capabilities.append(build_plan_hooks())
