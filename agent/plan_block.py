@@ -129,23 +129,58 @@ def set_plan_error(deps, error_text: str) -> None:
 
 
 def finalize_plan_message(deps, result_text: str | None = None) -> None:
+    """Mark tool tasks done and add an in-progress 'Responding' step.
+
+    The actual answer is streamed AFTER this returns, so the final plan step
+    must stay in_progress until complete_plan_message() is called.
+    """
     if not deps.plan_ts:
         return
-    tasks = list(deps.plan_tasks.values())
-    for task in tasks:
+    for task in deps.plan_tasks.values():
         if task.get("status") == "in_progress":
             task["status"] = "complete"
-    blocks = build_plan_blocks("Done", tasks)
-    text = "Done"
+    if deps.model_used:
+        model_id = _make_task_id()
+        deps.plan_tasks[model_id] = {
+            "task_id": model_id,
+            "title": f"Model: {deps.model_used}",
+            "status": "complete",
+        }
+    respond_id = _make_task_id()
+    deps.plan_tasks[respond_id] = {
+        "task_id": respond_id,
+        "title": "Responding",
+        "status": "in_progress",
+    }
+    blocks = build_plan_blocks("Responding", list(deps.plan_tasks.values()))
     try:
         deps.client.chat_update(
             channel=deps.channel_id,
             ts=deps.plan_ts,
             blocks=blocks,
-            text=text,
+            text="Responding",
         )
     except Exception as e:
         _log_slack_error("Failed to finalize plan message", e)
+
+
+def complete_plan_message(deps) -> None:
+    """Flip the in-progress 'Responding' step to complete; the answer is now sent."""
+    if not deps.plan_ts:
+        return
+    for task in deps.plan_tasks.values():
+        if task.get("status") == "in_progress":
+            task["status"] = "complete"
+    blocks = build_plan_blocks("Done", list(deps.plan_tasks.values()))
+    try:
+        deps.client.chat_update(
+            channel=deps.channel_id,
+            ts=deps.plan_ts,
+            blocks=blocks,
+            text="Done",
+        )
+    except Exception as e:
+        _log_slack_error("Failed to complete plan message", e)
 
 
 TOOL_DISPLAY_NAMES = {

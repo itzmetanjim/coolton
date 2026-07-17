@@ -56,3 +56,19 @@ pip
 .tox
 tmp.txt
 manifest.json
+
+# Runtime state (regenerated at runtime; contains private Slack IDs)
+conversations.json
+fallback_cache.json
+leave_thread_store.json
+reminders.json
+thread_sandboxes.json
+byok_key.bin
+
+# Local Slack CLI project metadata (team IDs, local paths)
+.slack/
+
+# Stale scratch file
+aaa.py
+
+# Keep skills tracked: .agents/skills/ is whitelisted above; curated skills/ is tracked.

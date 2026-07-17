@@ -76,7 +76,7 @@ def handle_message(
             user_token=context.user_token,
         )
 
-        from agent.plan_block import send_plan_message, finalize_plan_message
+        from agent.plan_block import send_plan_message, finalize_plan_message, complete_plan_message
         plan_ts = send_plan_message(deps)
         deps.plan_ts = plan_ts
 
@@ -85,6 +85,7 @@ def handle_message(
         if deps.should_skip:
             if plan_ts:
                 finalize_plan_message(deps)
+                complete_plan_message(deps)
         else:
             finalize_plan_message(deps, result.output)
 
@@ -93,6 +94,7 @@ def handle_message(
             streamer.append(markdown_text=result.output)
             feedback_blocks = build_feedback_blocks()
             streamer.stop(blocks=feedback_blocks)
+            complete_plan_message(deps)
 
         # Store conversation history
         conversation_store.set_history(channel_id, thread_ts, result.all_messages())
