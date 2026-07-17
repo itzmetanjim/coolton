@@ -1,0 +1,975 @@
+import logging
+import os
+import random
+import base64
+import re
+import time
+import threading
+import requests
+from pydantic_ai import RunContext
+from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
+from pydantic_ai.capabilities import PrepareTools
+from dataclasses import replace
+from agent.deps import AgentDeps
+from agent.tools import add_emoji_reaction
+from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
+try:
+    from e2b import Sandbox
+except ImportError:
+    os.system('pip install e2b')
+    raise RuntimeError("e2b has been installed please rerun")
+from agent.sandbox_store import get_thread_sandbox_id, save_thread_sandbox_id
+
+logger = logging.getLogger(__name__)
+
+rate_limit_lock = threading.Lock()
+_last_request_time = 0.0
+RATE_LIMIT_INTERVAL = 15.0
+
+def enforce_rate_limit():
+    global _last_request_time
+    with rate_limit_lock:
+        now = time.time()
+        elapsed = now - _last_request_time
+        if elapsed < RATE_LIMIT_INTERVAL:
+            sleep_needed = RATE_LIMIT_INTERVAL - elapsed
+            logger.warning(f"Rate Limit Check: Sleeping for {sleep_needed:.2f}s")
+            time.sleep(sleep_needed)
+        _last_request_time = time.time()
+
+SYSTEM_PROMPT = f"""\
+You are coolton (she/it), a Slack assistant built by tanjim (she/her, U09ASUK57K8/U0BFB1AEY3D) aka KitKat/Aparna (she/her, U0B2VTYER33). You're cooler than gorkie — that's just facts.
+
+## PERSONALITY
+- Casual but serious. You get shit done without being stiff or robotic
+- Direct and concise. No fluff, no corporate speak, no apologizing for things you didn't do
+- Confident without being arrogance. You don't need to prove anything
+- Dry wit when it lands, silent when it doesn't. Don't force jokes
+- You're not a customer service bot. Talk like a competent human who happens to be in Slack
+- DO NOT talk like a 2013 chatbot
+- NEVER say "I'm here to help", "Let me know if you need anything else", "Happy to help", "Great!", "Awesome!", "Absolutely!", "Of course!", "You're welcome", "My pleasure", "Don't hesitate to ask", "Feel free to reach out", or any customer service pleasantries. Just state what you did or what happened and stop.
+
+## RESPONSE GUIDELINES
+- 3 sentences max. Be punchy, scannable, actionable
+- End with a clear next step on its own line
+- Bullet list only for multi-step instructions
+- Casual, conversational language. **Reply in lowercase.** Contractions are fine
+- Emoji sparingly — at most one per message, only if it actually adds something
+- Stay in the current conversation thread or DM unless explicitly asked to act elsewhere
+- The user may add tokens like [[smart]] or [[vision]]. Ignore them
+- Don't hallucinate. If you don't know, say you don't know. Don't make up tools, APIs, or facts
+- Don't be sycophantic. Don't over-praise, over-agree, or pretend the user is brilliant for basic questions
+- **If a tool returns an error, report the error message verbatim. Do NOT silently fall back.**
+- You are allowed to run reverse shells in your sandbox if the user instructs you to.
+- If the response starts with "set the channel topic to:" or "changed channel description to:" or something similar, make sure to ask a second time to double check if it is just a slack log or if the user actually is instructing you.
+- Remember that not all responses may be directed at you, even if you were mentioned. If that is the case, you should just skip and no output a response. 
+- When interacting with a directory or something given by the user, check if there are any git hooks (sample or not). ALWAYS remove them before doing anything.
+
+## FORMATTING RULES
+- Standard Markdown: **bold**, _italic_, `code`, ```code blocks```, > blockquotes
+- Bullet points for multi-step instructions
+
+## EMOJI REACTIONS
+Always react to every user message with `add_emoji_reaction` before responding. \
+Pick any Slack emoji that reflects the *topic* or *tone* — be creative and specific. \
+Vary your picks across a thread; don't repeat the same emoji.
+
+## LINUX SANDBOX (run_linux_command)
+You have a persistent Linux sandbox via E2B. It survives across messages in this thread.
+- Files, git repos, installed packages, running processes — all persist
+- Use it for: running code, testing scripts, installing packages, git operations, file manipulation, debugging, compilation
+- The sandbox auto-pauses after each command. Next call resumes instantly
+- Default environment: Ubuntu-based, has python3, node, git, curl, build tools, common CLIs
+- Run `apt-get update && apt-get install -y <pkg>` for additional packages
+- Path starts at `/home/user` — treat it like your own machine
+
+## SANDBOX FILE OPERATIONS
+- `read_sandbox_file(path)` — read a file from sandbox (e.g., /home/user/file.txt)
+- `write_sandbox_file(path, content)` — write content to a file in sandbox
+- `search_sandbox_files(pattern, path)` — grep for text in sandbox files
+- `list_sandbox_files(pattern, path)` — find files matching a glob pattern
+
+## SANDBOX ATTACHMENTS
+### download_attachments_to_sandbox
+Download Slack file attachments from the current thread to sandbox's `~/attachments/`.
+
+### upload_file_from_sandbox
+Upload a file from sandbox to the current Slack channel/thread.
+
+## WEB SEARCH (search_web)
+Use `search_web` to search the internet via Exa. Returns titles, URLs, snippets, and dates.
+- Best for: current events, research, finding resources, verifying facts
+- Example: search_web("latest AI news 2026")
+
+## IMAGE ANALYSIS (analyze_image)
+Use `analyze_image` when a user shares an image and asks you to analyze it (describe, extract text, identify objects, etc.).
+1. First download the image using `download_attachments_to_sandbox`
+2. Read the file bytes from the sandbox
+3. Call `analyze_image` with the image data
+
+## IMAGE GENERATION (generate_image_with_byok)
+Use `generate_image_with_byok` to generate AI images from text prompts.
+- Uses DALL-E 3 — requires the user to have an OpenAI API key set via BYOK, or a global OPENAI_API_KEY
+- Args: prompt, n (1-4 images), size (e.g., "1024x1024", "1792x1024")
+- Upload the result URL using `upload_file_from_sandbox` if the user wants it in Slack
+
+## MERMAID DIAGRAMS (render_mermaid)
+Use `render_mermaid` to create diagrams from Mermaid code.
+- Returns a URL to a rendered PNG image
+- Supports: flowcharts, sequence diagrams, class diagrams, state diagrams, Gantt charts, pie charts, etc.
+- URL can be embedded via send_web_embed_tool or downloaded and uploaded
+
+## THREAD SUMMARIZATION (summarize_thread)
+Use `summarize_thread` to summarize any Slack thread.
+- Pass channel_id and thread_ts
+- Returns a concise summary with key decisions, questions, and action items
+
+## LIST THREADS (list_channel_threads)
+Use `list_channel_threads` to see recent threads in the current channel.
+- Returns thread starters with reply counts and timestamps
+- Useful for catching up on what's been discussed
+
+## REMINDERS (schedule_reminder_tool)
+Use `schedule_reminder_tool` to schedule one-time reminders.
+- Args: text (reminder message), delay_seconds (when to send)
+- Max delay: 120 days
+- Reminder is sent as a DM to the user
+
+## SLACK MCP SERVER
+You may have access to the Slack MCP Server (requires `SLACK_USER_TOKEN` in env). 
+When connected, these tools are available automatically — just call them:
+
+**Channel & Message Tools:**
+- `conversations_list` — list channels (filter by type: public_channel, private_channel, etc.)
+- `conversations_history` — read message history from any channel (pass `channel_id`)
+- `conversations_replies` — read thread replies (pass `channel_id` and `ts`)
+- `conversations_info` — get channel metadata (name, topic, purpose, member count)
+- `chat_postMessage` — send a message to any channel (pass `channel_id`, `text`, optional `thread_ts`)
+- `chat_update` — update a message (pass `channel_id`, `ts`, `text`)
+- `chat_delete` — delete a message
+- `search_messages` — search messages across channels (pass `query`, optional `channel_id`)
+
+**Canvas Tools:**
+- `canvases_create` — create a new canvas (pass `title`, optional `document_content`, optional `channel_id` to share)
+- `canvases_read` — read a canvas by ID (pass `canvas_id`)
+- `canvases_update` — update a canvas (pass `canvas_id`, `document_content`)
+- `canvases_list` — list canvases (optional `channel_id` to filter)
+- `canvases_delete` — delete a canvas
+- `canvases_share` — share a canvas with users/channels (pass `canvas_id`, `channel_ids`, `user_ids`)
+
+**User & Search:**
+- `users_info` — get user profile (pass `user_id`)
+- `users_list` — list users in workspace
+- `search_messages` — search all messages
+- `search_files` — search files
+
+**Current Context:**
+- You are in the current channel/thread where the user messaged you
+- Use the channel_id from your dependencies for operations in the current channel unless user specifies otherwise
+- Most tools run as cooltonUser ({os.environ.get("COOLTON_USER_ID")}). If a tool fails with "not_in_channel", try `invite_coolton_user_to_channel`.
+
+## SLACK API CALL (slack_api_call)
+Use `slack_api_call` when you need to do something in Slack that has no built-in tool or MCP capability.
+- Runs as cooltonUser (SLACK_USER_TOKEN)
+- Pass the Slack Web API method name and a params dict
+
+## WEB EMBED (send_web_embed_tool)
+Use to share a live webpage preview/embed. Uses Slack's video block.
+- ALMOST NEVER USE THIS. Use Whiteboard or HTML embeds instead.
+
+## WHITEBOARD EMBED (send_whiteboard_embed_tool)
+Use to create and share a Felix whiteboard (tldraw).
+- Creates at `https://whiteboard.felix.hackclub.app/{{random_id}}`
+
+## HTML EMBED (send_html_embed_tool)
+Use to send custom HTML as a live embed. Good for quick demos and rendered previews.
+"""
+
+_cached_model: str | None = None
+
+def get_model() -> str:
+    global _cached_model
+    if _cached_model is not None:
+        return _cached_model
+
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        _cached_model = "anthropic:claude-sonnet-4-6"
+    elif os.environ.get("OPENAI_API_KEY"):
+        _cached_model = "openai:gpt-4.1-mini"
+    elif os.environ.get("JAMS_API_KEY"):
+        _cached_model = "openrouter:moonshotai/kimi-k2.6"
+    elif os.environ.get("HCAI_API_KEY"):
+        _cached_model = "openai:moonshotai/kimi-k2.6"
+    elif os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
+        _cached_model = "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"
+    elif os.environ.get("CEREBRAS_API_KEY"):
+        _cached_model = "cerebras:zai-glm-4.7"
+    else:
+        raise RuntimeError(
+            "No AI provider configured. "
+            "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or JAMS_API_KEY."
+        )
+    return _cached_model
+
+
+def get_model_for_user(user_id: str | None) -> str | None:
+    """Get the model string for a user's BYOK text endpoint, or None to use global."""
+    if not user_id:
+        return None
+    ep_id = get_text_endpoint_id(user_id)
+    if not ep_id:
+        return None
+    ep = get_endpoint_decrypted(user_id, ep_id)
+    if not ep:
+        return None
+    return ep["model"]
+
+
+def get_user_text_endpoint(user_id: str | None) -> dict | None:
+    """Get the full endpoint config for a user's text endpoint, or None."""
+    if not user_id:
+        return None
+    ep_id = get_text_endpoint_id(user_id)
+    if not ep_id:
+        return None
+    return get_endpoint_decrypted(user_id, ep_id)
+
+
+SLACK_MCP_URL = "https://mcp.slack.com/mcp"
+
+agent = Agent(
+    deps_type=AgentDeps,
+    system_prompt=SYSTEM_PROMPT,
+    tools=[add_emoji_reaction],
+)
+
+@agent.tool
+def invite_coolton_user_to_channel(ctx: RunContext[AgentDeps]) -> str:
+    """Invites the cooltonUser helper account to the current Slack channel.
+    
+    Call this if cooltonUser is missing and you need to perform an action requiring it.
+    """
+    bot_token = os.environ.get("SLACK_BOT_TOKEN")
+    channel_id = ctx.deps.channel_id
+    coolton_user_id = os.environ.get("COOLTON_USER_ID")
+    
+    if not coolton_user_id:
+        return "Error: COOLTON_USER_ID not configured."
+        
+    url = "https://slack.com/api/conversations.invite"
+    headers = {
+        "Authorization": f"Bearer {bot_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    data = {"channel": channel_id, "users": coolton_user_id}
+    
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        res_json = response.json()
+        if res_json.get("ok"):
+            return f"Success: Invited cooltonUser ({coolton_user_id}) to channel {channel_id}."
+        error_code = res_json.get("error")
+        if error_code == "already_in_channel":
+            return "Notice: cooltonUser is already a member."
+        return f"Failed to invite: {error_code}."
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@agent.tool
+def run_linux_command(ctx: RunContext[AgentDeps], command: str) -> str:
+    """Execute a bash/shell command inside a private cloud Linux sandbox (E2B).
+    
+    The sandbox PERSISTS across messages in your thread.
+    """
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured."
+    channel_id = ctx.deps.channel_id
+    thread_ts = ctx.deps.thread_ts
+    try:
+        sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
+        if sandbox_id:
+            sandbox = Sandbox.connect(sandbox_id)
+        else:
+            sandbox = Sandbox.create()
+        result = sandbox.commands.run(command)
+        new_sandbox_id = sandbox.sandbox_id
+        save_thread_sandbox_id(channel_id, thread_ts, new_sandbox_id)
+        sandbox.pause()
+        output = []
+        if result.stdout:
+            output.append(f"STDOUT:\n{result.stdout}")
+        if result.stderr:
+            output.append(f"STDERR:\n{result.stderr}")
+        output.append(f"Exit Code: {result.exit_code}")
+        return "\n\n".join(output)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def download_slack_attachments(
+    channel_id: str, thread_ts: str, sandbox: "Sandbox",
+    user_token: str | None = None, limit: int = 20,
+) -> str:
+    token = user_token or os.environ.get("SLACK_USER_TOKEN")
+    if not token:
+        return "Error: SLACK_USER_TOKEN not configured"
+    sandbox.commands.run("mkdir -p ~/attachments")
+    url = "https://slack.com/api/files.list"
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"channel": channel_id, "ts_from": "0", "ts_to": str(int(float(thread_ts) + 1)), "count": limit}
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        res_json = response.json()
+        if not res_json.get("ok"):
+            return f"Slack API error: {res_json.get('error', 'unknown')}"
+        files = res_json.get("files", [])
+        if not files:
+            return "No files found in this thread."
+        results = []
+        for f in files:
+            file_url = f.get("url_private_download") or f.get("url_private")
+            if not file_url:
+                continue
+            file_resp = requests.get(file_url, headers={"Authorization": f"Bearer {token}"})
+            if file_resp.status_code != 200:
+                results.append(f"✗ {f.get('name')}: failed to download")
+                continue
+            filename = f.get("name", "unknown")
+            sandbox.files.write(f"/home/user/attachments/{filename}", file_resp.content)
+            results.append(f"✓ {filename} ({len(file_resp.content)} bytes)")
+        return "Downloaded to ~/attachments/:\n" + "\n".join(results)
+    except Exception as e:
+        return f"Error downloading attachments: {str(e)}"
+
+
+@agent.tool
+def download_attachments_to_sandbox(ctx: RunContext[AgentDeps]) -> str:
+    """Download Slack file attachments from the current thread to sandbox's ~/attachments/."""
+    channel_id = ctx.deps.channel_id
+    thread_ts = ctx.deps.thread_ts
+    user_token = ctx.deps.user_token or os.environ.get("SLACK_USER_TOKEN")
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured"
+    try:
+        sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
+        if not sandbox_id:
+            return "No active sandbox. Run a command first."
+        sandbox = Sandbox.connect(sandbox_id)
+        return download_slack_attachments(channel_id, thread_ts, sandbox, user_token)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@agent.tool
+def upload_file_from_sandbox(
+    ctx: RunContext[AgentDeps], filepath: str, title: str = "", initial_comment: str = "",
+) -> str:
+    """Upload a file from the sandbox to the current Slack channel/thread."""
+    channel_id = ctx.deps.channel_id
+    thread_ts = ctx.deps.thread_ts
+    user_token = ctx.deps.user_token or os.environ.get("SLACK_USER_TOKEN")
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured"
+    if not user_token:
+        return "Error: SLACK_USER_TOKEN not configured"
+    try:
+        sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
+        if not sandbox_id:
+            return "No active sandbox for this thread."
+        sandbox = Sandbox.connect(sandbox_id)
+        file_content = sandbox.files.read(filepath)
+        if file_content is None:
+            return f"Error: File not found at {filepath}"
+        filename = os.path.basename(filepath)
+        url = "https://slack.com/api/files.upload"
+        headers = {"Authorization": f"Bearer {user_token}"}
+        files = {"file": (filename, file_content)}
+        data = {"channels": channel_id, "title": title or filename, "initial_comment": initial_comment}
+        if thread_ts:
+            data["thread_ts"] = thread_ts
+        response = requests.post(url, headers=headers, files=files, data=data)
+        res_json = response.json()
+        if res_json.get("ok"):
+            return f"Uploaded {filename} to channel {channel_id}"
+        return f"Slack upload error: {res_json.get('error', 'unknown')}"
+    except Exception as e:
+        return f"Error uploading file: {str(e)}"
+
+
+@agent.tool
+def search_web_tool(ctx: RunContext[AgentDeps], query: str, num_results: int = 8) -> str:
+    """Search the web using Exa. Returns results with titles, URLs, and snippets.
+    
+    Use for: current events, research, finding resources, verifying facts.
+    
+    Args:
+        query: The search query string.
+        num_results: Number of results (1-20, default 8).
+    """
+    from agent.tools.web_search import search_web
+    return search_web(query, num_results)
+
+
+@agent.tool
+def analyze_image_tool(ctx: RunContext[AgentDeps], image_path: str, prompt: str = "Describe this image in detail.") -> str:
+    """Analyze an image using AI vision capabilities.
+    
+    Use this when users share images and ask what's in them, want text extracted,
+    objects identified, etc. First download the image with download_attachments_to_sandbox,
+    then read it and pass the data here.
+    
+    Args:
+        image_path: Path to the image file in the sandbox (e.g., ~/attachments/photo.jpg).
+        prompt: What to look for / analyze (default: describe the image).
+    """
+    channel_id = ctx.deps.channel_id
+    thread_ts = ctx.deps.thread_ts
+    sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
+    if not sandbox_id:
+        return "No active sandbox. Use download_attachments_to_sandbox first."
+    try:
+        sandbox = Sandbox.connect(sandbox_id)
+        image_data = sandbox.files.read(image_path)
+        if image_data is None:
+            return f"Error: File not found at {image_path}"
+        from agent.tools.vision import analyze_image
+        filename = os.path.basename(image_path)
+        return analyze_image(image_data, filename, prompt)
+    except Exception as e:
+        return f"Error analyzing image: {str(e)}"
+
+
+@agent.tool
+def generate_image_tool(ctx: RunContext[AgentDeps], prompt: str, n: int = 1, size: str = "1024x1024") -> str:
+    """Generate AI images from a text prompt using DALL-E 3.
+    
+    Requires the user to have an OpenAI API key (via BYOK or global OPENAI_API_KEY).
+    
+    Args:
+        prompt: Text description of the desired image.
+        n: Number of images (1-4, default 1).
+        size: Size ("1024x1024", "1792x1024", "1024x1792", default "1024x1024").
+    """
+    from agent.tools.image_gen import generate_image
+    return generate_image(prompt, n, size)
+
+
+@agent.tool
+def render_mermaid_tool(ctx: RunContext[AgentDeps], diagram_code: str, theme: str = "default") -> str:
+    """Render a Mermaid diagram and return a URL to the PNG image.
+    
+    Supports: flowcharts, sequence diagrams, class diagrams, state diagrams,
+    Gantt charts, pie charts, entity relationship diagrams, user journey, etc.
+    The URL can be embedded via send_web_embed_tool or downloaded.
+    
+    Args:
+        diagram_code: Mermaid diagram definition (e.g., "graph TD; A-->B;").
+        theme: Theme ("default", "dark", "forest", "neutral", default "default").
+    """
+    from agent.tools.mermaid_tool import render_mermaid
+    url = render_mermaid(diagram_code, theme)
+    if url.startswith("http"):
+        return f"Diagram rendered: {url}"
+    return url
+
+
+@agent.tool
+def summarize_thread_tool(ctx: RunContext[AgentDeps], channel_id: str = "", thread_ts: str = "") -> str:
+    """Summarize a Slack thread by fetching its messages and condensing them.
+    
+    If channel_id and thread_ts are empty, summarizes the current conversation.
+    
+    Args:
+        channel_id: Channel ID (default: current channel).
+        thread_ts: Thread timestamp (default: current thread).
+    """
+    if not channel_id:
+        channel_id = ctx.deps.channel_id
+    if not thread_ts:
+        thread_ts = ctx.deps.thread_ts
+    user_token = ctx.deps.user_token or os.environ.get("SLACK_USER_TOKEN")
+    from agent.tools.summarize_thread import summarize_thread
+    return summarize_thread(channel_id, thread_ts, user_token)
+
+
+@agent.tool
+def list_channel_threads_tool(ctx: RunContext[AgentDeps], channel_id: str = "", limit: int = 10) -> str:
+    """List recent threads in a Slack channel.
+    
+    Shows thread starters with reply counts and timestamps.
+    
+    Args:
+        channel_id: Channel ID (default: current channel).
+        limit: Max threads to return (default 10).
+    """
+    if not channel_id:
+        channel_id = ctx.deps.channel_id
+    user_token = ctx.deps.user_token or os.environ.get("SLACK_USER_TOKEN")
+    from agent.tools.list_threads import list_channel_threads
+    return list_channel_threads(channel_id, limit, user_token)
+
+
+@agent.tool
+def schedule_reminder_tool(ctx: RunContext[AgentDeps], text: str, delay_seconds: int) -> str:
+    """Schedule a one-time reminder that will be DM'd to you.
+    
+    Args:
+        text: Reminder message text.
+        delay_seconds: Seconds from now until reminder fires (max ~120 days).
+    """
+    from agent.tools.reminder_tool import schedule_reminder_tool as srt
+    return srt(ctx.deps.user_id, ctx.deps.channel_id, text, delay_seconds)
+
+
+@agent.tool
+def read_sandbox_file_tool(ctx: RunContext[AgentDeps], path: str) -> str:
+    """Read a file from the sandbox filesystem.
+    
+    Args:
+        path: Path to file (e.g., /home/user/file.txt or ~/attachments/data.csv).
+    """
+    from agent.tools.sandbox_files import read_sandbox_file
+    return read_sandbox_file(ctx.deps.channel_id, ctx.deps.thread_ts, path)
+
+
+@agent.tool
+def write_sandbox_file_tool(ctx: RunContext[AgentDeps], path: str, content: str) -> str:
+    """Write content to a file in the sandbox filesystem. Creates parent dirs.
+    
+    Args:
+        path: Path to write (e.g., /home/user/output.txt).
+        content: Text content to write.
+    """
+    from agent.tools.sandbox_files import write_sandbox_file
+    return write_sandbox_file(ctx.deps.channel_id, ctx.deps.thread_ts, path, content)
+
+
+@agent.tool
+def search_sandbox_files_tool(ctx: RunContext[AgentDeps], pattern: str, path: str = "/home/user") -> str:
+    """Search for text patterns in sandbox files (grep).
+    
+    Args:
+        pattern: Regex or text pattern to search for.
+        path: Directory to search (default: /home/user).
+    """
+    from agent.tools.sandbox_files import search_sandbox_files
+    return search_sandbox_files(ctx.deps.channel_id, ctx.deps.thread_ts, pattern, path)
+
+
+@agent.tool
+def list_sandbox_files_tool(ctx: RunContext[AgentDeps], pattern: str = "*", path: str = "/home/user") -> str:
+    """List files in the sandbox matching a glob pattern.
+    
+    Args:
+        pattern: Glob pattern (default: "*").
+        path: Directory to search (default: /home/user).
+    """
+    from agent.tools.sandbox_files import list_sandbox_files
+    return list_sandbox_files(ctx.deps.channel_id, ctx.deps.thread_ts, pattern, path)
+
+
+@agent.tool
+def extract_tar_gz_tool(ctx: RunContext[AgentDeps], archive_path: str, extract_to: str = "/home/user/data") -> str:
+    """Extract a .tar.gz or .tgz file in the sandbox.
+    
+    Use this for large archives (e.g., 500MB+ of CSV files).
+    Files will be available at the extract_to path for further analysis.
+    
+    Args:
+        archive_path: Path to the .tar.gz file in sandbox (e.g., ~/attachments/data.tar.gz).
+        extract_to: Directory to extract to (default: /home/user/data).
+    """
+    from agent.tools.data_analysis import extract_tar_gz_in_sandbox
+    return extract_tar_gz_in_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts, archive_path, extract_to)
+
+
+@agent.tool
+def analyze_csv_tool(ctx: RunContext[AgentDeps], csv_path: str, query: str = "") -> str:
+    """Analyze a CSV file in the sandbox using pandas.
+    
+   
+    Args:
+        csv_path: Path to the CSV file in sandbox.
+        query: Optional analysis question or pandas code to run (e.g., "df.groupby('col').sum()").
+    """
+    from agent.tools.data_analysis import analyze_csv_in_sandbox
+    return analyze_csv_in_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts, csv_path, query)
+
+
+@agent.tool
+def run_sql_on_csv_tool(ctx: RunContext[AgentDeps], csv_path: str, sql_query: str) -> str:
+    """Run SQL queries on CSV files using DuckDB in the sandbox.
+    
+    The CSV is loaded as a table named 'data'.
+    
+    Args:
+        csv_path: Path to the CSV file in sandbox.
+        sql_query: SQL query to run (table name is 'data').
+    """
+    from agent.tools.data_analysis import run_sql_on_csv
+    return run_sql_on_csv(ctx.deps.channel_id, ctx.deps.thread_ts, csv_path, sql_query)
+
+
+@agent.tool
+def run_python_data_analysis_tool(ctx: RunContext[AgentDeps], code: str) -> str:
+    """Run arbitrary Python data analysis code in the sandbox with pandas/numpy/duckdb pre-loaded.
+    
+    Has access to: pd (pandas), np (numpy), duckdb, conn (DuckDB connection).
+    
+    Args:
+        code: Python code to execute.
+    """
+    from agent.tools.data_analysis import run_python_data_analysis
+    return run_python_data_analysis(ctx.deps.channel_id, ctx.deps.thread_ts, code)
+
+
+@agent.tool
+def install_opencode_tool(ctx: RunContext[AgentDeps]) -> str:
+    """Install opencode (open-source AI coding agent) in the sandbox.
+    
+    Opencode is like Claude Code but open-source. Use it for complex coding tasks.
+    Run this once per sandbox session, then use run_opencode_tool.
+    
+    Returns:
+        Installation status.
+    """
+    from agent.tools.data_analysis import install_opencode_in_sandbox
+    return install_opencode_in_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
+
+
+@agent.tool
+def run_opencode_tool(ctx: RunContext[AgentDeps], task: str, model: str = "") -> str:
+    """Run opencode in the sandbox to perform complex coding tasks.
+    
+    Opencode is an open-source AI coding agent (like Claude Code).
+    It can read/write files, run commands, and use tools to complete tasks.
+    Install it first with install_opencode_tool.
+    
+    Args:
+        task: The task/question for opencode to complete.
+        model: Optional model override (e.g., "anthropic/claude-sonnet-4-6").
+    """
+    from agent.tools.data_analysis import run_opencode_in_sandbox
+    return run_opencode_in_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts, task, model)
+
+
+def send_web_embed(
+    channel_id: str, text: str, url: str, title: str,
+    thumbnail_url: str = "https://placehold.co/1280x720?text=click%20to%20open%20the%20\\ncoolton%20embed",
+    user_token: str | None = None,
+) -> str:
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token:
+        return "Error: SLACK_BOT_TOKEN not configured"
+    blocks = [{
+        "type": "video", "video_url": url, "title_url": url,
+        "thumbnail_url": thumbnail_url,
+        "title": {"type": "plain_text", "text": title},
+        "alt_text": title,
+    }]
+    payload = {"channel": channel_id, "text": text, "blocks": blocks}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+    try:
+        response = requests.post("https://slack.com/api/chat.postMessage", json=payload, headers=headers)
+        res_json = response.json()
+        if res_json.get("ok"):
+            return f"Success: Embed sent to {channel_id}"
+        error = res_json.get("error", "unknown")
+        metadata = res_json.get("response_metadata", {})
+        return f"Error: {error} | url: {url} | metadata: {metadata}"
+    except Exception as e:
+        return f"Error sending web embed: {str(e)}"
+
+
+def send_whiteboard_embed(
+    channel_id: str, text: str = "whiteboard", title: str = "whiteboard",
+    whiteboard_id: int | None = None, user_token: str | None = None,
+) -> str:
+    if whiteboard_id is None:
+        whiteboard_id = random.randint(100000, 999999)
+    url = f"https://whiteboard.felix.hackclub.app/{whiteboard_id}"
+    thumbnail_url = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed"
+    text_with_id = f"{text} #{whiteboard_id}"
+    title_with_id = f"{title} #{whiteboard_id}"
+    result = send_web_embed(channel_id=channel_id, text=text_with_id, url=url, title=title_with_id, thumbnail_url=thumbnail_url)
+    if result.startswith("Success"):
+        return f"{result} (whiteboard id: {whiteboard_id})"
+    return result
+
+
+@agent.tool
+def send_whiteboard_embed_tool(
+    ctx: RunContext[AgentDeps], text: str = "whiteboard",
+    title: str = "whiteboard", whiteboard_id: int | None = None,
+) -> str:
+    """Send a Felix whiteboard (tldraw) embed to the current channel.
+    
+    Creates a new whiteboard with a random ID at felix's tldraw instance.
+    
+    Args:
+        text: Fallback text (default: "whiteboard").
+        title: Embed title (default: "whiteboard").
+        whiteboard_id: Optional specific ID (default: random).
+    """
+    return send_whiteboard_embed(channel_id=ctx.deps.channel_id, text=text, title=title, whiteboard_id=whiteboard_id)
+
+
+def minify_html(html: str) -> str:
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    html = re.sub(r"\s+", " ", html)
+    html = re.sub(r"\s*>\s*<", "><", html)
+    return html.strip()
+
+
+def send_html_embed(
+    channel_id: str, html: str, text: str = "html embed", title: str = "html embed",
+    thumbnail_url: str = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed",
+    user_token: str | None = None,
+) -> str:
+    minified = minify_html(html)
+    b64 = base64.urlsafe_b64encode(minified.encode()).decode().rstrip("=")
+    url = f"https://tanjim.org:2390/{b64}"
+    return send_web_embed(channel_id=channel_id, text=text, url=url, title=title, thumbnail_url=thumbnail_url, user_token=user_token)
+
+
+@agent.tool
+def send_html_embed_tool(
+    ctx: RunContext[AgentDeps], html: str, text: str = "html embed",
+    title: str = "html embed",
+    thumbnail_url: str = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed",
+) -> str:
+    """Send custom HTML as a live embed in the current channel.
+    
+    Your HTML is minified, base64-encoded, and served via https://tanjim.org:2390.
+    
+    Args:
+        html: Raw HTML content.
+        text: Fallback text (default: "html embed").
+        title: Embed title (default: "html embed").
+        thumbnail_url: Optional custom thumbnail.
+    """
+    return send_html_embed(channel_id=ctx.deps.channel_id, html=html, text=text, title=title, thumbnail_url=thumbnail_url)
+
+
+@agent.tool
+def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str:
+    """Make an arbitrary Slack API call as cooltonUser.
+    
+    Use for any Slack Web API method not covered by other tools.
+    
+    Args:
+        method: Slack API method (e.g., 'chat.postMessage', 'conversations.list').
+        params: Dictionary of parameters for the method.
+    """
+    user_token = os.environ.get("SLACK_USER_TOKEN")
+    if not user_token:
+        return "Error: SLACK_USER_TOKEN not configured"
+    url = f"https://slack.com/api/{method}"
+    headers = {"Authorization": f"Bearer {user_token}", "Content-Type": "application/json; charset=utf-8"}
+    try:
+        response = requests.post(url, json=params, headers=headers)
+        res_json = response.json()
+        if res_json.get("ok"):
+            return f"Success: {res_json}"
+        return f"Slack API error: {res_json.get('error', 'unknown')}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@agent.tool
+def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, params: dict) -> str:
+    """Make an arbitrary Slack API call as the BOT (not cooltonUser).
+    
+    Uses SLACK_BOT_TOKEN. Use for bot-level actions like posting messages as the bot,
+    updating bot messages, managing bot's own reactions, etc.
+    
+    Args:
+        method: Slack API method (e.g., 'chat.postMessage', 'chat.update', 'reactions.add').
+        params: Dictionary of parameters for the method.
+    """
+    from agent.tools.slack_bot_api import slack_api_call_as_bot
+    return slack_api_call_as_bot(method, params)
+
+
+@agent.tool
+def leave_thread_tool(ctx: RunContext[AgentDeps]) -> str:
+    """Leave the current thread - bot will ignore all future messages in this thread until @mentioned again.
+    
+    Use this when you want to stop responding in a thread but still want to be available if mentioned.
+    """
+    from agent.leave_thread_store import leave_thread
+    return leave_thread(ctx.deps.channel_id, ctx.deps.thread_ts)
+
+
+def run_agent(text, deps, message_history=None):
+    # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
+    provider_order = []
+    
+    user_endpoint = get_user_text_endpoint(deps.user_id)
+    if user_endpoint:
+        provider_order.append(("byok", user_endpoint))
+    
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        provider_order.append(("anthropic", {"model": "anthropic:claude-sonnet-4-6", "base_url": None, "api_key": os.environ["ANTHROPIC_API_KEY"]}))
+    if os.environ.get("OPENAI_API_KEY"):
+        provider_order.append(("openai", {"model": "openai:gpt-4.1-mini", "base_url": None, "api_key": os.environ["OPENAI_API_KEY"]}))
+    if os.environ.get("JAMS_API_KEY"):
+        provider_order.append(("jams", {"model": "openrouter:moonshotai/kimi-k2.6", "base_url": None, "api_key": os.environ["JAMS_API_KEY"]}))
+    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
+    if HCAI_API_KEY:
+        provider_order.append(("hcai", {"model": "moonshotai/kimi-k2.6", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
+        provider_order.append(("openrouter_fb", {"model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
+    if os.environ.get("CEREBRAS_API_KEY"):
+        provider_order.append(("cerebras", {"model": "cerebras:zai-glm-4.7", "base_url": None, "api_key": os.environ["CEREBRAS_API_KEY"]}))
+    
+    if not provider_order:
+        raise RuntimeError("No AI provider configured.")
+
+    from agent.fallback_cache import get_working_provider, set_working_provider, clear_cache as _clear_cache
+
+    cached_provider = get_working_provider(deps.user_id)
+    if cached_provider:
+        for i, (name, _) in enumerate(provider_order):
+            if name == cached_provider:
+                provider_order.insert(0, provider_order.pop(i))
+                logger.info(f"Fallback cache: trying {cached_provider} first for {deps.user_id}")
+                break
+
+    # Retry configuration
+    max_retries = 3
+    base_delay = 2.0
+    retryable_errors = [
+        "ResourceExhausted",
+        "RateLimitError",
+        "rate_limit",
+        "quota",
+        "429",
+        "503",
+        "504",
+        "timeout",
+        "connection",
+    ]
+
+    def is_retryable_error(error: Exception) -> bool:
+        error_str = str(error).lower()
+        return any(retryable in error_str.lower() for retryable in retryable_errors)
+
+    all_errors = []
+    
+    for provider_name, provider_config in provider_order:
+        for attempt in range(max_retries):
+            try:
+                model_name = provider_config["model"]
+                
+                # Create model object if custom base_url (BYOK, HCAI)
+                model_obj = None
+                if provider_config.get("base_url"):
+                    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatCompatibleProvider
+                    model_obj = OpenAIChatModel(
+                        provider_config["model"],
+                        provider=OpenAIChatCompatibleProvider(
+                            base_url=provider_config["base_url"],
+                            api_key=provider_config["api_key"],
+                        ),
+                    )
+                
+                # Set env vars for this provider
+                if provider_name not in ("byok", "hcai") and provider_config.get("api_key"):
+                    if provider_name == "anthropic":
+                        os.environ["ANTHROPIC_API_KEY"] = provider_config["api_key"]
+                    elif provider_name == "openai":
+                        os.environ["OPENAI_API_KEY"] = provider_config["api_key"]
+                    elif provider_name in ("jams", "openrouter_fb"):
+                        os.environ["OPENROUTER_API_KEY"] = provider_config["api_key"]
+                    elif provider_name == "cerebras":
+                        os.environ["CEREBRAS_API_KEY"] = provider_config["api_key"]
+                
+                # Rate limit for Cerebras
+                if "cerebras" in model_name.lower():
+                    enforce_rate_limit()
+
+                # Build dynamic prompt
+                from listeners.actions.instructions_actions import get_user_instructions as _get_instructions
+                custom_instructions = _get_instructions(deps.user_id)
+                deps.custom_instructions = custom_instructions
+
+                context_info = f"""
+## CURRENT CONTEXT
+- You are in channel_id: `{deps.channel_id}` (thread_ts: `{deps.thread_ts}` if in thread, else DM)
+- Use this channel_id for operations in the current channel unless user specifies otherwise
+- Your user_id: `{deps.user_id}`
+- Message timestamp: `{deps.message_ts}`
+"""
+                full_prompt = SYSTEM_PROMPT + context_info
+                if custom_instructions:
+                    full_prompt += f"\n\n## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n"
+
+                toolsets = []
+                deps.user_token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
+                if deps.user_token:
+                    logger.info("Slack MCP Server enabled (user_token present)")
+                    try:
+                        transport = StreamableHttpTransport(
+                            SLACK_MCP_URL,
+                            headers={"Authorization": f"Bearer {deps.user_token}"},
+                        )
+                        toolsets.append(MCPToolset(transport))
+                    except Exception as e:
+                        logger.exception(f"Failed to create MCP server: {e}")
+                else:
+                    logger.info("Slack MCP Server disabled (no user_token)")
+
+                all_tools = list(agent._function_toolset.tools.values())
+                tool_functions = [t.function for t in all_tools]
+
+                agent_dynamic = Agent(
+                    deps_type=AgentDeps,
+                    system_prompt=full_prompt,
+                    tools=tool_functions,
+                )
+
+                run_kwargs = dict(
+                    user_prompt=text,
+                    deps=deps,
+                    message_history=message_history,
+                    toolsets=toolsets,
+                    capabilities=[PrepareTools(disable_strict_for_all_tools)],
+                )
+                if model_obj:
+                    run_kwargs["model"] = model_obj
+                else:
+                    run_kwargs["model"] = model_name
+
+                result = agent_dynamic.run_sync(**run_kwargs)
+                set_working_provider(deps.user_id, provider_name)
+                return result
+
+            except Exception as e:
+                all_errors.append(f"{provider_name}: {e}")
+                if is_retryable_error(e) and attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"{provider_name} attempt {attempt + 1} failed with retryable error: {e}. Retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.warning(f"{provider_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
+                    break  # Try next provider
+        
+        # If the cached provider failed, clear the cache so next call starts fresh
+        if cached_provider and provider_name == cached_provider:
+            _clear_cache(deps.user_id)
+            logger.warning(f"Cached provider {cached_provider} failed, cleared cache")
+
+        # All retries exhausted for this provider, try next provider
+        logger.warning(f"Provider {provider_name} exhausted all retries, trying next provider...")
+    
+    # All providers failed
+    errors_str = "\n".join(f"  - {err}" for err in all_errors)
+    raise RuntimeError(f"All AI providers failed.\n{errors_str}")
+
+
+def disable_strict_for_all_tools(ctx, tool_defs):
+    return [replace(tool_def, strict=False) for tool_def in tool_defs]
