@@ -1,7 +1,7 @@
 import re
 from logging import Logger
 
-from slack_bolt import BoltContext, Say, SayStream, SetStatus
+from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
@@ -16,7 +16,7 @@ def handle_app_mentioned(
     logger: Logger,
     say: Say,
     say_stream: SayStream,
-    set_status: SetStatus,
+    set_status,  # SetStatus — unused, we call API directly
 ):
     """Handle @mentions in channels."""
     try:
@@ -39,7 +39,9 @@ def handle_app_mentioned(
             return
 
         # Set assistant thread status with loading messages
-        set_status(
+        client.assistant_threads_setStatus(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
             status="Thinking...",
             loading_messages=[
                 "Teaching the hamsters to type faster…",

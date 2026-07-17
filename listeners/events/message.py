@@ -1,6 +1,6 @@
 from logging import Logger
 
-from slack_bolt import BoltContext, Say, SayStream, SetStatus
+from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
@@ -15,7 +15,7 @@ def handle_message(
     logger: Logger,
     say: Say,
     say_stream: SayStream,
-    set_status: SetStatus,
+    set_status,  # SetStatus — unused, we call API directly
 ):
     """Handle messages sent to the agent via DM or in threads the bot is part of."""
 
@@ -53,7 +53,9 @@ def handle_message(
         history = conversation_store.get_history(channel_id, thread_ts)
 
         # Set assistant thread status with loading messages
-        set_status(
+        client.assistant_threads_setStatus(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
             status="Thinking...",
             loading_messages=[
                 "Teaching the hamsters to type faster…",

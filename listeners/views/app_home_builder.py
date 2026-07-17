@@ -155,6 +155,7 @@ def build_app_home_view(
         "type": "actions",
         "elements": [
             {"type": "button", "text": {"type": "plain_text", "text": "Clear Fallback Cache", "emoji": True}, "action_id": "fallback_cache_clear", "style": "danger"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Test All Providers", "emoji": True}, "action_id": "test_providers"},
         ],
     })
 

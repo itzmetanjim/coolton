@@ -83,6 +83,104 @@ You have a persistent Linux sandbox via E2B. It survives across messages in this
 - Default environment: Ubuntu-based, has python3, node, git, curl, build tools, common CLIs
 - Run `apt-get update && apt-get install -y <pkg>` for additional packages
 - Path starts at `/home/user` — treat it like your own machine
+To decode unknown ASCII art, follow this step-by-step method:
+
+1. **Setup:** Use Python's `pyfiglet` library. Rotate the ASCII art 90 degrees so columns become readable horizontal lines.
+2. **Font Filtering:** Filter possible fonts by comparing the unique characters in the target ASCII art against a reference database of full alphabets for each font.
+3. **Font Brute-Forcing:** Test the filtered fonts, prioritizing `standard`, `banner3`, and `basic`. 
+4. **Character Matching:** Once the font is identified, brute-force the text character-by-character. Identify the first letter by testing all alphanumeric characters and hyphens against the layout prefix, then repeat for subsequent letters.
+
+For example, this is useful for decoding text (its hardcoded to banner3 which is a font with only hashes)
+```python
+import sys
+import string
+import pyfiglet
+
+def read_target_art():
+    lines = sys.stdin.read().splitlines()
+    # Strip trailing right-side spaces to keep length checks clean
+    return [line.rstrip() for line in lines if line.strip() or lines]
+
+def decode_ascii_art():
+    FONT_NAME = "banner3"
+    
+    # 1. Input Target
+    target_lines = read_target_art()
+    if not target_lines:
+        print("Error: No ASCII art provided.")
+        return
+
+    # Defined charset: alphanumeric and hyphen
+    charset = string.ascii_letters + string.digits + "-"
+    
+    print(f"\n[*] Starting backtracking search using font: '{{FONT_NAME}}'...")
+    
+    # 2. Backtracking Core Function (DFS)
+    def backtrack(current_text):
+        # Generate the test art for our current string state
+        try:
+            current_art = pyfiglet.figlet_format(current_text, font=FONT_NAME, width=9999)
+            current_lines = [line.rstrip() for line in current_art.splitlines()]
+        except Exception:
+            return None
+
+        # Base Case: If it matches the target lines perfectly, we are done
+        if current_lines == target_lines:
+            return current_text
+
+        # If it generated more lines than target, or isn't a clean prefix match, prune this branch
+        if len(current_lines) > len(target_lines):
+            return None
+            
+        for c_line, t_line in zip(current_lines, target_lines):
+            if not t_line.startswith(c_line):
+                return None
+
+        # Lookahead: Find all next characters that fit the layout prefix
+        valid_next_chars = []
+        for char in charset:
+            test_text = current_text + char
+            try:
+                test_art = pyfiglet.figlet_format(test_text, font=FONT_NAME, width=9999)
+                test_lines = [line.rstrip() for line in test_art.splitlines()]
+                
+                # Check if this character maintains a valid prefix orientation
+                is_prefix = True
+                if len(test_lines) > len(target_lines):
+                    continue
+                for tl, tgl in zip(test_lines, target_lines):
+                    if not tgl.startswith(tl):
+                        is_prefix = False
+                        break
+                
+                if is_prefix:
+                    valid_next_chars.append(char)
+            except Exception:
+                continue
+
+        # Recursively try each valid candidate character
+        for next_char in valid_next_chars:
+            print(f"    [>] Trying: '{{current_text + next_char}}'")
+            result = backtrack(current_text + next_char)
+            if result is not None:
+                return result
+                
+        # If no branches succeed, notify the backtrack step
+        if current_text:
+            print(f"    [<] Backtracking away from: '{{current_text}}'")
+        return None
+
+    # Start recursive backtracking from an empty string
+    final_decoded_text = backtrack("")
+    
+    if final_decoded_text:
+        print(f"\n[SUCCESS] Decoded Text: '{{final_decoded_text}}'")
+    else:
+        print("\n[FAILURE] Could not decode the ASCII art using the banner3 font.")
+
+if __name__ == "__main__":
+    decode_ascii_art()
+```
 
 ## SANDBOX FILE OPERATIONS
 - `read_sandbox_file(path)` — read a file from sandbox (e.g., /home/user/file.txt)
@@ -815,13 +913,44 @@ def run_agent(text, deps, message_history=None):
         provider_order.append(("anthropic", {"model": "anthropic:claude-sonnet-4-6", "base_url": None, "api_key": os.environ["ANTHROPIC_API_KEY"]}))
     if os.environ.get("OPENAI_API_KEY"):
         provider_order.append(("openai", {"model": "openai:gpt-4.1-mini", "base_url": None, "api_key": os.environ["OPENAI_API_KEY"]}))
-    if os.environ.get("JAMS_API_KEY"):
-        provider_order.append(("jams", {"model": "openrouter:moonshotai/kimi-k2.6", "base_url": None, "api_key": os.environ["JAMS_API_KEY"]}))
+    JAMS_API_KEY = os.environ.get("JAMS_API_KEY")
+    if JAMS_API_KEY:
+        provider_order.append(("jams_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": JAMS_API_KEY}))
+    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
+    if HCAI_API_KEY:
+        provider_order.append(("hcai_hy3_free", {"model": "tencent/hy3:free", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
+        provider_order.append(("openrouter_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
+    if JAMS_API_KEY:
+        provider_order.append(("jams_hy3", {"model": "openrouter:tencent/hy3", "base_url": None, "api_key": JAMS_API_KEY}))
+    if HCAI_API_KEY:
+        provider_order.append(("hcai_hy3", {"model": "tencent/hy3", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    if JAMS_API_KEY:
+        provider_order.append(("jams", {"model": "openrouter:moonshotai/kimi-k2.6", "base_url": None, "api_key": JAMS_API_KEY}))
     HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
     if HCAI_API_KEY:
         provider_order.append(("hcai", {"model": "moonshotai/kimi-k2.6", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+    if GROQ_API_KEY:
+        provider_order.append(("groq_qwen27b", {"model": "groq:qwen/qwen3.6-27b", "base_url": None, "api_key": GROQ_API_KEY}))
+    if os.environ.get("JAMS_API_KEY"):
+        provider_order.append(("jams_minimax", {"model": "openrouter:minimax/minimax-m2.7", "base_url": None, "api_key": os.environ["JAMS_API_KEY"]}))
+    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
+    if HCAI_API_KEY:
+        provider_order.append(("hcai_minimax", {"model": "minimax/minimax-m2.7", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
     if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
         provider_order.append(("openrouter_fb", {"model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
+    if os.environ.get("GOOGLE_API_KEY"):
+        provider_order.append(("gemini_gemma", {"model": "google:gemma-4-31b-it", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
+    if GROQ_API_KEY:
+        provider_order.append(("groq_oss120b", {"model": "groq:openai/gpt-oss-120b", "base_url": None, "api_key": GROQ_API_KEY}))
+    if os.environ.get("GOOGLE_API_KEY"):
+        provider_order.append(("gemini", {"model": "google:gemini-3.1-flash-lite", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
+    if GROQ_API_KEY:
+        provider_order.append(("groq_qwen32b", {"model": "groq:qwen/qwen3-32b", "base_url": None, "api_key": GROQ_API_KEY}))
+        provider_order.append(("groq_oss20b", {"model": "groq:openai/gpt-oss-20b", "base_url": None, "api_key": GROQ_API_KEY}))
+    if os.environ.get("MISTRAL_API_KEY"):
+        provider_order.append(("mistral", {"model": "mistral:mistral-large-2512", "base_url": None, "api_key": os.environ["MISTRAL_API_KEY"]}))
     if os.environ.get("CEREBRAS_API_KEY"):
         provider_order.append(("cerebras", {"model": "cerebras:zai-glm-4.7", "base_url": None, "api_key": os.environ["CEREBRAS_API_KEY"]}))
     
@@ -867,23 +996,30 @@ def run_agent(text, deps, message_history=None):
                 # Create model object if custom base_url (BYOK, HCAI)
                 model_obj = None
                 if provider_config.get("base_url"):
-                    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatCompatibleProvider
+                    from pydantic_ai.models.openai import OpenAIChatModel
+                    from pydantic_ai.providers.openai import OpenAIProvider
                     model_obj = OpenAIChatModel(
                         provider_config["model"],
-                        provider=OpenAIChatCompatibleProvider(
+                        provider=OpenAIProvider(
                             base_url=provider_config["base_url"],
                             api_key=provider_config["api_key"],
                         ),
                     )
                 
                 # Set env vars for this provider
-                if provider_name not in ("byok", "hcai") and provider_config.get("api_key"):
+                if provider_name not in ("byok", "hcai", "hcai_minimax", "hcai_hy3_free", "hcai_hy3") and provider_config.get("api_key"):
                     if provider_name == "anthropic":
                         os.environ["ANTHROPIC_API_KEY"] = provider_config["api_key"]
                     elif provider_name == "openai":
                         os.environ["OPENAI_API_KEY"] = provider_config["api_key"]
-                    elif provider_name in ("jams", "openrouter_fb"):
+                    elif provider_name in ("jams", "openrouter_fb", "jams_hy3_free", "jams_hy3", "openrouter_hy3_free"):
                         os.environ["OPENROUTER_API_KEY"] = provider_config["api_key"]
+                    elif provider_name in ("gemini", "gemini_gemma"):
+                        os.environ["GOOGLE_API_KEY"] = provider_config["api_key"]
+                    elif provider_name == "mistral":
+                        os.environ["MISTRAL_API_KEY"] = provider_config["api_key"]
+                    elif provider_name.startswith("groq_"):
+                        os.environ["GROQ_API_KEY"] = provider_config["api_key"]
                     elif provider_name == "cerebras":
                         os.environ["CEREBRAS_API_KEY"] = provider_config["api_key"]
                 

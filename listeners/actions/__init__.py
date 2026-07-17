@@ -14,6 +14,7 @@ from .instructions_actions import (
     handle_instructions_clear,
 )
 from .fallback_cache_actions import handle_fallback_cache_clear
+from .test_providers import handle_test_providers
 
 
 def register(app: App):
@@ -26,3 +27,4 @@ def register(app: App):
     app.action("instructions_open")(handle_instructions_open)
     app.action("instructions_clear")(handle_instructions_clear)
     app.action("fallback_cache_clear")(handle_fallback_cache_clear)
+    app.action("test_providers")(handle_test_providers)
