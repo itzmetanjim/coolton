@@ -1,9 +1,26 @@
 import os
+import re
+import urllib.parse
 
 from agentmail import AgentMail
 
 AGENTMAIL_KEY_ENV = "AGENTMAIL_API_KEY"
 DEFAULT_INBOX = "coolton@agentmail.to"
+
+
+def _encode_message_id(message_id: str) -> str:
+    """AgentMail's list endpoint returns message ids wrapped in angle brackets
+    (e.g. '<6a5b...@sharedworker...mail>'), but the single-message GET endpoint
+    requires those brackets to be present AND percent-encoded in the URL path.
+    The SDK inserts the id raw into the path with no encoding, so passing the
+    list-format id as-is produces a 400/404. Normalize: strip any existing
+    brackets/encoding, then re-wrap in '<>' and percent-encode."""
+    if not message_id:
+        return message_id
+    # Undo any prior encoding/brackets to get the bare id.
+    bare = urllib.parse.unquote(message_id)
+    bare = bare.strip().strip("<>").strip()
+    return urllib.parse.quote(f"<{bare}>")
 
 
 def _client() -> AgentMail | None:
@@ -108,7 +125,7 @@ def read_message_tool(inbox_id: str = DEFAULT_INBOX, message_id: str = "") -> st
     if not message_id:
         return "Error: no message_id provided. Get one from agentmail_list_messages."
     try:
-        m = client.inboxes.messages.get(inbox_id, message_id)
+        m = client.inboxes.messages.get(inbox_id, _encode_message_id(message_id))
         d = m.model_dump() if hasattr(m, "model_dump") else {}
         sender = d.get("from_") or d.get("from") or "?"
         recipient = d.get("to") or "?"
