@@ -654,12 +654,13 @@ if [ -n "$COOLTON_GIT_INSTEADOF" ]; then
   git config --global "credential.$COOLTON_GIT_INSTEADOF.helper" '!f() { echo "username=$COOLTON_GIT_USER"; echo "password=$COOLTON_GIT_TOKEN"; }; f'
   # gh wrapper so the sandbox can just run `gh` against github.com transparently. The sandbox
   # runs as the unprivileged 'user', so the wrapper goes in a user-writable bin on PATH.
-  # NOTE: gh has no --enterprise-token flag; the token is supplied via GH_ENTERPRISE_TOKEN
-  # (set by _proxy_env) and the host via GH_HOST.
+  # gh 2.96+ removed the --hostname flag; we set GH_HOST instead (also set by _proxy_env).
+  # The token comes from GH_ENTERPRISE_TOKEN (set by _proxy_env) / GH_TOKEN.
   mkdir -p /home/user/bin
   cat > /home/user/bin/gh <<'EOF'
 #!/bin/sh
-exec /usr/local/bin/gh --hostname "$COOLTON_GH_PROXY_HOST" "$@"
+export GH_HOST="${COOLTON_GH_PROXY_HOST:-ghproxy.tanjim.org}"
+exec /usr/local/bin/gh "$@"
 EOF
   chmod +x /home/user/bin/gh
   # ensure /home/user/bin is ahead of /usr/local/bin on PATH for this session
