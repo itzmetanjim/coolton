@@ -23,7 +23,11 @@ except ImportError:
     os.system('pip install e2b')
     raise RuntimeError("e2b has been installed please rerun")
 from agent.sandbox_store import get_thread_sandbox_id, save_thread_sandbox_id
-from agent.gh_proxy import start_sandbox_proxy, stop_sandbox_proxy
+from agent.github_proxy_client import (
+    PUBLIC_PROXY_HOST,
+    issue_sandbox_token,
+    revoke_sandbox_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,10 +90,11 @@ You have a persistent Linux sandbox via E2B. It survives across messages in this
 - The sandbox auto-pauses after each command. Next call resumes instantly
 - Default environment: Ubuntu-based, pre-provisioned on first use with python3 + pip, node + npm, git, curl, build tools, and the **gh CLI**
 - **GitHub is pre-authenticated.** The sandbox runs as the GitHub user `coolton-agent` and its
-  `gh`/`git` calls to github.com are authenticated by an E2B egress proxy that injects the token
-  at the network layer. You do NOT have the token value and must NOT try to read it, set it, or
-  run `gh auth login` — it is handled for you. Just use `gh` and `git` (HTTPS remotes) directly.
-  Prefer HTTPS remotes (`https://github.com/...`), not SSH, since auth is header-based.
+  `gh`/`git` calls to github.com are transparently routed through a host-side proxy
+  (https://ghproxy.tanjim.org) that injects the real token on the host. You do NOT have the token
+  value and must NOT try to read it, set it, or run `gh auth login` — it is handled for you. Just
+  use `gh` and `git` (HTTPS remotes) directly. Prefer HTTPS remotes (`https://github.com/...`),
+  not SSH, since auth is header-based.
 - Path starts at `/home/user` — treat it like your own machine
 - You have **sudo** access in the sandbox. If a command needs root (e.g. binding a low port,
   writing to a system path, or installing via a package manager that requires it), just prefix it
@@ -539,36 +544,50 @@ def _proxy_cache_get(sandbox_id: str) -> dict | None:
     return _proxy_cache.get(sandbox_id)
 
 
+def _sandbox_template_id() -> str | None:
+    """Return the E2B template ID to build sandboxes from, or None for the default image.
+
+    Set via the SANDBOX_TEMPLATE_ID env var or the SANDBOX_TEMPLATE_ID file written by
+    build_sandbox_template.py. Falls back to the default E2B image when unset."""
+    env_id = os.environ.get("SANDBOX_TEMPLATE_ID")
+    if env_id:
+        return env_id
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "SANDBOX_TEMPLATE_ID")
+        with open(p) as f:
+            return f.read().strip() or None
+    except FileNotFoundError:
+        return None
+
+
 def _proxy_env(proxy_info: dict | None) -> dict:
-    """Build the env dict (for E2B `commands.run(envs=...)`) that routes gh/git/curl through the
-    host-side GitHub proxy. The real token is NEVER included — only the ephemeral proxy token and
-    a dummy GH_TOKEN (the proxy overwrites it with the real one on the host side)."""
+    """Build the env dict (for E2B `commands.run(envs=...)`) that authenticates gh/git as the
+    coolton-agent GitHub user via the host-side proxy, WITHOUT the real PAT ever entering the
+    sandbox.
+
+    The sandbox talks to https://ghproxy.tanjim.org (TLS terminated by Caddy) using a short-lived
+    per-sandbox token. The proxy rewrites that token to the real PAT on the host and forwards to
+    github.com. We alias `gh`/`git`/`curl` so plain `github.com` usage is transparently routed.
+    """
     if not proxy_info:
         return {}
-    url = proxy_info["proxy_url"]
-    tok = proxy_info["token"]
-    # Embed the ephemeral proxy token in the proxy URL so gh/git/curl send it as
-    # Proxy-Authorization (the proxy requires it). The real GitHub token is never here.
-    from urllib.parse import quote
-    auth_url = url.replace("://", f"://{quote(tok)}@", 1)
-    ca_path = proxy_info.get("ca_path", "/usr/local/share/ca-certificates/coolton-proxy.crt")
+    host = proxy_info["proxy_host"]      # e.g. ghproxy.tanjim.org
+    tok = proxy_info["token"]            # ephemeral per-sandbox token
     return {
-        "COOLTON_GH_PROXY_URL": auth_url,
+        # gh: custom GH_HOST is treated as GitHub Enterprise, so it sends REST to
+        # /api/v3 and GraphQL to /api/graphql; the proxy maps those back to github.com.
+        "GH_HOST": host,
+        "GH_ENTERPRISE_TOKEN": tok,
+        # git: rewrite github.com -> ghproxy.tanjim.org and supply the token via a
+        # credential helper so git's anonymous probe gets a 401 and retries with auth.
+        "COOLTON_GIT_INSTEADOF": f"https://{host}/",
+        "COOLTON_GIT_TOKEN": tok,
+        "COOLTON_GIT_USER": "x",
+        # Convenience for scripts/curl that hit github.com directly.
+        "COOLTON_GH_PROXY_HOST": host,
         "COOLTON_GH_PROXY_TOKEN": tok,
-        "HTTPS_PROXY": auth_url,
-        "HTTP_PROXY": auth_url,
-        "https_proxy": auth_url,
-        "http_proxy": url,
-        # Point curl/git/npm at our proxy CA (gh/Go reads the system bundle, which we also patch).
-        "SSL_CERT_FILE": ca_path,
-        "GIT_SSL_CAINFO": ca_path,
-        "NODE_EXTRA_CA_CERTS": ca_path,
-        # dummy placeholder so gh emits requests; the proxy overwrites it with the real token.
-        "GH_TOKEN": "ghp_coolton_agent_token_placeholder",
-        "GITHUB_TOKEN": "ghp_coolton_agent_token_placeholder",
-        # gh uses HTTP/2 by default; inside a CONNECT tunnel our proxy terminates TLS and injects
-        # auth at the HTTP/1.1 layer, so force HTTP/1.1 inside the tunnel.
-        "GODEBUG": "http2client=0",
+        # User-writable bin holds the `gh` wrapper; keep it ahead of system bins.
+        "PATH": "/home/user/bin:/usr/local/bin:/usr/bin:/bin",
     }
 
 
@@ -579,38 +598,34 @@ def _provision_sandbox(sandbox, proxy_info: dict | None = None) -> str:
     gh CLI, so we only configure identities and wire up GitHub access here.
 
     Authentication: coolton's real GitHub token is NEVER written into the sandbox. A host-side
-    forward proxy (see agent/gh_proxy.py, exposed via Caddy as https://matrix.tanjim.org:1500)
-    injects the real `Authorization: Basic <token>` on the host side and fetches GitHub. The
-    sandbox only gets an ephemeral per-sandbox bearer token for the proxy. GitHub traffic is
-    routed as http://github.com (not https) so the client sends the request in cleartext
-    absolute-form to the proxy, which upgrades it to https + token. `proxy_info` is the dict
-    returned by start_sandbox_proxy (or None if GitHub access is disabled)."""
+    forward proxy (github_proxy.py, exposed via Caddy as https://ghproxy.tanjim.org) rewrites
+    the sandbox's ephemeral per-sandbox token to the real PAT on the host and forwards to
+    github.com. The sandbox only ever sees its own short-lived token for ghproxy.tanjim.org."""
     gh_user = os.environ.get("COOLTON_GH_USER", "coolton-agent")
     script = r"""
 set -e
 echo "==> provisioning coolton sandbox =="
-# git identity (no real token stored)
 git config --global user.name "__GH_USER__"
 git config --global user.email "__GH_USER__@users.noreply.github.com"
 git config --global init.defaultBranch main
-# Route github traffic through the host-side proxy. The ephemeral proxy token + dummy GH_TOKEN
-# are supplied via the command env (see _proxy_env). GitHub is reached as http:// (not https) so
-# git sends the request in cleartext absolute-form to the proxy, which upgrades it to https and
-# injects the real GitHub token. The sandbox never sees the real token.
-if [ -n "$COOLTON_GH_PROXY_URL" ]; then
-  # git: proxy without creds in the URL + a helper that returns the ephemeral token for the
-  # proxy host (sent as Proxy-Authorization). The real GitHub token is added by the proxy.
-  git config --global http.proxy "$COOLTON_GH_PROXY_URL"
-  git config --global https.proxy "$COOLTON_GH_PROXY_URL"
-  git config --global credential.https://matrix.tanjim.org.helper \
-    '!f() { echo "username=$COOLTON_GH_PROXY_TOKEN"; echo "password=x"; }; f'
-  # Force github remotes to http:// so git sends the request in cleartext absolute-form to
-  # the proxy (enables the proxy to upgrade to https + inject the token).
-  git config --global url."http://github.com/".insteadOf "https://github.com/"
-  git config --global url."http://github.com/".insteadOf "git@github.com:"
-  gh config set git_protocol http 2>/dev/null || true
-  npm config set proxy "$COOLTON_GH_PROXY_URL" 2>/dev/null || true
-  npm config set https-proxy "$COOLTON_GH_PROXY_URL" 2>/dev/null || true
+if [ -n "$COOLTON_GIT_INSTEADOF" ]; then
+  # Route all github.com git traffic through the host proxy (TLS, real token injected host-side).
+  git config --global url."$COOLTON_GIT_INSTEADOF".insteadOf "https://github.com/"
+  # Credential helper supplies the ephemeral sandbox token for ghproxy.tanjim.org.
+  git config --global "credential.$COOLTON_GIT_INSTEADOF.helper" ""
+  git config --global "credential.$COOLTON_GIT_INSTEADOF.helper" '!f() { echo "username=$COOLTON_GIT_USER"; echo "password=$COOLTON_GIT_TOKEN"; }; f'
+  # gh wrapper so the sandbox can just run `gh` against github.com transparently. The sandbox
+  # runs as the unprivileged 'user', so the wrapper goes in a user-writable bin on PATH.
+  # NOTE: gh has no --enterprise-token flag; the token is supplied via GH_ENTERPRISE_TOKEN
+  # (set by _proxy_env) and the host via GH_HOST.
+  mkdir -p /home/user/bin
+  cat > /home/user/bin/gh <<'EOF'
+#!/bin/sh
+exec /usr/local/bin/gh --hostname "$COOLTON_GH_PROXY_HOST" "$@"
+EOF
+  chmod +x /home/user/bin/gh
+  # ensure /home/user/bin is ahead of /usr/local/bin on PATH for this session
+  export PATH="/home/user/bin:$PATH"
 fi
 echo "==> versions:"
 echo "git:  $(git --version 2>&1)"
@@ -649,11 +664,18 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str) -> str:
         if sandbox_id:
             sandbox = Sandbox.connect(sandbox_id)
             proxy_info = _proxy_cache_get(sandbox_id)
+            # If the proxy service restarted, in-memory tokens were lost; re-issue.
+            if proxy_info is None:
+                tok = issue_sandbox_token(sandbox.sandbox_id)
+                proxy_info = {"proxy_host": PUBLIC_PROXY_HOST, "token": tok}
+                _proxy_cache_set(sandbox.sandbox_id, proxy_info)
         else:
-            sandbox = Sandbox.create()
+            sandbox = Sandbox.create(_sandbox_template_id())
             # First-time setup: toolchain + a host-side GitHub proxy that authenticates
             # gh/git as coolton-agent without the real token ever entering the sandbox.
-            proxy_info = start_sandbox_proxy(sandbox, sandbox.sandbox_id)
+            # Issue a fresh per-sandbox token (authorized on the running proxy service).
+            tok = issue_sandbox_token(sandbox.sandbox_id)
+            proxy_info = {"proxy_host": PUBLIC_PROXY_HOST, "token": tok}
             _proxy_cache_set(sandbox.sandbox_id, proxy_info)
             provision = _provision_sandbox(sandbox, proxy_info)
             logger.info(f"coolton sandbox provisioned:\n{provision}")
