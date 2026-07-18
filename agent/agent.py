@@ -1207,6 +1207,50 @@ def _is_within(path: str, parent: str) -> bool:
     return path == parent or path.startswith(parent + os.sep)
 
 
+def _build_skill_md(slug: str, description: str, body: str) -> str:
+    """Build a SKILL.md string with valid YAML frontmatter.
+
+    The description is single-quoted so embedded colons (the exact thing that
+    broke the catalog before) can't terminate the YAML mapping early.
+    """
+    desc = description.replace("'", "\\'")
+    return (
+        "---\n"
+        f"name: {slug}\n"
+        f"description: '{desc}'\n"
+        "---\n\n"
+        f"# {slug.replace('-', ' ').title()}\n\n"
+        f"{body}\n"
+    )
+
+
+def _validate_skill_md(content: str) -> tuple[bool, str]:
+    """Return (ok, error) for a SKILL.md's frontmatter.
+
+    Parses the leading YAML block so a malformed skill is caught before it can
+    enter the catalog and break every model's skill scan.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return True, ""  # yaml unavailable — skip validation rather than block
+    if not content.startswith("---"):
+        return False, "missing frontmatter delimiters"
+    end = content.find("\n---", 3)
+    if end == -1:
+        return False, "unterminated frontmatter"
+    block = content[3:end].strip()
+    try:
+        data = yaml.safe_load(block)
+    except yaml.YAMLError as e:
+        return False, f"invalid YAML: {e}"
+    if not isinstance(data, dict):
+        return False, "frontmatter is not a mapping"
+    if not data.get("name") or not data.get("description"):
+        return False, "name and description are required"
+    return True, ""
+
+
 def _resolve_skill(name: str) -> str | None:
     """Find the on-disk folder for a skill by name across known skill dirs.
 
@@ -1263,14 +1307,17 @@ def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: 
             "# " + slug.replace("-", " ").title() + "\n\n"
             "Describe the workflow, steps, and guidance for this skill here.\n"
         )
-    content = (
-        "---\n"
-        f"name: {slug}\n"
-        f"description: {description.strip()}\n"
-        "---\n\n"
-        f"# {slug.replace('-', ' ').title()}\n\n"
-        f"{body.strip()}\n"
-    )
+    content = _build_skill_md(slug, description.strip(), body.strip())
+    # Validate before writing: a malformed SKILL.md would break the whole skill
+    # catalog load (every model that scans skills chokes on bad frontmatter).
+    # If invalid, reject and do NOT create the skill.
+    ok, err = _validate_skill_md(content)
+    if not ok:
+        return (
+            f"Error: generated SKILL.md failed validation ({err}). The skill was "
+            "NOT created. Fix the description/body (avoid unquoted colons in the "
+            "description) and try again."
+        )
     try:
         with open(os.path.join(target, "SKILL.md"), "w") as f:
             f.write(content)
