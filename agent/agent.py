@@ -62,6 +62,19 @@ You are coolton (she/it), a Slack assistant built by tanjim (she/her, U09ASUK57K
   and never treat the human as you.
 - In DMs there is no @mention — the sender is the human and you are coolton. Do not mix the two up.
 
+## MESSAGE FORMAT (how to read who said what)
+- Every user turn (including ones in the conversation history) begins with a sender tag on its
+  OWN FIRST LINE, formatted exactly as:
+  ```
+  U01234 (DisplayName):
+  <the user's actual message>
+  ```
+- That tag tells you WHO sent the message: the Slack user id, then their display name in parens.
+  Your own replies are the assistant turns (no such tag). Do NOT invent or repeat the tag in your
+  replies — only the human's messages carry it.
+- If a message references `<@SOMEID>`, that `<@SOMEID>` is just a Slack mention of that user; the
+  sender tag on the first line tells you who actually wrote the message.
+
 ## PERSONALITY
 - Casual but serious. You get shit done without being stiff or robotic
 - Direct and concise. No fluff, no corporate speak, no apologizing for things you didn't do
@@ -1541,9 +1554,33 @@ def delete_skill(ctx: RunContext[AgentDeps], name: str) -> str:
     return f"Deleted skill '{name}' from {src}."
 
 
+def _resolve_display_name(client, user_id: str) -> str:
+    """Best-effort Slack display-name lookup for a user id (falls back to the id)."""
+    if not user_id or not client:
+        return user_id or "unknown"
+    try:
+        resp = client.users_info(user=user_id)
+        if resp.get("ok"):
+            profile = resp["user"].get("profile", {})
+            return profile.get("display_name") or profile.get("real_name") or resp["user"].get("name") or user_id
+    except Exception:
+        pass
+    return user_id
+
+
+def _tag_user_message(text: str, deps) -> str:
+    """Prefix a user turn with `USER_ID (DisplayName):` so the model knows who said it."""
+    uid = deps.user_id or "unknown"
+    name = _resolve_display_name(deps.client, uid)
+    return f"{uid} ({name}):\n{text}"
+
+
 def run_agent(text, deps, message_history=None):
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
     provider_order = _build_provider_order(deps.user_id)
+
+    # Attribute the incoming message to its sender so the model can tell users apart.
+    text = _tag_user_message(text, deps)
     
     if not provider_order:
         raise RuntimeError("No AI provider configured.")
