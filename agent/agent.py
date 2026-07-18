@@ -551,6 +551,7 @@ def _proxy_env(proxy_info: dict | None) -> dict:
     # Proxy-Authorization (the proxy requires it). The real GitHub token is never here.
     from urllib.parse import quote
     auth_url = url.replace("://", f"://{quote(tok)}@", 1)
+    ca_path = proxy_info.get("ca_path", "/usr/local/share/ca-certificates/coolton-proxy.crt")
     return {
         "COOLTON_GH_PROXY_URL": auth_url,
         "COOLTON_GH_PROXY_TOKEN": tok,
@@ -558,6 +559,10 @@ def _proxy_env(proxy_info: dict | None) -> dict:
         "HTTP_PROXY": auth_url,
         "https_proxy": auth_url,
         "http_proxy": url,
+        # Point curl/git/npm at our proxy CA (gh/Go reads the system bundle, which we also patch).
+        "SSL_CERT_FILE": ca_path,
+        "GIT_SSL_CAINFO": ca_path,
+        "NODE_EXTRA_CA_CERTS": ca_path,
         # dummy placeholder so gh emits requests; the proxy overwrites it with the real token.
         "GH_TOKEN": "ghp_coolton_agent_token_placeholder",
         "GITHUB_TOKEN": "ghp_coolton_agent_token_placeholder",

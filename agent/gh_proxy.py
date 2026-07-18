@@ -396,9 +396,19 @@ def start_sandbox_proxy(sandbox, sandbox_id: str) -> dict | None:
     # used by gh). The cleartext git path needs no CA. The real GitHub token stays on the host.
     # The proxy URL/token/env are passed per-command via E2B's `envs=` (see agent.py), NOT
     # written to bashrc, so they're guaranteed present for every command.
-    sandbox.files.write("/usr/local/share/ca-certificates/coolton-proxy.crt", proxy.ca_pem)
-    sandbox.commands.run("update-ca-certificates >/dev/null 2>&1 || true")
-    return {"proxy_url": PUBLIC_PROXY_URL, "token": token}
+    ca_pem = proxy.ca_pem
+    sandbox.files.write("/usr/local/share/ca-certificates/coolton-proxy.crt", ca_pem)
+    # update-ca-certificates populates the system bundle + hashed dir (used by gh/Go). As a
+    # fallback for images where it's missing/broken, also append our CA to the system bundle
+    # directly and point curl/git at the CA file via env (added in _proxy_env).
+    sandbox.commands.run(
+        "update-ca-certificates >/dev/null 2>&1 || true; "
+        "if [ -f /etc/ssl/certs/ca-certificates.crt ]; then "
+        "  grep -q 'coolton-sandbox-proxy' /etc/ssl/certs/ca-certificates.crt || "
+        "  cat /usr/local/share/ca-certificates/coolton-proxy.crt >> /etc/ssl/certs/ca-certificates.crt; "
+        "fi"
+    )
+    return {"proxy_url": PUBLIC_PROXY_URL, "token": token, "ca_path": "/usr/local/share/ca-certificates/coolton-proxy.crt"}
 
 
 def stop_sandbox_proxy(sandbox_id: str):
