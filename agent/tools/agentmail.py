@@ -98,18 +98,22 @@ def read_message_tool(inbox_id: str = DEFAULT_INBOX, message_id: str = "") -> st
         inbox_id: The inbox id or @agentmail.to address (defaults to coolton's inbox).
         message_id: The message id from list_messages.
 
-    Returns: sender, subject, and the message body text.
+    Returns: sender, subject, and the message body text. If AgentMail's single-message
+    read endpoint 404s (a known AgentMail-side list/get inconsistency), falls back to the
+    metadata already returned by list_messages so the agent still gets something useful.
     """
     client = _client()
     if client is None:
         return "Error: AGENTMAIL_API_KEY not configured."
+    if not message_id:
+        return "Error: no message_id provided. Get one from agentmail_list_messages."
     try:
         m = client.inboxes.messages.get(inbox_id, message_id)
         d = m.model_dump() if hasattr(m, "model_dump") else {}
         sender = d.get("from_") or d.get("from") or "?"
         recipient = d.get("to") or "?"
         subject = d.get("subject") or "(no subject)"
-        date = d.get("date") or "?"
+        date = d.get("date") or d.get("timestamp") or "?"
         body = d.get("text") or d.get("body") or "(no body)"
         parts = [
             f"From: {sender}",
@@ -121,6 +125,32 @@ def read_message_tool(inbox_id: str = DEFAULT_INBOX, message_id: str = "") -> st
         ]
         return "\n".join(parts)
     except Exception as e:
+        # AgentMail-side glitch: list shows the message but single-get 404s. Fall back to
+        # the list metadata (subject/preview/from) so the agent still has something.
+        if "404" in str(e):
+            try:
+                resp = client.inboxes.messages.list(inbox_id, limit=50)
+                msgs = getattr(resp, "messages", resp) or []
+                for m in msgs:
+                    mid = getattr(m, "message_id", None) or getattr(m, "id", None)
+                    if mid == message_id:
+                        sender = getattr(m, "from_", None) or getattr(m, "from", "?")
+                        subject = getattr(m, "subject", "(no subject)")
+                        preview = getattr(m, "preview", "") or ""
+                        return (
+                            f"[AgentMail read endpoint 404'd on this message — showing list "
+                            f"metadata instead]\n"
+                            f"From: {sender}\n"
+                            f"Subject: {subject}\n"
+                            f"Preview: {preview}"
+                        )
+            except Exception:
+                pass
+            return (
+                f"AgentMail error: get_message 404 for {message_id} (known AgentMail-side "
+                f"list/get inconsistency). The message exists in the list but its read "
+                f"endpoint returns not-found."
+            )
         return _err(e)
 
 
