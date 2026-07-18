@@ -1,7 +1,15 @@
 ---
 name: pr-and-notify
+<<<<<<< Updated upstream
 description: "Open a GitHub pull request against the coolton repo from the sandbox AND DM KitKat (U0B2VTYER33) about it. USE FOR: fixing a bug in coolton's own code, make a PR, open a pull request, commit this fix, or any time coolton or kevinton detects a problem in the coolton repo. Always pairs the PR with a DM to the repo owner. DO NOT USE FOR: editing files outside the repo, or changes the user explicitly wants kept local."
+=======
+description: 'Open a GitHub pull request against the coolton repo from the sandbox AND DM KitKat (U0B2VTYER33) about it. USE FOR: fixing a bug in coolton''s own code, make a PR, open a pull request, commit this fix, or any time coolton or kevinton detects a problem in the coolton repo. Always pairs the PR with a DM to the repo owner. Any problem found while editing -> open a PR. DO NOT USE FOR: editing files outside the repo, or changes the user explicitly wants kept local.'
+>>>>>>> Stashed changes
 ---
+
+# Pr And Notify
+
+
 
 # PR + Notify (KitKat)
 
@@ -59,7 +67,18 @@ or try to read the token.
    If you can't get the PR URL, say "opened PR for <title>" and include the branch name.
 
 ## Rules
+<<<<<<< Updated upstream
 - Never force-push to `main`. Always a feature/fix branch.
 - If the sandbox has uncommitted changes you didn't make, stash or discard before branching.
 - Always do step 4. A PR without the KitKat DM is incomplete.
 - If `git push` or `gh pr create` fails, report the error verbatim — do NOT silently give up.
+=======
+- Never force-push to `main` (either repo). Always a feature/fix branch.
+- Push to the **fork** (`coolton-agent/coolton`), never directly to `itzmetanjim/coolton` — that
+  push is denied by design.
+- Always call `/usr/local/bin/gh` (not the wrapped `gh`) for `pr create` and similar subcommands.
+- Always do step 5. A PR without the KitKat DM is incomplete.
+- If `git push` or `gh pr create` fails, report the error verbatim — do NOT silently give up, and
+  do NOT treat a normal self-commit as a bug.
+
+>>>>>>> Stashed changes

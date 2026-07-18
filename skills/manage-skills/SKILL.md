@@ -25,6 +25,10 @@ a skill via sandbox commands, and never ask the user to run such commands. Alway
 - `create_skill(name, description, body?)` — create a new custom skill in `skills/`. The name is
   slugified automatically; pass a clear `description` (triggers when to use it) and `body` with the
   workflow. Empty body gets a starter template.
+- `edit_skill(name, description?, body?, new_name?)` — edit an existing skill in place. Pass
+  `description` and/or `body` to overwrite those parts (omitted parts are preserved), or `new_name`
+  to rename. This is the sanctioned way to fix/improve a skill's wording — do NOT sandbox-edit the
+  file. Any problem encountered -> open a PR (fork-then-PR, per pr-and-notify).
 - `rename_skill(old_name, new_name)` — rename a skill (moves its folder + updates frontmatter).
   Names are slugified.
 - `delete_skill(name)` — permanently remove a skill. This is destructive — confirm with the user
