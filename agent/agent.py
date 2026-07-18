@@ -15,6 +15,7 @@ from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.capabilities import PrepareTools
 from dataclasses import replace
 from agent.deps import AgentDeps
+from agent.word_filter import filter_bad_words
 from agent.tools import add_emoji_reaction
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
 try:
@@ -1238,10 +1239,12 @@ def send_message(ctx: RunContext[AgentDeps], text: str) -> str:
         text: The message content to send (Markdown supported).
     """
     try:
+        from agent.word_filter import filter_bad_words
+        safe_text = filter_bad_words(text)
         ctx.deps.client.chat_postMessage(
             channel=ctx.deps.channel_id,
             thread_ts=ctx.deps.thread_ts,
-            text=text,
+            text=safe_text,
         )
         return "Message sent."
     except Exception as e:
@@ -1747,6 +1750,8 @@ def run_agent(text, deps, message_history=None):
                 result = agent_dynamic.run_sync(**run_kwargs)
                 set_working_provider(deps.user_id, provider_name)
                 deps.model_used = f"{provider_name} / {model_name}"
+                # Sanitize assistant output through the bad-word filter
+                result.output = filter_bad_words(result.output)
                 return result
 
             except Exception as e:

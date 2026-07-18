@@ -4,6 +4,7 @@ from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
+from agent.word_filter import filter_bad_words
 from thread_context import conversation_store
 from listeners.views.feedback_builder import build_feedback_blocks
 
@@ -87,11 +88,13 @@ def handle_message(
                 finalize_plan_message(deps)
                 complete_plan_message(deps)
         else:
-            finalize_plan_message(deps, result.output)
+            # Filter bad words from the agent's output before sending
+            safe_output = filter_bad_words(result.output)
+            finalize_plan_message(deps, safe_output)
 
             # Stream response in thread with feedback buttons
             streamer = say_stream()
-            streamer.append(markdown_text=result.output)
+            streamer.append(markdown_text=safe_output)
             feedback_blocks = build_feedback_blocks()
             streamer.stop(blocks=feedback_blocks)
             complete_plan_message(deps)
