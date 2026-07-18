@@ -40,9 +40,13 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-PROXY_LISTEN_HOST = "127.0.0.1"
-PROXY_LISTEN_PORT = 1357
-PUBLIC_PROXY_URL = "https://matrix.tanjim.org:1500"
+PROXY_LISTEN_HOST = "0.0.0.0"
+PROXY_LISTEN_PORT = 1500
+# The proxy is reached in plaintext (gh/git/curl send CONNECT / absolute-form over plain TCP).
+# We deliberately do NOT terminate TLS here: github's cert is forged by the proxy's own CA
+# (installed in the sandbox), so an extra TLS hop on the proxy path is unnecessary and would
+# break CONNECT handling. The proxy is token-gated (Proxy-Authorization) so exposure is safe.
+PUBLIC_PROXY_URL = "http://matrix.tanjim.org:1500"
 GITHUB_SCOPE = ("github.com", "api.github.com", "codeload.github.com")
 
 
