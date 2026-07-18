@@ -547,12 +547,16 @@ def _proxy_env(proxy_info: dict | None) -> dict:
         return {}
     url = proxy_info["proxy_url"]
     tok = proxy_info["token"]
+    # Embed the ephemeral proxy token in the proxy URL so gh/git/curl send it as
+    # Proxy-Authorization (the proxy requires it). The real GitHub token is never here.
+    from urllib.parse import quote
+    auth_url = url.replace("://", f"://{quote(tok)}@", 1)
     return {
-        "COOLTON_GH_PROXY_URL": url,
+        "COOLTON_GH_PROXY_URL": auth_url,
         "COOLTON_GH_PROXY_TOKEN": tok,
-        "HTTPS_PROXY": url,
-        "HTTP_PROXY": url,
-        "https_proxy": url,
+        "HTTPS_PROXY": auth_url,
+        "HTTP_PROXY": auth_url,
+        "https_proxy": auth_url,
         "http_proxy": url,
         # dummy placeholder so gh emits requests; the proxy overwrites it with the real token.
         "GH_TOKEN": "ghp_coolton_agent_token_placeholder",
