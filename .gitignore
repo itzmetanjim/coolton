@@ -71,4 +71,7 @@ byok_key.bin
 # Stale scratch file
 aaa.py
 
+# Skill CLI install lock (machine-generated; paths drift from actual install location)
+skills-lock.json
+
 # Keep skills tracked: .agents/skills/ is whitelisted above; curated skills/ is tracked.

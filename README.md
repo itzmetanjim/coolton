@@ -149,6 +149,65 @@ ruff check      # lint
 ruff format     # format
 ```
 
+## Contributing & debugging
+
+The architecture is deliberately split so a bug stays contained. When something breaks,
+find which half it's in first:
+
+### Where things live (mental model)
+
+| Concern | File | Notes |
+| --- | --- | --- |
+| User-facing answer | `agent/agent.py` (`run_agent`) | The main Pydantic AI agent. |
+| Model selection | `agent/agent.py` (`get_runtime_model`, `_build_provider_order`) | **Single source of truth** for which provider/model is used. Change the order here only. |
+| Silent skill capture | `agent/kevinton.py` (`spawn_kevinton`) | Runs in a **daemon thread** after each turn. |
+| Inbound Slack events | `listeners/events/message.py`, `app_mentioned.py` | After coolton answers, these call `spawn_kevinton`. |
+| Plan card / model line | `agent/plan_block.py` | Renders `Model: <provider> / <model>`. |
+| Skills on disk | `skills/`, `.agents/skills/` | Scanned by `SkillsCapability(auto_reload=True)`. |
+
+### "The bot didn't answer"
+
+1. Check the service is up: `systemctl status coolton`.
+2. Read live logs: `journalctl -u coolton -f`.
+3. Most failures here are **model/provider** errors. Look for which provider was tried
+   (the plan card shows `Model: <provider> / <model>`). If a key is missing or a provider
+   is rate-limited, the agent falls through to the next in `_build_provider_order` — if
+   *all* fail, the answer fails. Confirm at least one provider key is set in `.env`.
+
+### "The bot answered but didn't learn / kevinton didn't create a skill"
+
+kevinton runs **best-effort in a background thread** — it can never block or break the user's
+answer. If it errors, only kevinton fails (logged separately), coolton is unaffected.
+
+- Trivial turns (`"hi"`, `"what is 1+1?"`) are intentionally skipped — that's not a bug.
+- Find kevinton logs in `journalctl -u coolton` (look for kevinton trace lines).
+- kevinton writes to `skills/` only. If a skill didn't appear, check disk writes there
+  and that the turn was non-trivial (had tool calls / research / a comparison).
+
+### "A skill is wrong / stale"
+
+Skills are plain Markdown in `skills/`. Edit the `SKILL.md` directly, commit, and it's picked
+up on the next turn (auto-reload). To remove one, delete the directory.
+
+### Important invariants (don't break these)
+
+- **Never** add prompt-based enforcement telling coolton to "self-improve" — that was tried
+  and didn't work. Self-improvement lives only in kevinton.
+- **Never** let kevinton edit app code or the repo. It is restricted to `skills/` via the
+  hardened skill tools.
+- **Never** commit `.env`, runtime JSON (`conversations.json`, etc.), or `byok_key.bin`.
+  They're gitignored. Scan before committing if unsure:
+  `git ls-files | grep -iE '\.env|byok_key|conversations|reminders'`.
+- Model selection must go through `get_runtime_model` / `_build_provider_order` — don't
+  hardcode a provider elsewhere.
+
+### Running tests
+
+```sh
+pip install -e ".[test]"
+pytest
+```
+
 ## Notes
 
 - `.env`, runtime JSON state (`conversations.json`, `reminders.json`, etc.), and `byok_key.bin`
