@@ -311,6 +311,17 @@ Use `skip` to end your turn without sending a final message.
 - Use when the user's request doesn't need a reply
 - Use when you've already responded via `send_message`
 - Only call this at the very end, when you have nothing more to add
+
+## AGENTMAIL (email for agents)
+You have an AgentMail inbox (an @agentmail.to address) so you can send and receive email
+autonomously. Tools:
+- `agentmail_create_inbox` — make a new inbox (fresh @agentmail.to address)
+- `agentmail_list_inboxes` — list your inboxes
+- `agentmail_list_messages(inbox_id)` — list recent messages in an inbox
+- `agentmail_read_message(inbox_id, message_id)` — read a full message
+- `agentmail_send_email(inbox_id, to, subject, text, cc?, html?)` — send an email
+If you don't have an inbox yet, create one first. Use this for anything email-related
+(sending reports/alerts, receiving confirmations, human-in-the-loop handoffs).
 """
 
 _cached_model: str | None = None
@@ -1100,6 +1111,76 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
     # The CLI installs into .agents/skills/<name>; make sure it's picked up.
     out = proc.stdout or ""
     return f"Skill install complete.\n{out[-1200:]}"
+
+
+@agent.tool
+def agentmail_create_inbox(ctx: RunContext[AgentDeps]) -> str:
+    """Create a new AgentMail inbox for coolton (gives coolton its own @agentmail.to address).
+
+    Use when you need a fresh email identity to send/receive mail autonomously.
+    """
+    from agent.tools.agentmail import create_inbox_tool
+
+    return create_inbox_tool()
+
+
+@agent.tool
+def agentmail_list_inboxes(ctx: RunContext[AgentDeps], limit: int = 20) -> str:
+    """List coolton's AgentMail inboxes (ids + @agentmail.to addresses)."""
+    from agent.tools.agentmail import list_inboxes_tool
+
+    return list_inboxes_tool(limit=limit)
+
+
+@agent.tool
+def agentmail_list_messages(ctx: RunContext[AgentDeps], inbox_id: str, limit: int = 20) -> str:
+    """List recent messages in a coolton AgentMail inbox.
+
+    Args:
+        inbox_id: The inbox id or @agentmail.to address.
+        limit: Max messages to return (default 20).
+    """
+    from agent.tools.agentmail import list_messages_tool
+
+    return list_messages_tool(inbox_id, limit=limit)
+
+
+@agent.tool
+def agentmail_read_message(ctx: RunContext[AgentDeps], inbox_id: str, message_id: str) -> str:
+    """Read the full content of a specific AgentMail message.
+
+    Args:
+        inbox_id: The inbox id or @agentmail.to address.
+        message_id: The message id from agentmail_list_messages.
+    """
+    from agent.tools.agentmail import read_message_tool
+
+    return read_message_tool(inbox_id, message_id)
+
+
+@agent.tool
+def agentmail_send_email(
+    ctx: RunContext[AgentDeps],
+    inbox_id: str,
+    to: str,
+    subject: str,
+    text: str,
+    cc: str = "",
+    html: str = "",
+) -> str:
+    """Send an email from a coolton AgentMail inbox.
+
+    Args:
+        inbox_id: The inbox id or @agentmail.to address to send from.
+        to: Recipient email address (or comma-separated list).
+        subject: Email subject.
+        text: Plain-text body.
+        cc: Optional CC address(es), comma-separated.
+        html: Optional HTML body (used only if text is empty).
+    """
+    from agent.tools.agentmail import send_email_tool
+
+    return send_email_tool(inbox_id, to, subject, text, cc=cc, html=html)
 
 
 def _repo_root() -> str:

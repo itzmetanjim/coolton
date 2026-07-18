@@ -212,6 +212,11 @@ TOOL_DISPLAY_NAMES = {
     "slack_api_call_as_bot_tool": "Calling Slack API (bot)",
     "leave_thread_tool": "Leaving thread",
     "send_message": "Sending message",
+    "agentmail_create_inbox": "Creating AgentMail inbox",
+    "agentmail_list_inboxes": "Listing AgentMail inboxes",
+    "agentmail_list_messages": "Listing AgentMail messages",
+    "agentmail_read_message": "Reading AgentMail message",
+    "agentmail_send_email": "Sending AgentMail email",
 }
 
 _task_counter = 0
