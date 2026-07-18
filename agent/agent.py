@@ -611,15 +611,18 @@ def _proxy_env(proxy_info: dict | None) -> dict:
     host = proxy_info["proxy_host"]      # e.g. ghproxy.tanjim.org
     tok = proxy_info["token"]            # ephemeral per-sandbox token
     return {
-        # gh: custom GH_HOST is treated as GitHub Enterprise, so it sends REST to
-        # /api/v3 and GraphQL to /api/graphql; the proxy maps those back to github.com.
-        "GH_HOST": host,
+        # gh: GITHUB_HOST makes gh treat the proxy as a GitHub Enterprise host, so it
+        # sends REST to /api/v3 and GraphQL to /api/graphql; the proxy maps those back
+        # to github.com. GH_ENTERPRISE_TOKEN carries the ephemeral per-sandbox token.
+        # (NOTE: the var is GITHUB_HOST, not GH_HOST - gh does not read GH_HOST.)
+        "GITHUB_HOST": host,
         "GH_ENTERPRISE_TOKEN": tok,
         # git: rewrite github.com -> ghproxy.tanjim.org and supply the token via a
         # credential helper so git's anonymous probe gets a 401 and retries with auth.
         "COOLTON_GIT_INSTEADOF": f"https://{host}/",
         "COOLTON_GIT_TOKEN": tok,
-        "COOLTON_GIT_USER": "x",
+        # Username is the sandbox id (the proxy scopes tokens per-sandbox on it).
+        "COOLTON_GIT_USER": os.environ.get("COOLTON_SANDBOX_ID", "x"),
         # Convenience for scripts/curl that hit github.com directly.
         "COOLTON_GH_PROXY_HOST": host,
         "COOLTON_GH_PROXY_TOKEN": tok,
@@ -653,12 +656,15 @@ if [ -n "$COOLTON_GIT_INSTEADOF" ]; then
   git config --global "credential.$COOLTON_GIT_INSTEADOF.helper" '!f() { echo "username=$COOLTON_GIT_USER"; echo "password=$COOLTON_GIT_TOKEN"; }; f'
   # gh wrapper so the sandbox can just run `gh` against github.com transparently. The sandbox
   # runs as the unprivileged 'user', so the wrapper goes in a user-writable bin on PATH.
-  # NOTE: gh has no --enterprise-token flag; the token is supplied via GH_ENTERPRISE_TOKEN
-  # (set by _proxy_env) and the host via GH_HOST.
+  # NOTE: gh reads GITHUB_HOST + GH_ENTERPRISE_TOKEN (set by _proxy_env); it has no
+  # --enterprise-token / --hostname flag (verified: `gh --hostname` => unknown flag).
   mkdir -p /home/user/bin
   cat > /home/user/bin/gh <<'EOF'
 #!/bin/sh
-exec /usr/local/bin/gh --hostname "$COOLTON_GH_PROXY_HOST" "$@"
+# NOTE: gh has no --hostname flag (verified: `gh --hostname` => unknown flag).
+# The proxy host is supplied via GH_HOST + GH_ENTERPRISE_TOKEN (set by _proxy_env),
+# so plain `gh` calls are routed through the host-side GitHub proxy transparently.
+exec /usr/local/bin/gh "$@"
 EOF
   chmod +x /home/user/bin/gh
   # ensure /home/user/bin is ahead of /usr/local/bin on PATH for this session
@@ -1723,13 +1729,20 @@ def run_agent(text, deps, message_history=None):
                     from agent.plan_block import build_plan_hooks
                     capabilities.append(build_plan_hooks())
 
-                from pydantic_ai_skills import SkillsCapability
-                capabilities.append(
-                    SkillsCapability(
-                        directories=["skills", ".agents/skills"],
-                        auto_reload=True,
+                # SkillsCapability is provided by the optional `pydantic-ai-skills` package.
+                # Guard the import so a missing install degrades gracefully instead of
+                # crashing every agent run (the import used to be unconditional, which
+                # raised ImportError on clean deploys where the dep was not installed).
+                try:
+                    from pydantic_ai_skills import SkillsCapability
+                    capabilities.append(
+                        SkillsCapability(
+                            directories=["skills", ".agents/skills"],
+                            auto_reload=True,
+                        )
                     )
-                )
+                except Exception as e:  # pragma: no cover - skills lib optional
+                    logger.warning("SkillsCapability unavailable: %s", e)
 
                 run_kwargs = dict(
                     user_prompt=text,

@@ -7,6 +7,7 @@ dependencies = [
     "slack-bolt>=1.28.0",
     "slack-cli-hooks<1.0.0",
     "pydantic-ai[openai]",
+    "pydantic-ai-skills",
     "python-dotenv==1.2.2",
 ]
 

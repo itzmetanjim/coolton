@@ -138,22 +138,29 @@ def _rewrite_url(host: str, path: str) -> str:
 
 
 class _Allowlist:
+    """Per-sandbox scoped allowlist.
+
+    Tokens are keyed by (user, token) where `user` is the sandbox id the client
+    sends as the Basic-auth username. A token issued for sandbox A is NOT valid
+    for sandbox B, so a leaked token cannot be reused across sandboxes.
+    """
+
     def __init__(self):
         self._set = set()
         self._lock = threading.Lock()
 
-    def add(self, tok: str):
+    def add(self, tok: str, user: str = ""):
         if tok:
             with self._lock:
-                self._set.add(tok)
+                self._set.add((user, tok))
 
-    def remove(self, tok: str):
+    def remove(self, tok: str, user: str = ""):
         with self._lock:
-            self._set.discard(tok)
+            self._set.discard((user, tok))
 
-    def __contains__(self, tok: str) -> bool:
+    def contains(self, tok: str, user: str = "") -> bool:
         with self._lock:
-            return tok in self._set
+            return (user, tok) in self._set
 
 
 allowlist = _Allowlist()
@@ -166,12 +173,12 @@ if _test_token:
 
 
 # Importable helpers (these are what the agent will call later).
-def add_token(tok: str):
-    allowlist.add(tok)
+def add_token(tok: str, user: str = ""):
+    allowlist.add(tok, user)
 
 
-def remove_token(tok: str):
-    allowlist.remove(tok)
+def remove_token(tok: str, user: str = ""):
+    allowlist.remove(tok, user)
 
 
 class _AdminHandler(BaseHTTPRequestHandler):
@@ -220,32 +227,36 @@ class _AdminHandler(BaseHTTPRequestHandler):
         if self.path != "/tokens" or not self._admin_ok():
             self._send_json(403, {"error": "forbidden"})
             return
-        tok = (self._read_json() or {}).get("token", "")
+        body = self._read_json() or {}
+        tok = body.get("token", "")
+        user = body.get("user", "")
         if not tok:
             self._send_json(400, {"error": "missing token"})
             return
-        allowlist.add(tok)
+        allowlist.add(tok, user)
         self._send_json(200, {"ok": True})
 
     def do_DELETE(self):
         if self.path != "/tokens" or not self._admin_ok():
             self._send_json(403, {"error": "forbidden"})
             return
-        tok = (self._read_json() or {}).get("token", "")
+        body = self._read_json() or {}
+        tok = body.get("token", "")
+        user = body.get("user", "")
         if tok:
-            allowlist.remove(tok)
+            allowlist.remove(tok, user)
         self._send_json(200, {"ok": True})
 
     def log_message(self, *a): pass
 
 
-def issue_token(tok: str):
+def issue_token(tok: str, user: str = ""):
     """Authorize a sandbox token (callable from the agent process directly OR via admin HTTP)."""
-    allowlist.add(tok)
+    allowlist.add(tok, user)
 
 
-def revoke_token(tok: str):
-    allowlist.remove(tok)
+def revoke_token(tok: str, user: str = ""):
+    allowlist.remove(tok, user)
 
 
 def _extract_token(headers: dict) -> str | None:
@@ -261,14 +272,20 @@ def _extract_token(headers: dict) -> str | None:
         return auth[len("Bearer "):].strip() or None
     if auth.startswith("token ") or auth.startswith("Token "):
         return auth.split(" ", 1)[1].strip() or None
+    user = ""
     if auth.startswith("Basic "):
         try:
             decoded = base64.b64decode(auth[6:]).decode(errors="ignore")
         except Exception:
-            return None
-        # git form is "user:token"; take the password part after the last colon
-        return decoded.split(":", 1)[-1].strip() or None
-    return None
+            return None, None
+        # git form is "user:token"; user is the sandbox id, password is the token
+        if ":" in decoded:
+            user, tok = decoded.rsplit(":", 1)
+        else:
+            tok = decoded
+        return tok.strip() or None, user.strip()
+    tok = auth.split(" ", 1)[1].strip() if " " in auth else None
+    return tok or None, user
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -287,14 +304,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def _forward(self):
-        tok = _extract_token(self.headers)
+        tok, user = _extract_token(self.headers)
         if tok is None:
             # No credential presented (e.g. git's first anonymous probe). Challenge so
             # the client retries with auth instead of failing outright.
             self._deny(401, challenge=True)
             return
-        if tok not in allowlist:
-            logger.warning("deny: tok=%r in_allowlist=False auth=%r", tok, self.headers.get("Authorization", "")[:30])
+        if not allowlist.contains(tok, user):
+            logger.warning("deny: tok=%r user=%r in_allowlist=False", tok, user)
             self._deny(403)
             return
 
