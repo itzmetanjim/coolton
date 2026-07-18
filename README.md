@@ -186,6 +186,12 @@ the next turn (auto-reload). to remove one, delete the directory.
   work. self-improvement lives only in kevinton.
 - **never** let kevinton edit app code or the repo. it's restricted to `skills/` via the hardened
   skill tools.
+- **human-in-the-loop for self-edits** — coolton must never autonomously `git commit`/`git push` to
+  its own repo without approval. the repo's `pre-commit` hook blocks any commit authored by
+  `coolton@agentmail.to` unless `COOLTON_APPROVED=1` is set in the shell by a human. the
+  standalone subagents in `agent/subagents.py` are fine to *run* (they only act in the sandbox);
+  the guardrail is specifically about writing coolton's own source. this replaced the old mode
+  where coolton could edit its own code with no approval.
 - **never** commit `.env`, runtime json (`conversations.json`, etc.), or `byok_key.bin`. they're
   gitignored. scan before committing if unsure:
   `git ls-files | grep -ie '\.env|byok_key|conversations|reminders'`.
