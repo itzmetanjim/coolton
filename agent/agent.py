@@ -623,7 +623,7 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str) -> str:
             proxy_info = start_sandbox_proxy(sandbox, sandbox.sandbox_id)
             provision = _provision_sandbox(sandbox, proxy_info)
             logger.info(f"coolton sandbox provisioned:\n{provision}")
-        result = sandbox.commands.run(command)
+        result = sandbox.commands.run("source $HOME/.bashrc >/dev/null 2>&1 || true; " + command)
         new_sandbox_id = sandbox.sandbox_id
         save_thread_sandbox_id(channel_id, thread_ts, new_sandbox_id)
         sandbox.pause()

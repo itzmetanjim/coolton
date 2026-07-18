@@ -393,8 +393,18 @@ def start_sandbox_proxy(sandbox, sandbox_id: str) -> dict | None:
     sandbox.files.write("/usr/local/share/ca-certificates/coolton-proxy.crt", proxy.ca_pem)
     sandbox.commands.run(
         "update-ca-certificates >/dev/null 2>&1 || true; "
-        f"echo 'export COOLTON_GH_PROXY_URL={PUBLIC_PROXY_URL}' >> $HOME/.bashrc; "
-        f"echo 'export COOLTON_GH_PROXY_TOKEN={token}' >> $HOME/.bashrc"
+        f"cat >> $HOME/.bashrc <<'EOF'\n"
+        f"export COOLTON_GH_PROXY_URL='{PUBLIC_PROXY_URL}'\n"
+        f"export COOLTON_GH_PROXY_TOKEN='{token}'\n"
+        f"export HTTPS_PROXY='{PUBLIC_PROXY_URL}'\n"
+        f"export HTTP_PROXY='{PUBLIC_PROXY_URL}'\n"
+        f"export https_proxy='{PUBLIC_PROXY_URL}'\n"
+        f"export http_proxy='{PUBLIC_PROXY_URL}'\n"
+        # dummy placeholder so gh emits requests; the proxy overwrites it with the real token.
+        f"export GH_TOKEN='ghp_coolton_agent_token_placeholder'\n"
+        f"export GITHUB_TOKEN='ghp_coolton_agent_token_placeholder'\n"
+        f"export GODEBUG='http2client=0'\n"
+        "EOF"
     )
     return {"proxy_url": PUBLIC_PROXY_URL, "token": token}
 
