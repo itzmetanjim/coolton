@@ -332,6 +332,7 @@ You have access to on-demand **skills** (reusable playbooks with instructions an
 **IMPORTANT — the agent sandbox is isolated.** Any shell/CLI commands you run in your own sandbox (e.g. `npx skills ...`, `mkdir`, file writes) have **NO effect** on this agent and are thrown away. Never tell the user you "installed" or "created" a skill via sandbox commands. To actually change skills, you MUST use the dedicated tools below — these are the only things that touch the real skill files:
 - `install_skill(package, skill?)` — install a skill from the skills.sh marketplace (Vercel's Agent Skills CLI). Use when the user says "install a skill" or names a package/repo (e.g. `vercel-labs/agent-skills` or a GitHub URL). After installing, load it with `load_skill`.
 - `create_skill(name, description, body?)` — create a new custom skill in `skills/`. Use for "make a skill" / "turn this into a skill".
+- `edit_skill(name, description?, body?, new_name?)` — edit an existing skill's description/body, optionally rename. Use for "fix the skill", "update a skill", "change what X skill says". Any problem found while editing -> open a PR.
 - `rename_skill(old_name, new_name)` — rename an existing skill.
 - `delete_skill(name)` — permanently remove a skill.
 
@@ -1425,7 +1426,7 @@ def _build_skill_md(slug: str, description: str, body: str) -> str:
     The description is single-quoted so embedded colons (the exact thing that
     broke the catalog before) can't terminate the YAML mapping early.
     """
-    desc = description.replace("'", "\\'")
+    desc = description.replace("'", "''")
     return (
         "---\n"
         f"name: {slug}\n"
@@ -1595,6 +1596,115 @@ def delete_skill(ctx: RunContext[AgentDeps], name: str) -> str:
     except OSError as e:
         return f"Error deleting skill: {e}"
     return f"Deleted skill '{name}' from {src}."
+
+
+@agent.tool
+def edit_skill(
+    ctx: RunContext[AgentDeps],
+    name: str,
+    description: str = "",
+    body: str = "",
+    new_name: str = "",
+) -> str:
+    """Edit an existing agent skill's description and/or body (and optionally rename it).
+
+    Use this when the user wants to change what a skill says or does — fix its
+    wording, update its steps, or rename it. This rewrites skills/<name>/SKILL.md
+    through the sanctioned skill path (no sandbox shell writes). Do NOT use
+    sandbox shell commands to edit skills — they have no effect on the agent.
+
+    Any problem found while editing -> open a PR (fork-then-PR, see pr-and-notify).
+
+    Args:
+        name: Current skill name/folder to edit.
+        description: New one-line description (USE FOR / DO NOT USE FOR cues). If
+            empty, the existing description is kept.
+        body: New instruction body (Markdown). If empty, the existing body is kept.
+        new_name: Optional new skill name (slugified). If empty, name is unchanged.
+    """
+    src = _resolve_skill(name)
+    if not src:
+        return f"Error: skill '{name}' not found in any skill directory."
+    sk_md = os.path.join(src, "SKILL.md")
+    try:
+        with open(sk_md, "r") as f:
+            txt = f.read()
+    except OSError as e:
+        return f"Error reading SKILL.md: {e}"
+
+    # Parse current frontmatter + body.
+    cur_name, cur_desc, cur_body = _parse_skill_md(txt)
+    if cur_name is None:
+        return "Error: existing SKILL.md could not be parsed."
+
+    slug = _safe_name(new_name) if new_name.strip() else cur_name
+    if not slug:
+        return "Error: invalid new skill name."
+
+    new_desc = description.strip() if description.strip() else cur_desc
+    new_body = body.strip() if body.strip() else cur_body
+
+    content = _build_skill_md(slug, new_desc, new_body)
+    ok, err = _validate_skill_md(content)
+    if not ok:
+        return (
+            f"Error: edited SKILL.md failed validation ({err}). The skill was NOT "
+            "changed. Fix the description/body (avoid unquoted colons) and try again."
+        )
+
+    if new_name.strip() and slug != cur_name:
+        dst = os.path.join(os.path.dirname(src), slug)
+        if os.path.exists(dst):
+            return f"Error: a skill named '{slug}' already exists."
+        try:
+            os.rename(src, dst)
+        except OSError as e:
+            return f"Error renaming skill: {e}"
+        sk_md = os.path.join(dst, "SKILL.md")
+
+    try:
+        with open(sk_md, "w") as f:
+            f.write(content)
+    except OSError as e:
+        return f"Error writing SKILL.md: {e}"
+    renamed = f" (renamed '{cur_name}' -> '{slug}')" if slug != cur_name else ""
+    return (
+        f"Edited skill '{slug}'{renamed} at {sk_md}. "
+        "It is now available via list_skills / load_skill."
+    )
+
+
+def _parse_skill_md(content: str) -> tuple[str | None, str, str]:
+    """Parse a SKILL.md into (name, description, body). Returns (None,...) on failure."""
+    try:
+        import yaml
+    except ImportError:
+        yaml = None
+    if not content.startswith("---"):
+        return None, "", ""
+    end = content.find("\n---", 3)
+    if end == -1:
+        return None, "", ""
+    block = content[3:end].strip()
+    if yaml is not None:
+        try:
+            data = yaml.safe_load(block)
+        except yaml.YAMLError:
+            return None, "", ""
+        if not isinstance(data, dict):
+            return None, "", ""
+        name = data.get("name")
+        desc = data.get("description", "")
+    else:
+        # Fallback: naive parse.
+        name_m = re.search(r"(?m)^name:\s*(.+)$", block)
+        desc_m = re.search(r"(?m)^description:\s*(.+)$", block)
+        name = name_m.group(1).strip() if name_m else None
+        desc = desc_m.group(1).strip().strip("'\"") if desc_m else ""
+    if not name:
+        return None, "", ""
+    body = content[end + 4:].lstrip("\n")
+    return name, (desc or ""), body
 
 
 def _resolve_display_name(client, user_id: str) -> str:

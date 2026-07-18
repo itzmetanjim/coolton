@@ -17,7 +17,7 @@ slack message
 coolton (pydantic ai agent) ── answers, shows a plan card + the model it used
    │  result.all_messages()
    ▼
-kevinton (daemon thread) ── list_skills → find_skills → create_skill / install_skill
+kevinton (daemon thread) ── list_skills → find_skills → create_skill / edit_skill / install_skill
    │  writes to skills/
    ▼
 skills/  ── scanned by skillscapability on every turn (auto_reload=true)
