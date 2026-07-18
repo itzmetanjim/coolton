@@ -255,6 +255,11 @@ def build_plan_hooks():
     @hooks.on.before_tool_execute
     async def before_tool(ctx, *, call, tool_def, args):
         deps = ctx.deps
+        logger.info(
+            "TOOL INPUT  | %s | %s",
+            call.tool_name,
+            _truncate(_pretty_args(args), 1000),
+        )
         if not deps.plan_ts:
             return args
         task_id = f"task_{call.tool_call_id}"
@@ -272,6 +277,11 @@ def build_plan_hooks():
     @hooks.on.after_tool_execute
     async def after_tool(ctx, *, call, tool_def, args, result):
         deps = ctx.deps
+        logger.info(
+            "TOOL OUTPUT | %s | %s",
+            call.tool_name,
+            _truncate(_pretty_args(result), 1000),
+        )
         if not deps.plan_ts:
             return result
         task_id = f"task_{call.tool_call_id}"
@@ -285,6 +295,11 @@ def build_plan_hooks():
     @hooks.on.tool_execute_error
     async def on_tool_error(ctx, *, call, tool_def, args, error):
         deps = ctx.deps
+        logger.error(
+            "TOOL ERROR  | %s | %s",
+            call.tool_name,
+            _truncate(str(error), 1000),
+        )
         if deps.plan_ts:
             task_id = f"task_{call.tool_call_id}"
             task = deps.plan_tasks.get(task_id)
@@ -295,3 +310,16 @@ def build_plan_hooks():
         raise error
 
     return hooks
+
+
+def _pretty_args(value) -> str:
+    """Render tool args / results compactly for logging (dicts, lists, strings)."""
+    if isinstance(value, dict):
+        parts = []
+        for k, v in value.items():
+            v_str = _truncate(str(v), 300)
+            parts.append(f"{k}={v_str}")
+        return "{" + ", ".join(parts) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_truncate(str(v), 300) for v in value) + "]"
+    return str(value)
