@@ -3,6 +3,7 @@ import os
 from agentmail import AgentMail
 
 AGENTMAIL_KEY_ENV = "AGENTMAIL_API_KEY"
+DEFAULT_INBOX = "coolton@agentmail.to"
 
 
 def _client() -> AgentMail | None:
@@ -59,11 +60,11 @@ def list_inboxes_tool(limit: int = 20) -> str:
         return _err(e)
 
 
-def list_messages_tool(inbox_id: str, limit: int = 20) -> str:
+def list_messages_tool(inbox_id: str = DEFAULT_INBOX, limit: int = 20) -> str:
     """List recent messages in a given AgentMail inbox.
 
     Args:
-        inbox_id: The inbox id or @agentmail.to address.
+        inbox_id: The inbox id or @agentmail.to address (defaults to coolton's inbox).
         limit: Max messages to return (default 20).
 
     Returns: message ids, subjects, from, and read status.
@@ -90,11 +91,11 @@ def list_messages_tool(inbox_id: str, limit: int = 20) -> str:
         return _err(e)
 
 
-def read_message_tool(inbox_id: str, message_id: str) -> str:
+def read_message_tool(inbox_id: str = DEFAULT_INBOX, message_id: str = "") -> str:
     """Read the full content of a specific AgentMail message.
 
     Args:
-        inbox_id: The inbox id or @agentmail.to address.
+        inbox_id: The inbox id or @agentmail.to address (defaults to coolton's inbox).
         message_id: The message id from list_messages.
 
     Returns: sender, subject, and the message body text.
@@ -124,20 +125,20 @@ def read_message_tool(inbox_id: str, message_id: str) -> str:
 
 
 def send_email_tool(
-    inbox_id: str,
     to: str,
     subject: str,
     text: str,
+    inbox_id: str = DEFAULT_INBOX,
     cc: str = "",
     html: str = "",
 ) -> str:
     """Send an email from a coolton AgentMail inbox.
 
     Args:
-        inbox_id: The inbox id or @agentmail.to address to send from.
         to: Recipient email address (or comma-separated list).
         subject: Email subject.
         text: Plain-text body.
+        inbox_id: The inbox id or @agentmail.to address to send from (defaults to coolton's inbox).
         cc: Optional CC address(es), comma-separated.
         html: Optional HTML body (used only if text is empty).
 

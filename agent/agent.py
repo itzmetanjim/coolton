@@ -313,15 +313,23 @@ Use `skip` to end your turn without sending a final message.
 - Only call this at the very end, when you have nothing more to add
 
 ## AGENTMAIL (email for agents)
-You have an AgentMail inbox (an @agentmail.to address) so you can send and receive email
-autonomously. Tools:
+You have an AgentMail inbox so you can send and receive email autonomously. Your default inbox is
+**coolton@agentmail.to** — the AgentMail tools default to it, so you usually don't need to pass an
+inbox id. Tools:
 - `agentmail_create_inbox` — make a new inbox (fresh @agentmail.to address)
 - `agentmail_list_inboxes` — list your inboxes
-- `agentmail_list_messages(inbox_id)` — list recent messages in an inbox
-- `agentmail_read_message(inbox_id, message_id)` — read a full message
-- `agentmail_send_email(inbox_id, to, subject, text, cc?, html?)` — send an email
-If you don't have an inbox yet, create one first. Use this for anything email-related
-(sending reports/alerts, receiving confirmations, human-in-the-loop handoffs).
+- `agentmail_list_messages(inbox_id?)` — list recent messages (defaults to coolton@agentmail.to)
+- `agentmail_read_message(message_id, inbox_id?)` — read a full message
+- `agentmail_send_email(to, subject, text, inbox_id?, cc?, html?)` — send an email from coolton@agentmail.to
+Use this for anything email-related (sending reports/alerts, receiving confirmations,
+human-in-the-loop handoffs).
+
+## READING PROFILES
+- "read my profile" / "who am i" / "my slack profile" always means **the human user who messaged
+  you**. Use `users_info` with `user_id` = the `Your user_id` value from CURRENT CONTEXT (the id
+  injected each turn). Never read your own bot profile for this — the user_id in context is the
+  human's id.
+- You can also read any other user's profile by passing their user_id to `users_info`.
 """
 
 _cached_model: str | None = None
@@ -1133,11 +1141,11 @@ def agentmail_list_inboxes(ctx: RunContext[AgentDeps], limit: int = 20) -> str:
 
 
 @agent.tool
-def agentmail_list_messages(ctx: RunContext[AgentDeps], inbox_id: str, limit: int = 20) -> str:
+def agentmail_list_messages(ctx: RunContext[AgentDeps], inbox_id: str = "coolton@agentmail.to", limit: int = 20) -> str:
     """List recent messages in a coolton AgentMail inbox.
 
     Args:
-        inbox_id: The inbox id or @agentmail.to address.
+        inbox_id: The inbox id or @agentmail.to address (defaults to coolton@agentmail.to).
         limit: Max messages to return (default 20).
     """
     from agent.tools.agentmail import list_messages_tool
@@ -1146,12 +1154,12 @@ def agentmail_list_messages(ctx: RunContext[AgentDeps], inbox_id: str, limit: in
 
 
 @agent.tool
-def agentmail_read_message(ctx: RunContext[AgentDeps], inbox_id: str, message_id: str) -> str:
+def agentmail_read_message(ctx: RunContext[AgentDeps], message_id: str, inbox_id: str = "coolton@agentmail.to") -> str:
     """Read the full content of a specific AgentMail message.
 
     Args:
-        inbox_id: The inbox id or @agentmail.to address.
         message_id: The message id from agentmail_list_messages.
+        inbox_id: The inbox id or @agentmail.to address (defaults to coolton@agentmail.to).
     """
     from agent.tools.agentmail import read_message_tool
 
@@ -1161,26 +1169,26 @@ def agentmail_read_message(ctx: RunContext[AgentDeps], inbox_id: str, message_id
 @agent.tool
 def agentmail_send_email(
     ctx: RunContext[AgentDeps],
-    inbox_id: str,
     to: str,
     subject: str,
     text: str,
+    inbox_id: str = "coolton@agentmail.to",
     cc: str = "",
     html: str = "",
 ) -> str:
     """Send an email from a coolton AgentMail inbox.
 
     Args:
-        inbox_id: The inbox id or @agentmail.to address to send from.
         to: Recipient email address (or comma-separated list).
         subject: Email subject.
         text: Plain-text body.
+        inbox_id: The inbox id or @agentmail.to address to send from (defaults to coolton@agentmail.to).
         cc: Optional CC address(es), comma-separated.
         html: Optional HTML body (used only if text is empty).
     """
     from agent.tools.agentmail import send_email_tool
 
-    return send_email_tool(inbox_id, to, subject, text, cc=cc, html=html)
+    return send_email_tool(to, subject, text, inbox_id=inbox_id, cc=cc, html=html)
 
 
 def _repo_root() -> str:
