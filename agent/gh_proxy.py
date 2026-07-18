@@ -390,22 +390,10 @@ def start_sandbox_proxy(sandbox, sandbox_id: str) -> dict | None:
             _proxies[sandbox_id] = (proxy, token)
     # Install our CA so the sandbox trusts the proxy's github leaf certs (CONNECT/MITM path,
     # used by gh). The cleartext git path needs no CA. The real GitHub token stays on the host.
+    # The proxy URL/token/env are passed per-command via E2B's `envs=` (see agent.py), NOT
+    # written to bashrc, so they're guaranteed present for every command.
     sandbox.files.write("/usr/local/share/ca-certificates/coolton-proxy.crt", proxy.ca_pem)
-    sandbox.commands.run(
-        "update-ca-certificates >/dev/null 2>&1 || true; "
-        f"cat >> $HOME/.bashrc <<'EOF'\n"
-        f"export COOLTON_GH_PROXY_URL='{PUBLIC_PROXY_URL}'\n"
-        f"export COOLTON_GH_PROXY_TOKEN='{token}'\n"
-        f"export HTTPS_PROXY='{PUBLIC_PROXY_URL}'\n"
-        f"export HTTP_PROXY='{PUBLIC_PROXY_URL}'\n"
-        f"export https_proxy='{PUBLIC_PROXY_URL}'\n"
-        f"export http_proxy='{PUBLIC_PROXY_URL}'\n"
-        # dummy placeholder so gh emits requests; the proxy overwrites it with the real token.
-        f"export GH_TOKEN='ghp_coolton_agent_token_placeholder'\n"
-        f"export GITHUB_TOKEN='ghp_coolton_agent_token_placeholder'\n"
-        f"export GODEBUG='http2client=0'\n"
-        "EOF"
-    )
+    sandbox.commands.run("update-ca-certificates >/dev/null 2>&1 || true")
     return {"proxy_url": PUBLIC_PROXY_URL, "token": token}
 
 

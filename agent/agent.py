@@ -528,6 +528,41 @@ def invite_coolton_user_to_channel(ctx: RunContext[AgentDeps]) -> str:
         return f"Error: {str(e)}"
 
 
+_proxy_cache: dict[str, dict | None] = {}
+
+
+def _proxy_cache_set(sandbox_id: str, proxy_info: dict | None) -> None:
+    _proxy_cache[sandbox_id] = proxy_info
+
+
+def _proxy_cache_get(sandbox_id: str) -> dict | None:
+    return _proxy_cache.get(sandbox_id)
+
+
+def _proxy_env(proxy_info: dict | None) -> dict:
+    """Build the env dict (for E2B `commands.run(envs=...)`) that routes gh/git/curl through the
+    host-side GitHub proxy. The real token is NEVER included — only the ephemeral proxy token and
+    a dummy GH_TOKEN (the proxy overwrites it with the real one on the host side)."""
+    if not proxy_info:
+        return {}
+    url = proxy_info["proxy_url"]
+    tok = proxy_info["token"]
+    return {
+        "COOLTON_GH_PROXY_URL": url,
+        "COOLTON_GH_PROXY_TOKEN": tok,
+        "HTTPS_PROXY": url,
+        "HTTP_PROXY": url,
+        "https_proxy": url,
+        "http_proxy": url,
+        # dummy placeholder so gh emits requests; the proxy overwrites it with the real token.
+        "GH_TOKEN": "ghp_coolton_agent_token_placeholder",
+        "GITHUB_TOKEN": "ghp_coolton_agent_token_placeholder",
+        # gh uses HTTP/2 by default; inside a CONNECT tunnel our proxy terminates TLS and injects
+        # auth at the HTTP/1.1 layer, so force HTTP/1.1 inside the tunnel.
+        "GODEBUG": "http2client=0",
+    }
+
+
 def _provision_sandbox(sandbox, proxy_info: dict | None = None) -> str:
     """One-time setup for a brand-new coolton sandbox.
 
@@ -549,21 +584,11 @@ echo "==> provisioning coolton sandbox =="
 git config --global user.name "__GH_USER__"
 git config --global user.email "__GH_USER__@users.noreply.github.com"
 git config --global init.defaultBranch main
-# Route github traffic through the host-side proxy. The ephemeral proxy token is embedded in
-# the proxy URL so git/gh/curl send it as Proxy-Authorization. GitHub is reached as http://
-# (not https) so the request is sent in cleartext absolute-form to the proxy, which upgrades
-# it to https and injects the real GitHub token. The sandbox never sees the real token.
+# Route github traffic through the host-side proxy. The ephemeral proxy token + dummy GH_TOKEN
+# are supplied via the command env (see _proxy_env). GitHub is reached as http:// (not https) so
+# git sends the request in cleartext absolute-form to the proxy, which upgrades it to https and
+# injects the real GitHub token. The sandbox never sees the real token.
 if [ -n "$COOLTON_GH_PROXY_URL" ]; then
-  export HTTPS_PROXY="$COOLTON_GH_PROXY_URL"
-  export HTTP_PROXY="$COOLTON_GH_PROXY_URL"
-  export https_proxy="$COOLTON_GH_PROXY_URL"
-  export http_proxy="$COOLTON_GH_PROXY_URL"
-  # gh needs SOME token to emit requests; the proxy overrides it with the real one. Dummy only.
-  export GH_TOKEN="dummy-not-a-real-token"
-  export GITHUB_TOKEN="dummy-not-a-real-token"
-  # gh uses HTTP/2 by default; inside a CONNECT tunnel our proxy terminates TLS and
-  # injects auth at the HTTP/1.1 layer. Force HTTP/1.1 inside the tunnel.
-  export GODEBUG="http2client=0"
   # git: proxy without creds in the URL + a helper that returns the ephemeral token for the
   # proxy host (sent as Proxy-Authorization). The real GitHub token is added by the proxy.
   git config --global http.proxy "$COOLTON_GH_PROXY_URL"
@@ -587,10 +612,8 @@ echo "py:   $(python3 --version 2>&1)"
 echo "==> gh api self (authenticated via host proxy):"
 gh api user --jq .login 2>&1 || true
 """.replace("__GH_USER__", gh_user)
-    # proxy_info is applied by start_sandbox_proxy (writes COOLTON_GH_PROXY_URL and
-    # COOLTON_GH_PROXY_TOKEN into the sandbox's ~/.bashrc before provisioning runs).
     try:
-        result = sandbox.commands.run(script, timeout=600)
+        result = sandbox.commands.run(script, timeout=600, envs=_proxy_env(proxy_info))
         out = []
         if result.stdout:
             out.append(result.stdout)
@@ -616,14 +639,18 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str) -> str:
         sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
         if sandbox_id:
             sandbox = Sandbox.connect(sandbox_id)
+            proxy_info = _proxy_cache_get(sandbox_id)
         else:
             sandbox = Sandbox.create()
             # First-time setup: toolchain + a host-side GitHub proxy that authenticates
             # gh/git as coolton-agent without the real token ever entering the sandbox.
             proxy_info = start_sandbox_proxy(sandbox, sandbox.sandbox_id)
+            _proxy_cache_set(sandbox.sandbox_id, proxy_info)
             provision = _provision_sandbox(sandbox, proxy_info)
             logger.info(f"coolton sandbox provisioned:\n{provision}")
-        result = sandbox.commands.run("source $HOME/.bashrc >/dev/null 2>&1 || true; " + command)
+        # Pass the GitHub proxy env directly (E2B `envs=`) so gh/git/curl are authenticated
+        # via the host proxy on every command; the real token never enters the sandbox.
+        result = sandbox.commands.run(command, envs=_proxy_env(proxy_info))
         new_sandbox_id = sandbox.sandbox_id
         save_thread_sandbox_id(channel_id, thread_ts, new_sandbox_id)
         sandbox.pause()
