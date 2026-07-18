@@ -270,6 +270,7 @@ def build_plan_hooks():
             "task_id": task_id,
             "title": display,
             "status": "in_progress",
+            "input": _truncate(_pretty_args(args), 500),
         }
         update_plan_message(deps)
         return args
@@ -288,7 +289,7 @@ def build_plan_hooks():
         task = deps.plan_tasks.get(task_id)
         if task is not None:
             task["status"] = "complete"
-            task["output"] = _rich_output(str(result))
+            task["output"] = _combined_io(task.get("input", ""), str(result))
             update_plan_message(deps)
         return result
 
@@ -305,11 +306,24 @@ def build_plan_hooks():
             task = deps.plan_tasks.get(task_id)
             if task is not None:
                 task["status"] = "error"
-                task["output"] = _rich_output(str(error))
+                task["output"] = _combined_io(task.get("input", ""), str(error))
                 update_plan_message(deps)
         raise error
 
     return hooks
+
+
+def _combined_io(tool_input: str, tool_output: str) -> dict:
+    """Render the tool input (command) and output together in the plan card.
+
+    Slack plan tasks only render `title` + `output`, so the command is shown as
+    a `$ command` line followed by the result.
+    """
+    parts = []
+    if tool_input and tool_input != "Done":
+        parts.append(f"$ {tool_input}")
+    parts.append(_truncate(tool_output, 800) if tool_output else "Done")
+    return _rich_text("\n".join(parts))
 
 
 def _pretty_args(value) -> str:

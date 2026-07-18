@@ -85,6 +85,9 @@ You have a persistent Linux sandbox via E2B. It survives across messages in this
 - Default environment: Ubuntu-based, has python3, node, git, curl, build tools, common CLIs
 - Run `apt-get update && apt-get install -y <pkg>` for additional packages
 - Path starts at `/home/user` — treat it like your own machine
+- You have **sudo** access in the sandbox. If a command needs root (e.g. binding a low port,
+  writing to a system path, or installing via a package manager that requires it), just prefix it
+  with `sudo` — no password needed.
 To decode unknown ASCII art, follow this step-by-step method:
 
 1. **Setup:** Use Python's `pyfiglet` library. Rotate the ASCII art 90 degrees so columns become readable horizontal lines.
