@@ -658,7 +658,10 @@ if [ -n "$COOLTON_GIT_INSTEADOF" ]; then
   mkdir -p /home/user/bin
   cat > /home/user/bin/gh <<'EOF'
 #!/bin/sh
-exec /usr/local/bin/gh --hostname "$COOLTON_GH_PROXY_HOST" "$@"
+# NOTE: gh has no --hostname flag (verified: `gh --hostname` => unknown flag).
+# The proxy host is supplied via GH_HOST + GH_ENTERPRISE_TOKEN (set by _proxy_env),
+# so plain `gh` calls are routed through the host-side GitHub proxy transparently.
+exec /usr/local/bin/gh "$@"
 EOF
   chmod +x /home/user/bin/gh
   # ensure /home/user/bin is ahead of /usr/local/bin on PATH for this session
@@ -1723,13 +1726,20 @@ def run_agent(text, deps, message_history=None):
                     from agent.plan_block import build_plan_hooks
                     capabilities.append(build_plan_hooks())
 
-                from pydantic_ai_skills import SkillsCapability
-                capabilities.append(
-                    SkillsCapability(
-                        directories=["skills", ".agents/skills"],
-                        auto_reload=True,
+                # SkillsCapability is provided by the optional `pydantic-ai-skills` package.
+                # Guard the import so a missing install degrades gracefully instead of
+                # crashing every agent run (the import used to be unconditional, which
+                # raised ImportError on clean deploys where the dep was not installed).
+                try:
+                    from pydantic_ai_skills import SkillsCapability
+                    capabilities.append(
+                        SkillsCapability(
+                            directories=["skills", ".agents/skills"],
+                            auto_reload=True,
+                        )
                     )
-                )
+                except Exception as e:  # pragma: no cover - skills lib optional
+                    logger.warning("SkillsCapability unavailable: %s", e)
 
                 run_kwargs = dict(
                     user_prompt=text,
