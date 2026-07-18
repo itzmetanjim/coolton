@@ -1,3 +1,4 @@
+import os
 from logging import Logger
 
 from slack_bolt import BoltContext, Say, SayStream
@@ -23,6 +24,14 @@ def handle_message(
     if event.get("subtype"):
         return
     if event.get("bot_id"):
+        return
+
+    # Mentions of the bot are owned by handle_app_mentioned (the app_mention event).
+    # Without this guard, a mention inside an engaged thread is picked up here too,
+    # launching a second coolton alongside the one from app_mention.
+    text = event.get("text", "")
+    bot_id = os.environ.get("COOLTON_BOT_ID", "")
+    if bot_id and f"<@{bot_id}>" in text:
         return
 
     is_dm = event.get("channel_type") == "im"
