@@ -16,6 +16,7 @@ from pydantic_ai.capabilities import PrepareTools
 from dataclasses import replace
 from agent.deps import AgentDeps
 from agent.tools import add_emoji_reaction
+from agent.subagents import agent_research, agent_explore, agent_execute
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
 try:
     from e2b import Sandbox
@@ -731,6 +732,36 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str) -> str:
         return "\n\n".join(output)
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+@agent.tool
+def agent_research_tool(ctx: RunContext[AgentDeps], prompt: str) -> str:
+    """Delegate a read-only research task to the Research subagent.
+
+    Use for: gathering facts from the web, finding messages, looking up users or
+    channels, compiling sourced findings. The subagent cannot write or post.
+    """
+    return agent_research(ctx, prompt)
+
+
+@agent.tool
+def agent_explore_tool(ctx: RunContext[AgentDeps], prompt: str) -> str:
+    """Delegate a read-only inspection task to the Explore subagent.
+
+    Use for: reading/scanning files in the sandbox, grepping code, understanding an
+    existing implementation before a change. The subagent cannot edit anything.
+    """
+    return agent_explore(ctx, prompt)
+
+
+@agent.tool
+def agent_execute_tool(ctx: RunContext[AgentDeps], prompt: str) -> str:
+    """Delegate an action task to the Execute subagent (bash in the sandbox).
+
+    Use for: running scripts, installing packages, processing files, building. The
+    subagent runs commands in the per-thread sandbox; it will refuse destructive ones.
+    """
+    return agent_execute(ctx, prompt)
 
 
 def download_slack_attachments(

@@ -39,6 +39,9 @@ two things only: bare social replies & one-line factual lookups ("hi", "what is 
 - **thread memory** — multi-turn context inside a slack thread (`thread_context/`).
 - **tools** — web search, image gen, vision, reminders, thread summarization, mermaid diagrams,
   a code/data sandbox, & more (`agent/tools/`).
+- **subagents** — scoped `research` / `explore` / `execute` delegates (`agent/subagents.py`) for
+  read-only research, read-only file inspection, and sandbox command execution.
+
 
 ## project layout
 
@@ -53,6 +56,7 @@ two things only: bare social replies & one-line factual lookups ("hi", "what is 
 | `listeners/` | slack event/action/view handlers (`events/`, `actions/`, `views/`). |
 | `thread_context/` | in-memory per-thread conversation history store. |
 | `skills/` | curated, version-controlled skills (kevinton writes here). |
+| `agent/subagents.py` | scoped research/explore/execute subagents delegated from the main agent. |
 | `.agents/skills/` | CLI-installed skills (gitignored, still scanned). |
 
 ## setup
