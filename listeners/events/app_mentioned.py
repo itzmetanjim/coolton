@@ -88,6 +88,11 @@ def handle_app_mentioned(
         # Store conversation history
         conversation_store.set_history(channel_id, thread_ts, result.all_messages())
 
+        # kevinton: silent background skill-capture agent (runs after every turn)
+        from agent.kevinton import spawn_kevinton
+
+        spawn_kevinton(cleaned_text, result.all_messages(), channel_id, thread_ts, deps)
+
     except Exception as e:
         logger.exception(f"Failed to handle app mention: {e}")
         try:

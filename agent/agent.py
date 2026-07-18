@@ -283,7 +283,9 @@ You have access to on-demand **skills** (reusable playbooks with instructions an
 - `rename_skill(old_name, new_name)` — rename an existing skill.
 - `delete_skill(name)` — permanently remove a skill.
 
-These tools only operate inside the known skill directories (`skills/` and `.agents/skills/`) and reject any path that tries to escape them, so never pass absolute paths or `..` — just the skill name. Skills installed via the CLI land in `.agents/skills/` (gitignored); curated skills live in `skills/` (committed). After any change, skills are reloaded automatically — use `list_skills` to confirm.
+ These tools only operate inside the known skill directories (`skills/` and `.agents/skills/`) and reject any path that tries to escape them, so never pass absolute paths or `..` — just the skill name. Skills installed via the CLI land in `.agents/skills/` (gitignored); curated skills live in `skills/` (committed). After any change, skills are reloaded automatically — use `list_skills` to confirm.
+
+**Self-improving agent.** A separate silent background agent ("kevinton") watches every turn you finish and, on its own, captures reusable skills so you get better over time. You don't need to do anything for that — just keep using skills when they're relevant. If the user asks you to make/install a skill, do it normally; kevinton will see it and stay out of the way.
 
 ## WEB EMBED (send_web_embed_tool)
 Use to share a live webpage preview/embed. Uses Slack's video block.
@@ -333,6 +335,105 @@ def get_model() -> str:
             "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or JAMS_API_KEY."
         )
     return _cached_model
+
+
+def _apply_provider_env(provider_name: str, api_key: str) -> None:
+    """Set the provider API key env var pydantic-ai needs to instantiate a model.
+
+    Mirrors the env setup used inside run_agent so other agents (e.g. kevinton)
+    select the same provider and have its key available.
+    """
+    if provider_name in ("byok", "hcai", "hcai_minimax", "hcai_hy3_free", "hcai_hy3"):
+        return  # BYOK / HCAI use an explicit base_url + api_key at model creation
+    if not api_key:
+        return
+    if provider_name == "anthropic":
+        os.environ["ANTHROPIC_API_KEY"] = api_key
+    elif provider_name == "openai":
+        os.environ["OPENAI_API_KEY"] = api_key
+    elif provider_name in ("jams", "openrouter_fb", "jams_hy3_free", "jams_hy3", "openrouter_hy3_free"):
+        os.environ["OPENROUTER_API_KEY"] = api_key
+    elif provider_name in ("gemini", "gemini_gemma"):
+        os.environ["GOOGLE_API_KEY"] = api_key
+    elif provider_name == "mistral":
+        os.environ["MISTRAL_API_KEY"] = api_key
+    elif provider_name.startswith("groq_"):
+        os.environ["GROQ_API_KEY"] = api_key
+    elif provider_name == "cerebras":
+        os.environ["CEREBRAS_API_KEY"] = api_key
+
+
+def get_runtime_model(deps_user_id: str | None = None) -> str:
+    """Resolve the provider model string AND set its env key, like run_agent does.
+
+    Returns the model string for the first viable provider in the fallback order
+    (BYOK user endpoint first when present). Raises RuntimeError if none configured.
+    """
+    provider_order = _build_provider_order(deps_user_id)
+    for provider_name, provider_config in provider_order:
+        api_key = provider_config.get("api_key")
+        if not api_key and provider_name != "byok":
+            continue
+        model_name = provider_config["model"]
+        _apply_provider_env(provider_name, api_key or "")
+        return model_name
+    raise RuntimeError(
+        "No AI provider configured. "
+        "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or JAMS_API_KEY."
+    )
+
+
+def _build_provider_order(deps_user_id: str | None = None) -> list:
+    """Build the provider fallback order (same as run_agent)."""
+    provider_order = []
+    user_endpoint = get_user_text_endpoint(deps_user_id)
+    if user_endpoint:
+        provider_order.append(("byok", user_endpoint))
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        provider_order.append(("anthropic", {"model": "anthropic:claude-sonnet-4-6", "base_url": None, "api_key": os.environ["ANTHROPIC_API_KEY"]}))
+    if os.environ.get("OPENAI_API_KEY"):
+        provider_order.append(("openai", {"model": "openai:gpt-4.1-mini", "base_url": None, "api_key": os.environ["OPENAI_API_KEY"]}))
+    JAMS_API_KEY = os.environ.get("JAMS_API_KEY")
+    if JAMS_API_KEY:
+        provider_order.append(("jams_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": JAMS_API_KEY}))
+    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
+    if HCAI_API_KEY:
+        provider_order.append(("hcai_hy3_free", {"model": "tencent/hy3:free", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
+        provider_order.append(("openrouter_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
+    if JAMS_API_KEY:
+        provider_order.append(("jams_hy3", {"model": "openrouter:tencent/hy3", "base_url": None, "api_key": JAMS_API_KEY}))
+    if HCAI_API_KEY:
+        provider_order.append(("hcai_hy3", {"model": "tencent/hy3", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    if JAMS_API_KEY:
+        provider_order.append(("jams", {"model": "openrouter:moonshotai/kimi-k2.6", "base_url": None, "api_key": JAMS_API_KEY}))
+    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
+    if HCAI_API_KEY:
+        provider_order.append(("hcai", {"model": "moonshotai/kimi-k2.6", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+    if GROQ_API_KEY:
+        provider_order.append(("groq_qwen27b", {"model": "groq:qwen/qwen3.6-27b", "base_url": None, "api_key": GROQ_API_KEY}))
+    if os.environ.get("JAMS_API_KEY"):
+        provider_order.append(("jams_minimax", {"model": "openrouter:minimax/minimax-m2.7", "base_url": None, "api_key": os.environ["JAMS_API_KEY"]}))
+    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
+    if HCAI_API_KEY:
+        provider_order.append(("hcai_minimax", {"model": "minimax/minimax-m2.7", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
+        provider_order.append(("openrouter_fb", {"model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
+    if os.environ.get("GOOGLE_API_KEY"):
+        provider_order.append(("gemini_gemma", {"model": "google:gemma-4-31b-it", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
+    if GROQ_API_KEY:
+        provider_order.append(("groq_oss120b", {"model": "groq:openai/gpt-oss-120b", "base_url": None, "api_key": GROQ_API_KEY}))
+    if os.environ.get("GOOGLE_API_KEY"):
+        provider_order.append(("gemini", {"model": "google:gemini-3.1-flash-lite", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
+    if GROQ_API_KEY:
+        provider_order.append(("groq_qwen32b", {"model": "groq:qwen/qwen3-32b", "base_url": None, "api_key": GROQ_API_KEY}))
+        provider_order.append(("groq_oss20b", {"model": "groq:openai/gpt-oss-20b", "base_url": None, "api_key": GROQ_API_KEY}))
+    if os.environ.get("MISTRAL_API_KEY"):
+        provider_order.append(("mistral", {"model": "mistral:mistral-large-2512", "base_url": None, "api_key": os.environ["MISTRAL_API_KEY"]}))
+    if os.environ.get("CEREBRAS_API_KEY"):
+        provider_order.append(("cerebras", {"model": "cerebras:zai-glm-4.7", "base_url": None, "api_key": os.environ["CEREBRAS_API_KEY"]}))
+    return provider_order
 
 
 def get_model_for_user(user_id: str | None) -> str | None:
@@ -1147,56 +1248,7 @@ def delete_skill(ctx: RunContext[AgentDeps], name: str) -> str:
 
 def run_agent(text, deps, message_history=None):
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
-    provider_order = []
-    
-    user_endpoint = get_user_text_endpoint(deps.user_id)
-    if user_endpoint:
-        provider_order.append(("byok", user_endpoint))
-    
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        provider_order.append(("anthropic", {"model": "anthropic:claude-sonnet-4-6", "base_url": None, "api_key": os.environ["ANTHROPIC_API_KEY"]}))
-    if os.environ.get("OPENAI_API_KEY"):
-        provider_order.append(("openai", {"model": "openai:gpt-4.1-mini", "base_url": None, "api_key": os.environ["OPENAI_API_KEY"]}))
-    JAMS_API_KEY = os.environ.get("JAMS_API_KEY")
-    if JAMS_API_KEY:
-        provider_order.append(("jams_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": JAMS_API_KEY}))
-    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
-    if HCAI_API_KEY:
-        provider_order.append(("hcai_hy3_free", {"model": "tencent/hy3:free", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
-        provider_order.append(("openrouter_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
-    if JAMS_API_KEY:
-        provider_order.append(("jams_hy3", {"model": "openrouter:tencent/hy3", "base_url": None, "api_key": JAMS_API_KEY}))
-    if HCAI_API_KEY:
-        provider_order.append(("hcai_hy3", {"model": "tencent/hy3", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if JAMS_API_KEY:
-        provider_order.append(("jams", {"model": "openrouter:moonshotai/kimi-k2.6", "base_url": None, "api_key": JAMS_API_KEY}))
-    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
-    if HCAI_API_KEY:
-        provider_order.append(("hcai", {"model": "moonshotai/kimi-k2.6", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-    if GROQ_API_KEY:
-        provider_order.append(("groq_qwen27b", {"model": "groq:qwen/qwen3.6-27b", "base_url": None, "api_key": GROQ_API_KEY}))
-    if os.environ.get("JAMS_API_KEY"):
-        provider_order.append(("jams_minimax", {"model": "openrouter:minimax/minimax-m2.7", "base_url": None, "api_key": os.environ["JAMS_API_KEY"]}))
-    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
-    if HCAI_API_KEY:
-        provider_order.append(("hcai_minimax", {"model": "minimax/minimax-m2.7", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
-        provider_order.append(("openrouter_fb", {"model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
-    if os.environ.get("GOOGLE_API_KEY"):
-        provider_order.append(("gemini_gemma", {"model": "google:gemma-4-31b-it", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
-    if GROQ_API_KEY:
-        provider_order.append(("groq_oss120b", {"model": "groq:openai/gpt-oss-120b", "base_url": None, "api_key": GROQ_API_KEY}))
-    if os.environ.get("GOOGLE_API_KEY"):
-        provider_order.append(("gemini", {"model": "google:gemini-3.1-flash-lite", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
-    if GROQ_API_KEY:
-        provider_order.append(("groq_qwen32b", {"model": "groq:qwen/qwen3-32b", "base_url": None, "api_key": GROQ_API_KEY}))
-        provider_order.append(("groq_oss20b", {"model": "groq:openai/gpt-oss-20b", "base_url": None, "api_key": GROQ_API_KEY}))
-    if os.environ.get("MISTRAL_API_KEY"):
-        provider_order.append(("mistral", {"model": "mistral:mistral-large-2512", "base_url": None, "api_key": os.environ["MISTRAL_API_KEY"]}))
-    if os.environ.get("CEREBRAS_API_KEY"):
-        provider_order.append(("cerebras", {"model": "cerebras:zai-glm-4.7", "base_url": None, "api_key": os.environ["CEREBRAS_API_KEY"]}))
+    provider_order = _build_provider_order(deps.user_id)
     
     if not provider_order:
         raise RuntimeError("No AI provider configured.")
