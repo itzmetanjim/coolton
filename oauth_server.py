@@ -4,11 +4,12 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 import requests
 import uvicorn
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
@@ -81,7 +82,24 @@ def _restart_coolton() -> None:
     logger.info("Scheduled coolton.service restart")
 
 
+def _authorize_url() -> str:
+    manifest = json.loads((BASE_DIR / "manifest.json").read_text())
+    scopes = manifest["oauth_config"]["scopes"]
+    params = {
+        "client_id": os.environ.get("SLACK_CLIENT_ID", ""),
+        "scope": " ".join(scopes["bot"]),
+        "user_scope": " ".join(scopes["user"]),
+        "redirect_uri": _redirect_uri(),
+    }
+    return "https://slack.com/oauth/v2/authorize?" + urlencode(params)
+
+
 @app.get("/")
+def index():
+    return RedirectResponse(_authorize_url(), status_code=302)
+
+
+@app.get("/health")
 def health():
     return {"ok": True, "service": "coolton oauth install handler"}
 
