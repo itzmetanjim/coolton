@@ -69,17 +69,24 @@ def _update_env(bot_token: str, user_token: str) -> int:
     return changed
 
 
-def _restart_coolton() -> None:
+def _restart_coolton(bot_user_id: str = "") -> None:
     # Detached + delayed: oauth-server is PartOf coolton.service, so restarting
-    # coolton also restarts this unit. Return the HTTP response first, then
-    # restart a second later so the handler isn't killed mid-response.
+    # coolton also restarts this unit. Return the HTTP response first, then run
+    # the membership sync (best-effort) and restart a second later so the
+    # handler isn't killed mid-response. `;` keeps the restart from being
+    # skipped if the sync exits non-zero.
+    venv_python = BASE_DIR / ".venv" / "bin" / "python"
+    cmd = (
+        f"sleep 1 && {venv_python} {BASE_DIR / 'oauth_sync.py'} {bot_user_id}; "
+        f"sudo -n systemctl restart coolton.service"
+    )
     subprocess.Popen(
-        ["bash", "-c", "sleep 1 && sudo -n systemctl restart coolton.service"],
+        ["bash", "-c", cmd],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    logger.info("Scheduled coolton.service restart")
+    logger.info("Scheduled membership sync + coolton.service restart")
 
 
 def _authorize_url() -> str:
@@ -163,6 +170,7 @@ def oauth_redirect(request: Request, code: str = Query(""), state: str = Query("
 
     bot_token = result["access_token"]
     user_token = result["authed_user"]["access_token"]
+    bot_user_id = result.get("bot_user_id", "")
 
     try:
         changed = _update_env(bot_token, user_token)
@@ -171,7 +179,7 @@ def oauth_redirect(request: Request, code: str = Query(""), state: str = Query("
         logger.exception("Failed to update .env")
         return HTMLResponse(f"<h3>Failed to update .env: {e}</h3>", status_code=500)
 
-    _restart_coolton()
+    _restart_coolton(bot_user_id)
     logger.info("Reinstalled by cooltonUser: .env updated (%s lines), restart scheduled", changed)
     return HTMLResponse(
         "<h3>✅ coolton reinstalled. Tokens updated and service restarting.</h3>"
