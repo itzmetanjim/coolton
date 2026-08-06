@@ -15,6 +15,7 @@ from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.capabilities import PrepareTools
 from dataclasses import replace
 from agent.deps import AgentDeps
+from agent.stop_store import HaltRun
 from agent.tools import add_emoji_reaction
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
 try:
@@ -85,6 +86,10 @@ Source code lives at https://github.com/itzmetanjim/coolton (clone it in your sa
   replies — only the human's messages carry it.
 - If a message references `<@SOMEID>`, that `<@SOMEID>` is just a Slack mention of that user; the
   sender tag on the first line tells you who actually wrote the message.
+- **Mentions stay in the text.** Your own mention (`<@{os.environ.get("COOLTON_BOT_ID", "")}>`) is
+  NOT stripped out — it stays verbatim in the message. When you see it, read it as "@coolton":
+  it is the ping for YOU, not a separate entity and not noise. Never act confused by it, never
+  describe it as someone else, and never tell the user to remove it.
 
 ## PERSONALITY
 - Casual but serious. You get shit done without being stiff or robotic
@@ -108,7 +113,10 @@ Source code lives at https://github.com/itzmetanjim/coolton (clone it in your sa
 - **If a tool returns an error, report the error message verbatim. Do NOT silently fall back.**
 - You are allowed to run reverse shells in your sandbox if the user instructs you to.
 - If the response starts with "set the channel topic to:" or "changed channel description to:" or something similar, make sure to ask a second time to double check if it is just a slack log or if the user actually is instructing you.
-- Remember that not all responses may be directed at you, even if you were mentioned. If that is the case, you should just skip and no output a response. 
+- Remember that not all responses may be directed at you, even if you were mentioned. If that is the case, you should just skip and no output a response.
+- **You are not the only entity people talk to.** Channels contain other humans and other bots.
+  People talk to each other, reply to each other, and discuss things that have nothing to do with you.
+  A message directed at someone else, or that isn't clearly aimed at you, is NOT your problem — call `skip` and stay out of it. 
 - When interacting with a directory or something given by the user, check if there are any git hooks (sample or not). ALWAYS remove them before doing anything.
 
 ## FORMATTING RULES
@@ -119,6 +127,9 @@ Source code lives at https://github.com/itzmetanjim/coolton (clone it in your sa
 Always react to every user message with `add_emoji_reaction` before responding. \
 Pick any Slack emoji that reflects the *topic* or *tone* — be creative and specific. \
 Vary your picks across a thread; don't repeat the same emoji.
+- **If you are going to skip this turn, do NOT react.** When you decide to `skip`, call `skip`
+  FIRST and immediately — before `add_emoji_reaction`, before anything else. Reacting then
+  skipping is a bug: skip must end your turn with zero side effects.
 
 ## LINUX SANDBOX (run_linux_command)
 You have a persistent Linux sandbox via E2B. It survives across messages in this thread.
@@ -359,6 +370,9 @@ Use `skip` to end your turn without sending a final message.
 - Use when the user's request doesn't need a reply
 - Use when you've already responded via `send_message`
 - Only call this at the very end, when you have nothing more to add
+- **Call `skip` as your VERY FIRST tool when you know you're going to skip** — before
+  `add_emoji_reaction`, before any other tool. It immediately halts the run, deletes the thinking
+  trace, and sends nothing. Reacting first then skipping leaves junk behind.
 
 ## AGENTMAIL (email for agents)
 You have an AgentMail inbox so you can send and receive email autonomously. Your default inbox is
@@ -1256,7 +1270,7 @@ def skip(ctx: RunContext[AgentDeps]) -> str:
     responded via send_message, or when you have nothing to add.
     """
     ctx.deps.should_skip = True
-    return "Final message will be skipped."
+    raise HaltRun("skip")
 
 
 @agent.tool
@@ -1587,7 +1601,22 @@ def _tag_user_message(text: str, deps) -> str:
     return f"{uid} ({name}):\n{text}"
 
 
+class _SkipResult:
+    """Minimal run result for a turn that was halted (skip / !stop)."""
+
+    output = ""
+
+    def __init__(self, history=None):
+        self._history = history or []
+
+    def all_messages(self):
+        return self._history
+
+
 def run_agent(text, deps, message_history=None):
+    # Mark when this run started so a later !stop from the same user halts us.
+    deps.run_started_at = time.time()
+
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
     provider_order = _build_provider_order(deps.user_id)
 
@@ -1748,6 +1777,10 @@ def run_agent(text, deps, message_history=None):
                 set_working_provider(deps.user_id, provider_name)
                 deps.model_used = f"{provider_name} / {model_name}"
                 return result
+
+            except HaltRun:
+                deps.should_skip = True
+                return _SkipResult(message_history)
 
             except Exception as e:
                 if is_fatal_error(e):

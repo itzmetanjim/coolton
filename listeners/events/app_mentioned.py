@@ -5,6 +5,8 @@ from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
+from agent.leave_thread_store import rejoin_thread
+from agent.stop_store import request_stop
 from thread_context import conversation_store
 from listeners.views.feedback_builder import build_feedback_blocks
 
@@ -28,10 +30,23 @@ def handle_app_mentioned(
         thread_ts = event.get("thread_ts") or event["ts"]
         user_id = context.user_id
 
-        # Strip the bot mention from the text
-        cleaned_text = re.sub(r"<@[A-Z0-9]+>", "", text).strip()
+        # !stop: immediately halt every coolton run this user has going.
+        if "!stop" in text:
+            request_stop(user_id)
+            say(
+                text="⏹️ stopping all your running coolton instances…",
+                thread_ts=thread_ts,
+            )
+            return
 
-        if not cleaned_text:
+        # A direct mention re-engages us in a previously left thread.
+        rejoin_thread(channel_id, thread_ts)
+
+        # The bot mention stays in the text verbatim — the model is taught to read
+        # <@BOTID> as "@coolton". Only use a stripped copy to test for empty pings.
+        has_content = re.sub(r"<@[A-Z0-9]+>", "", text).strip()
+
+        if not has_content:
             say(
                 text="Hey there! How can I help you? Ask me anything and I'll do my best.",
                 thread_ts=thread_ts,
@@ -65,16 +80,15 @@ def handle_app_mentioned(
             user_token=context.user_token,
         )
 
-        from agent.plan_block import send_plan_message, finalize_plan_message, complete_plan_message
+        from agent.plan_block import send_plan_message, finalize_plan_message, complete_plan_message, delete_plan_message
         plan_ts = send_plan_message(deps)
         deps.plan_ts = plan_ts
 
-        result = run_agent(cleaned_text, deps, message_history=history)
+        result = run_agent(text, deps, message_history=history)
 
         if deps.should_skip:
             if plan_ts:
-                finalize_plan_message(deps)
-                complete_plan_message(deps)
+                delete_plan_message(deps)
         else:
             finalize_plan_message(deps, result.output)
 
@@ -89,9 +103,10 @@ def handle_app_mentioned(
         conversation_store.set_history(channel_id, thread_ts, result.all_messages())
 
         # kevinton: silent background skill-capture agent (runs after every turn)
-        from agent.kevinton import spawn_kevinton
+        if not deps.should_skip:
+            from agent.kevinton import spawn_kevinton
 
-        spawn_kevinton(cleaned_text, result.all_messages(), channel_id, thread_ts, deps)
+            spawn_kevinton(text, result.all_messages(), channel_id, thread_ts, deps)
 
     except Exception as e:
         logger.exception(f"Failed to handle app mention: {e}")

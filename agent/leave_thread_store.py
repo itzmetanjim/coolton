@@ -52,8 +52,10 @@ def rejoin_thread(channel_id: str, thread_ts: str) -> str:
 
 
 def should_ignore_thread(channel_id: str, thread_ts: str, text: str) -> bool:
-    """Check if bot should ignore this message (thread left AND no @mention)."""
+    """Check if bot should ignore this message (thread left AND coolton not @mentioned)."""
     if not is_thread_left(channel_id, thread_ts):
         return False
-    # Check if bot was mentioned
-    return "<@" not in text
+    bot_id = os.environ.get("COOLTON_BOT_ID", "")
+    if bot_id and f"<@{bot_id}>" in text:
+        return False
+    return True

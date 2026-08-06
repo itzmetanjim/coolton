@@ -16,3 +16,4 @@ class AgentDeps:
     plan_tasks: dict = field(default_factory=dict)
     should_skip: bool = False
     model_used: str = ""
+    run_started_at: float = 0.0

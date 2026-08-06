@@ -5,6 +5,8 @@ from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
+from agent.leave_thread_store import should_ignore_thread
+from agent.stop_store import request_stop
 from thread_context import conversation_store
 from listeners.views.feedback_builder import build_feedback_blocks
 
@@ -34,6 +36,24 @@ def handle_message(
     if bot_id and f"<@{bot_id}>" in text:
         return
 
+    channel_id = context.channel_id
+    thread_ts = event.get("thread_ts") or event["ts"]
+    user_id = context.user_id
+
+    # !stop: immediately halt every coolton run this user has going.
+    if "!stop" in text:
+        request_stop(user_id)
+        say(
+            text="⏹️ stopping all your running coolton instances…",
+            thread_ts=thread_ts,
+        )
+        return
+
+    # If we've left this thread, ignore non-mention messages here.
+    if should_ignore_thread(channel_id, thread_ts, text):
+        logger.info(f"Ignoring message in left thread {thread_ts} ({channel_id})")
+        return
+
     is_dm = event.get("channel_type") == "im"
     is_thread_reply = event.get("thread_ts") is not None
 
@@ -41,7 +61,7 @@ def handle_message(
         pass
     elif is_thread_reply:
         # Channel thread replies are handled only if the bot is already engaged
-        history = conversation_store.get_history(context.channel_id, event["thread_ts"])
+        history = conversation_store.get_history(channel_id, thread_ts)
         if history is None:
             return
     else:
@@ -49,14 +69,10 @@ def handle_message(
         return
 
     try:
-        channel_id = context.channel_id
         text = event.get("text", "")
         if text.strip().startswith("##"):
             logger.info(f"Ignoring message starting with '##': {text}")
             return
-        thread_ts = event.get("thread_ts") or event["ts"]
-
-        user_id = context.user_id
 
         # Get conversation history
         history = conversation_store.get_history(channel_id, thread_ts)
@@ -85,7 +101,7 @@ def handle_message(
             user_token=context.user_token,
         )
 
-        from agent.plan_block import send_plan_message, finalize_plan_message, complete_plan_message
+        from agent.plan_block import send_plan_message, finalize_plan_message, complete_plan_message, delete_plan_message
         plan_ts = send_plan_message(deps)
         deps.plan_ts = plan_ts
 
@@ -93,8 +109,7 @@ def handle_message(
 
         if deps.should_skip:
             if plan_ts:
-                finalize_plan_message(deps)
-                complete_plan_message(deps)
+                delete_plan_message(deps)
         else:
             finalize_plan_message(deps, result.output)
 
@@ -109,9 +124,10 @@ def handle_message(
         conversation_store.set_history(channel_id, thread_ts, result.all_messages())
 
         # kevinton: silent background skill-capture agent (runs after every turn)
-        from agent.kevinton import spawn_kevinton
+        if not deps.should_skip:
+            from agent.kevinton import spawn_kevinton
 
-        spawn_kevinton(text, result.all_messages(), channel_id, thread_ts, deps)
+            spawn_kevinton(text, result.all_messages(), channel_id, thread_ts, deps)
 
     except Exception as e:
         logger.exception(f"Failed to handle message: {e}")

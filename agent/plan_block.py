@@ -3,6 +3,8 @@ import logging
 import time
 from typing import Any
 
+from agent.stop_store import HaltRun, stop_requested_for
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -183,6 +185,21 @@ def complete_plan_message(deps) -> None:
         _log_slack_error("Failed to complete plan message", e)
 
 
+def delete_plan_message(deps) -> None:
+    """Delete the plan/thinking message entirely (used on skip / !stop).
+
+    Prevents the thinking block from being left stuck 'in_progress' when the
+    turn is halted without a final answer.
+    """
+    if not deps.plan_ts:
+        return
+    try:
+        deps.client.chat_delete(channel=deps.channel_id, ts=deps.plan_ts)
+    except Exception as e:
+        _log_slack_error("Failed to delete plan message", e)
+    deps.plan_ts = None
+
+
 TOOL_DISPLAY_NAMES = {
     "add_emoji_reaction": "Reacting to message",
     "invite_coolton_user_to_channel": "Inviting cooltonUser",
@@ -265,6 +282,9 @@ def build_plan_hooks():
             call.tool_name,
             _truncate(_pretty_args(args), 1000),
         )
+        # If the user sent !stop after this run started, halt before the next tool.
+        if stop_requested_for(deps.user_id, deps.run_started_at):
+            raise HaltRun("!stop requested")
         if not deps.plan_ts:
             return args
         task_id = f"task_{call.tool_call_id}"
