@@ -5,6 +5,7 @@ from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
+from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import rejoin_thread
 from agent.stop_store import request_stop
 from thread_context import conversation_store
@@ -38,6 +39,10 @@ def handle_app_mentioned(
                 thread_ts=thread_ts,
             )
             return
+
+        # Silently make sure cooltonUser is a member of this channel (not in DMs).
+        if event.get("channel_type") != "im":
+            ensure_coolton_user_in_channel(client, channel_id)
 
         # A direct mention re-engages us in a previously left thread.
         rejoin_thread(channel_id, thread_ts)
