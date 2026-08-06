@@ -28,7 +28,7 @@ app = FastAPI(title="coolton OAuth install handler")
 def _redirect_uri() -> str:
     return os.environ.get(
         "SLACK_REDIRECT_URI",
-        "https://8052.proxy.tanjim.org:8052/slack/oauth_redirect",
+        "https://8052.proxy.tanjim.org/slack/oauth_redirect",
     )
 
 

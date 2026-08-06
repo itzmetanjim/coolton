@@ -11,6 +11,10 @@ from listeners import register_listeners
 from agent.scheduler import start_scheduler
 
 load_dotenv(dotenv_path=".env", override=False)
+# slack_bolt auto-enables OAuth multi-team mode when these are in the
+# environment; they are used only by the separate oauth-server service.
+os.environ.pop("SLACK_CLIENT_ID", None)
+os.environ.pop("SLACK_CLIENT_SECRET", None)
 get_model()  # Fail fast if no AI provider key is configured
 
 logging.basicConfig(level=logging.DEBUG)
