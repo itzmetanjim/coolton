@@ -1992,14 +1992,29 @@ def run_agent(text, deps, message_history=None):
     if not provider_order:
         raise RuntimeError("No AI provider configured.")
 
-    from agent.fallback_cache import get_working_provider, set_working_provider, clear_cache as _clear_cache
+    from agent.fallback_cache import (
+        get_working_provider,
+        set_working_provider,
+        mark_dead,
+        get_dead_providers,
+    )
 
-    cached_provider = get_working_provider(deps.user_id)
+    # Global fallback cache: skip providers known to be dead, prefer the
+    # last-known-good provider first (shared across all users).
+    dead_providers = get_dead_providers()
+    if dead_providers:
+        alive = [(n, c) for n, c in provider_order if n not in dead_providers]
+        skipped = len(provider_order) - len(alive)
+        if skipped:
+            logger.info(f"Fallback cache: skipping {skipped} dead provider(s): {sorted(dead_providers)}")
+        provider_order = alive or provider_order
+
+    cached_provider = get_working_provider()
     if cached_provider:
         for i, (name, _) in enumerate(provider_order):
             if name == cached_provider:
                 provider_order.insert(0, provider_order.pop(i))
-                logger.info(f"Fallback cache: trying {cached_provider} first for {deps.user_id}")
+                logger.info(f"Fallback cache: trying {cached_provider} first (global)")
                 break
 
     # Retry configuration
@@ -2016,10 +2031,28 @@ def run_agent(text, deps, message_history=None):
         "timeout",
         "connection",
     ]
+    hard_error_markers = [
+        "401",
+        "403",
+        "404",
+        "user not found",
+        "invalid api key",
+        "invalid_api_key",
+        "does not exist",
+        "model_not_found",
+        "model not found",
+        "unavailable for free",
+        "authentication failed",
+        "unauthorized",
+    ]
 
     def is_retryable_error(error: Exception) -> bool:
         error_str = str(error).lower()
         return any(retryable in error_str.lower() for retryable in retryable_errors)
+
+    def is_hard_error(error: Exception) -> bool:
+        error_str = str(error).lower()
+        return any(marker in error_str.lower() for marker in hard_error_markers)
 
     def is_fatal_error(error: Exception) -> bool:
         error_str = str(error).lower()
@@ -2140,7 +2173,7 @@ def run_agent(text, deps, message_history=None):
                     run_kwargs["model"] = model_name
 
                 result = agent_dynamic.run_sync(**run_kwargs)
-                set_working_provider(deps.user_id, provider_name)
+                set_working_provider(provider_name)
                 deps.model_used = f"{provider_name} / {model_name}"
                 return result
 
@@ -2153,6 +2186,10 @@ def run_agent(text, deps, message_history=None):
                     logger.critical(f"Fatal error in {provider_name}: {e}")
                     raise
                 all_errors.append(f"{provider_name}: {e}")
+                if is_hard_error(e):
+                    mark_dead(provider_name, str(e))
+                    logger.warning(f"{provider_name} failed with a hard error (marked dead): {e}")
+                    break  # Don't retry auth/config errors; skip this provider
                 if is_retryable_error(e) and attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
                     logger.warning(f"{provider_name} attempt {attempt + 1} failed with retryable error: {e}. Retrying in {delay}s...")
@@ -2162,11 +2199,6 @@ def run_agent(text, deps, message_history=None):
                     logger.warning(f"{provider_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
                     break  # Try next provider
         
-        # If the cached provider failed, clear the cache so next call starts fresh
-        if cached_provider and provider_name == cached_provider:
-            _clear_cache(deps.user_id)
-            logger.warning(f"Cached provider {cached_provider} failed, cleared cache")
-
         # All retries exhausted for this provider, try next provider
         logger.warning(f"Provider {provider_name} exhausted all retries, trying next provider...")
     
