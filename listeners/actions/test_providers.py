@@ -11,11 +11,8 @@ PROVIDER_DISPLAY = {
     "byok": "BYOK",
     "anthropic": "Anthropic",
     "openai": "OpenAI",
-    "jams_hy3_free": "Jam's HY3 Free",
-    "hcai_hy3_free": "HCAI HY3 Free",
-    "openrouter_hy3_free": "OpenRouter HY3 Free",
-    "jams_hy3": "Jam's HY3",
-    "hcai_hy3": "HCAI HY3",
+    "jams_luna": "Jam's GPT-5.6 Luna",
+    "hcai_luna": "HCAI GPT-5.6 Luna",
     "jams": "Jam's Kimi K2.6",
     "jams_minimax": "Jam's MiniMax M2.7",
     "hcai": "HCAI Kimi K2.6",
@@ -49,15 +46,9 @@ def _build_provider_order(user_id: str) -> list[tuple[str, dict]]:
     JAMS_API_KEY = os.environ.get("JAMS_API_KEY")
     HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
     if JAMS_API_KEY:
-        order.append(("jams_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": JAMS_API_KEY}))
+        order.append(("jams_luna", {"model": "openrouter:openai/gpt-5.6-luna", "base_url": None, "api_key": JAMS_API_KEY}))
     if HCAI_API_KEY:
-        order.append(("hcai_hy3_free", {"model": "tencent/hy3:free", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
-        order.append(("openrouter_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
-    if JAMS_API_KEY:
-        order.append(("jams_hy3", {"model": "openrouter:tencent/hy3", "base_url": None, "api_key": JAMS_API_KEY}))
-    if HCAI_API_KEY:
-        order.append(("hcai_hy3", {"model": "tencent/hy3", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+        order.append(("hcai_luna", {"model": "openai/gpt-5.6-luna", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
     if JAMS_API_KEY:
         order.append(("jams", {"model": "openrouter:moonshotai/kimi-k2.6", "base_url": None, "api_key": JAMS_API_KEY}))
     HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
@@ -94,10 +85,8 @@ def _set_env(provider_name: str, api_key: str):
         "anthropic": ("ANTHROPIC_API_KEY",),
         "openai": ("OPENAI_API_KEY",),
         "jams": ("OPENROUTER_API_KEY",),
-        "jams_hy3_free": ("OPENROUTER_API_KEY",),
-        "jams_hy3": ("OPENROUTER_API_KEY",),
+        "jams_luna": ("OPENROUTER_API_KEY",),
         "openrouter_fb": ("OPENROUTER_API_KEY",),
-        "openrouter_hy3_free": ("OPENROUTER_API_KEY",),
         "cerebras": ("CEREBRAS_API_KEY",),
         "mistral": ("MISTRAL_API_KEY",),
         "gemini": ("GOOGLE_API_KEY",),
@@ -110,7 +99,7 @@ def _set_env(provider_name: str, api_key: str):
         pass
     elif provider_name == "hcai":
         pass
-    elif provider_name in ("hcai_hy3_free", "hcai_hy3"):
+    elif provider_name == "hcai_luna":
         pass
     elif provider_name.startswith("groq_"):
         os.environ["GROQ_API_KEY"] = api_key

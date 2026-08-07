@@ -519,7 +519,7 @@ def _apply_provider_env(provider_name: str, api_key: str) -> None:
     Mirrors the env setup used inside run_agent so other agents (e.g. kevinton)
     select the same provider and have its key available.
     """
-    if provider_name in ("byok", "hcai", "hcai_minimax", "hcai_hy3_free", "hcai_hy3"):
+    if provider_name in ("byok", "hcai", "hcai_minimax", "hcai_luna"):
         return  # BYOK / HCAI use an explicit base_url + api_key at model creation
     if not api_key:
         return
@@ -527,7 +527,7 @@ def _apply_provider_env(provider_name: str, api_key: str) -> None:
         os.environ["ANTHROPIC_API_KEY"] = api_key
     elif provider_name == "openai":
         os.environ["OPENAI_API_KEY"] = api_key
-    elif provider_name in ("jams", "openrouter_fb", "jams_hy3_free", "jams_hy3", "openrouter_hy3_free"):
+    elif provider_name in ("jams", "openrouter_fb", "jams_luna"):
         os.environ["OPENROUTER_API_KEY"] = api_key
     elif provider_name in ("gemini", "gemini_gemma"):
         os.environ["GOOGLE_API_KEY"] = api_key
@@ -571,16 +571,10 @@ def _build_provider_order(deps_user_id: str | None = None) -> list:
         provider_order.append(("openai", {"model": "openai:gpt-4.1-mini", "base_url": None, "api_key": os.environ["OPENAI_API_KEY"]}))
     JAMS_API_KEY = os.environ.get("JAMS_API_KEY")
     if JAMS_API_KEY:
-        provider_order.append(("jams_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": JAMS_API_KEY}))
+        provider_order.append(("jams_luna", {"model": "openrouter:openai/gpt-5.6-luna", "base_url": None, "api_key": JAMS_API_KEY}))
     HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
     if HCAI_API_KEY:
-        provider_order.append(("hcai_hy3_free", {"model": "tencent/hy3:free", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
-        provider_order.append(("openrouter_hy3_free", {"model": "openrouter:tencent/hy3:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
-    if JAMS_API_KEY:
-        provider_order.append(("jams_hy3", {"model": "openrouter:tencent/hy3", "base_url": None, "api_key": JAMS_API_KEY}))
-    if HCAI_API_KEY:
-        provider_order.append(("hcai_hy3", {"model": "tencent/hy3", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+        provider_order.append(("hcai_luna", {"model": "openai/gpt-5.6-luna", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
     if JAMS_API_KEY:
         provider_order.append(("jams", {"model": "openrouter:moonshotai/kimi-k2.6", "base_url": None, "api_key": JAMS_API_KEY}))
     HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
@@ -2268,12 +2262,12 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                     )
 
                 # Set env vars for this provider
-                if provider_name not in ("byok", "hcai", "hcai_minimax", "hcai_hy3_free", "hcai_hy3") and provider_config.get("api_key"):
+                if provider_name not in ("byok", "hcai", "hcai_minimax", "hcai_luna") and provider_config.get("api_key"):
                     if provider_name == "anthropic":
                         os.environ["ANTHROPIC_API_KEY"] = provider_config["api_key"]
                     elif provider_name == "openai":
                         os.environ["OPENAI_API_KEY"] = provider_config["api_key"]
-                    elif provider_name in ("jams", "openrouter_fb", "jams_hy3_free", "jams_hy3", "openrouter_hy3_free"):
+                    elif provider_name in ("jams", "openrouter_fb", "jams_luna"):
                         os.environ["OPENROUTER_API_KEY"] = provider_config["api_key"]
                     elif provider_name in ("gemini", "gemini_gemma"):
                         os.environ["GOOGLE_API_KEY"] = provider_config["api_key"]
