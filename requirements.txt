@@ -8,6 +8,7 @@ e2b-code-interpreter
 e2b
 cryptography
 apscheduler
+croniter
 
 pytest
 ruff==0.15.17

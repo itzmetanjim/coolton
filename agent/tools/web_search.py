@@ -53,3 +53,59 @@ def search_web(query: str, num_results: int = 8) -> str:
         return "Error: Exa API request timed out."
     except Exception as e:
         return f"Error searching the web: {str(e)}"
+
+
+EXA_CONTENTS_URL = "https://api.exa.ai/contents"
+
+
+def fetch_url(url: str, max_characters: int = 8000) -> str:
+    """Fetch the readable text content of a specific URL using Exa.
+
+    Args:
+        url: The full URL to fetch (e.g. https://example.com/article).
+        max_characters: Max characters of text to return (default 8000).
+    """
+    api_key = os.environ.get(EXA_API_KEY_ENV)
+    if not api_key:
+        return "Error: EXA_API_KEY is not configured in the server's .env file."
+    if not url:
+        return "Error: url is required"
+
+    try:
+        response = requests.post(
+            EXA_CONTENTS_URL,
+            json={
+                "urls": [url],
+                "text": {"includeHtml": False, "maxCharacters": max_characters},
+                "summary": False,
+            },
+            headers={
+                "x-api-key": api_key,
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+        res_json = response.json()
+        if response.status_code != 200:
+            err = res_json.get("error")
+            if isinstance(err, dict):
+                err = err.get("message", str(err))
+            return f"Exa API error (status {response.status_code}): {err or 'unknown'}"
+
+        results = res_json.get("results", [])
+        if not results:
+            return f"No content found at {url}"
+
+        result = results[0]
+        title = result.get("title", "No title")
+        text = result.get("text", "")
+        if not text:
+            return f"No readable text found at {url}"
+        published = result.get("publishedDate", "")
+        date_str = f" ({published[:10]})" if published else ""
+        return f"# {title}{date_str}\nURL: {url}\n\n{text[:max_characters]}"
+
+    except requests.Timeout:
+        return "Error: Exa API request timed out."
+    except Exception as e:
+        return f"Error fetching URL: {str(e)}"

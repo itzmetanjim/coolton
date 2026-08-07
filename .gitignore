@@ -67,6 +67,7 @@ conversations.json
 fallback_cache.json
 leave_thread_store.json
 reminders.json
+scheduled_tasks.json
 thread_sandboxes.json
 byok_key.bin
 
