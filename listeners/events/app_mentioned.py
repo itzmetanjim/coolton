@@ -75,6 +75,15 @@ def handle_app_mentioned(
         # Get conversation history
         history = conversation_store.get_history(channel_id, thread_ts)
 
+        # Mentioned in a thread we've never been part of: pull in the earlier
+        # Slack messages so the model has the conversation's context.
+        if history is None and event.get("thread_ts"):
+            from thread_context.thread_history import build_thread_context
+
+            history = build_thread_context(
+                client, channel_id, thread_ts, exclude_ts=event["ts"]
+            )
+
         # Run the agent
         deps = AgentDeps(
             client=client,
