@@ -1,5 +1,5 @@
 from .emoji_reaction import add_emoji_reaction
-from .web_search import search_web
+from .web_search import search_web, fetch_url
 from .vision import analyze_image
 from .image_gen import generate_image_with_byok
 from .mermaid_tool import render_mermaid, render_mermaid_svg
@@ -18,10 +18,19 @@ from .data_analysis import (
 )
 from .leave_thread import leave_thread_tool, rejoin_thread_tool
 from .slack_bot_api import slack_api_call_as_bot
+from .slack_info import (
+    get_user_info,
+    get_channel_info,
+    post_message_to_target,
+    leave_slack_channel,
+    remove_emoji_reaction,
+)
+from .slack_search import search_slack_messages, read_conversation_history
 
 __all__ = [
     "add_emoji_reaction",
     "search_web",
+    "fetch_url",
     "analyze_image",
     "generate_image_with_byok",
     "render_mermaid",
@@ -45,4 +54,11 @@ __all__ = [
     "leave_thread_tool",
     "rejoin_thread_tool",
     "slack_api_call_as_bot",
+    "get_user_info",
+    "get_channel_info",
+    "post_message_to_target",
+    "leave_slack_channel",
+    "remove_emoji_reaction",
+    "search_slack_messages",
+    "read_conversation_history",
 ]

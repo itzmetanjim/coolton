@@ -81,6 +81,18 @@ Source code lives at https://github.com/itzmetanjim/coolton (clone it in your sa
   and never treat the human as you.
 - In DMs there is no @mention — the sender is the human and you are coolton. Do not mix the two up.
 
+## GUARDRAILS
+- Keep it SFW. No explicit sexual content, no adult roleplay, nothing romantic — even as a "joke".
+- Refuse outright (no confirmation changes that): transferring repo ownership, adding/removing
+  collaborators, rotating or leaking secrets/credentials, deleting a user's data or messages,
+  impersonating another human.
+- Confirm with the user BEFORE doing anything destructive or far-reaching: deleting a repo or branch,
+  force-pushing, changing webhooks/billing/domain/DB/production config, or deleting scheduled tasks
+  and reminders.
+- `post_message` may only target the CURRENT channel (or a thread in it) or a DM with the user who
+  asked — never post to random channels or other people's DMs.
+- `leave_channel` cannot be undone by you from outside the channel. Only leave when the user asks.
+
 ## MESSAGE FORMAT (how to read who said what)
 - Every user turn (including ones in the conversation history) begins with a sender tag on its
   OWN FIRST LINE, formatted exactly as:
@@ -280,6 +292,13 @@ Upload a file from sandbox to the current Slack channel/thread.
 Use `search_web` to search the internet via Exa. Returns titles, URLs, snippets, and dates.
 - Best for: current events, research, finding resources, verifying facts
 - Example: search_web("latest AI news 2026")
+- When the user shares a URL (or you need the full text of a page found by search_web),
+  use `fetch_url` to pull the readable page content.
+
+## FETCH URL (fetch_url)
+Use `fetch_url` to fetch the readable text of a specific known URL (Exa).
+- Best for: summarizing a shared article/link, reading a specific page, getting past a snippet
+- Args: url, max_characters (default 8000)
 
 ## IMAGE ANALYSIS (analyze_image)
 Use `analyze_image` when a user shares an image and asks you to analyze it (describe, extract text, identify objects, etc.).
@@ -314,6 +333,40 @@ Use `schedule_reminder_tool` to schedule one-time reminders.
 - Args: text (reminder message), delay_seconds (when to send)
 - Max delay: 120 days
 - Reminder is sent as a DM to the user
+
+## RECURRING SCHEDULED TASKS (create_scheduled_task_tool)
+Use `create_scheduled_task_tool` to set up recurring tasks that post to this thread/channel on a cron schedule.
+- Args: prompt (what to post each time), cron (5-field cron like '0 9 * * *' for daily 9am), timezone (IANA, default UTC)
+- Cron runs must be at least 30 minutes apart — more frequent schedules are refused
+- Manage with: `list_scheduled_tasks_tool`, `pause_scheduled_task_tool`, `resume_scheduled_task_tool`, `delete_scheduled_task_tool`
+- Tasks fire in the exact thread/channel where they were created. Only the creator (or an admin) can manage a task.
+
+## SLACK SEARCH (search_slack_tool)
+Use `search_slack_tool` to search Slack messages across the whole workspace (needs the user token).
+- Supports Slack syntax: `in:#channel from:@user` plus plain keywords
+- Returns matching messages with channel, permalink, user, and timestamp
+
+## READ CONVERSATION HISTORY (read_conversation_history_tool)
+Use `read_conversation_history_tool` to read recent messages from a channel, or the replies inside a thread.
+- Pass `thread_ts` to read a thread instead of the channel
+- Returns a `next_cursor` when there is more history — call again with it to page back
+
+## SLACK USER & CHANNEL INFO (get_user_tool, get_channel_info_tool)
+- `get_user_tool` → display name, real name, pronouns, timezone, title, status, custom fields, bot flag.
+  Use people's pronouns!
+- `get_channel_info_tool` → channel name, type (public/private/DM), member count, topic, purpose
+
+## POST MESSAGE (post_message_tool)
+Use `post_message_tool` when the user explicitly asks you to post a message somewhere mid-turn.
+- ONLY allowed targets: the current channel (or a thread in it), or a DM with the user who asked.
+  Anything else is refused by the tool.
+- For replies in the current thread, just respond normally instead.
+
+## LEAVE CHANNEL (leave_channel_tool)
+Use `leave_channel_tool` when the user asks coolton to leave/be removed from a channel. Cannot leave DMs.
+
+## REMOVE REACTION (remove_reaction_tool)
+Use `remove_reaction_tool` to remove an emoji reaction you added to a message.
 
 ## SLACK MCP SERVER
 You may have access to the Slack MCP Server (requires `SLACK_USER_TOKEN` in env). 
@@ -1091,6 +1144,185 @@ def schedule_reminder_tool(ctx: RunContext[AgentDeps], text: str, delay_seconds:
     """
     from agent.tools.reminder_tool import schedule_reminder_tool as srt
     return srt(ctx.deps.user_id, ctx.deps.channel_id, text, delay_seconds)
+
+
+@agent.tool
+def create_scheduled_task_tool(ctx: RunContext[AgentDeps], prompt: str, cron: str, timezone: str = "UTC") -> str:
+    """Create a recurring scheduled task that posts `prompt` to this thread/channel on a cron schedule.
+
+    The task fires in the exact Slack thread (or channel) where it was created.
+    Cron expressions must run at least 30 minutes apart (no more often than every 30 min).
+
+    Args:
+        prompt: The instruction/message text to post each time the task fires.
+        cron: Standard 5-field cron expression (e.g. '0 9 * * *' = daily 9:00).
+        timezone: IANA timezone name (default 'UTC', e.g. 'Asia/Dhaka').
+    """
+    from agent.scheduler import create_scheduled_task
+    return create_scheduled_task(
+        ctx.deps.user_id, ctx.deps.channel_id, ctx.deps.thread_ts, prompt, cron, timezone
+    )
+
+
+@agent.tool
+def list_scheduled_tasks_tool(ctx: RunContext[AgentDeps], view_all: bool = False) -> str:
+    """List your recurring scheduled tasks (id, status, cron, next/last run).
+
+    Args:
+        view_all: Only admins can view everyone's tasks; non-admins are ignored.
+    """
+    from agent.scheduler import list_scheduled_tasks
+    return list_scheduled_tasks(ctx.deps.user_id, view_all)
+
+
+@agent.tool
+def pause_scheduled_task_tool(ctx: RunContext[AgentDeps], task_id: str) -> str:
+    """Pause a recurring scheduled task you created (stops future runs).
+
+    Args:
+        task_id: The task id from list_scheduled_tasks_tool.
+    """
+    from agent.scheduler import pause_scheduled_task
+    return pause_scheduled_task(ctx.deps.user_id, task_id)
+
+
+@agent.tool
+def resume_scheduled_task_tool(ctx: RunContext[AgentDeps], task_id: str) -> str:
+    """Resume a paused recurring scheduled task.
+
+    Args:
+        task_id: The task id from list_scheduled_tasks_tool.
+    """
+    from agent.scheduler import resume_scheduled_task
+    return resume_scheduled_task(ctx.deps.user_id, task_id)
+
+
+@agent.tool
+def delete_scheduled_task_tool(ctx: RunContext[AgentDeps], task_id: str) -> str:
+    """Delete a recurring scheduled task you created. Permanent.
+
+    Args:
+        task_id: The task id from list_scheduled_tasks_tool.
+    """
+    from agent.scheduler import delete_scheduled_task
+    return delete_scheduled_task(ctx.deps.user_id, task_id)
+
+
+@agent.tool
+def fetch_url_tool(ctx: RunContext[AgentDeps], url: str, max_characters: int = 8000) -> str:
+    """Fetch the readable text content of a specific URL (like web_search but for a known link).
+
+    Use when the user shares a URL and wants its content summarized or read,
+    or when you need the full text of a page found via search_web.
+
+    Args:
+        url: The full URL to fetch.
+        max_characters: Max characters of text to return (default 8000).
+    """
+    from agent.tools.web_search import fetch_url
+    return fetch_url(url, max_characters)
+
+
+@agent.tool
+def get_user_tool(ctx: RunContext[AgentDeps], user_id: str) -> str:
+    """Look up a Slack user's profile: display name, real name, pronouns, timezone, title, status, custom fields.
+
+    Use their pronouns! Handy for onboarding or addressing people correctly.
+
+    Args:
+        user_id: Slack user ID (U...).
+    """
+    from agent.tools.slack_info import get_user_info
+    return get_user_info(user_id)
+
+
+@agent.tool
+def get_channel_info_tool(ctx: RunContext[AgentDeps], channel_id: str) -> str:
+    """Look up Slack channel metadata: name, type (public/private/DM), member count, topic, purpose.
+
+    Args:
+        channel_id: Slack channel ID (C..., D..., or G...).
+    """
+    from agent.tools.slack_info import get_channel_info
+    return get_channel_info(channel_id)
+
+
+@agent.tool
+def post_message_tool(ctx: RunContext[AgentDeps], channel_id: str, text: str, thread_ts: str = "") -> str:
+    """Post a message as coolton to a Slack channel/thread — but ONLY to the current channel
+    (or a thread within it), or a DM with the user who asked. Posting elsewhere is refused.
+
+    Use when the user explicitly asks you to post somewhere mid-turn (progress updates,
+    standalone posts). For replies in the current thread, prefer the final response instead.
+
+    Args:
+        channel_id: Target channel ID.
+        text: Message text (Markdown supported).
+        thread_ts: Optional thread timestamp to post into.
+    """
+    from agent.tools.slack_info import post_message_to_target
+    return post_message_to_target(
+        channel_id=channel_id, text=text, thread_ts=thread_ts,
+        from_user=ctx.deps.user_id, current_channel=ctx.deps.channel_id,
+    )
+
+
+@agent.tool
+def leave_channel_tool(ctx: RunContext[AgentDeps], channel_id: str = "") -> str:
+    """Make coolton leave a Slack channel (cannot leave DMs).
+
+    Use when the user asks coolton to leave/be removed from a channel. Not usable in DMs.
+
+    Args:
+        channel_id: Channel to leave (defaults to the current channel).
+    """
+    from agent.tools.slack_info import leave_slack_channel
+    return leave_slack_channel(channel_id or ctx.deps.channel_id)
+
+
+@agent.tool
+def remove_reaction_tool(ctx: RunContext[AgentDeps], emoji_name: str, timestamp: str = "") -> str:
+    """Remove an emoji reaction from a message.
+
+    Args:
+        emoji_name: Emoji name without colons (e.g. 'tada').
+        timestamp: Message ts to remove the reaction from (defaults to the current message).
+    """
+    from agent.tools.slack_info import remove_emoji_reaction
+    return remove_emoji_reaction(ctx.deps.channel_id, timestamp or ctx.deps.message_ts, emoji_name)
+
+
+@agent.tool
+def search_slack_tool(ctx: RunContext[AgentDeps], query: str, count: int = 5) -> str:
+    """Search Slack messages across the workspace (channels, DMs, files) with the user token.
+
+    Supports Slack search syntax like `in:#channel from:@user` and keywords.
+
+    Args:
+        query: The search query.
+        count: Number of results to return (default 5, max 20).
+    """
+    from agent.tools.slack_search import search_slack_messages
+    return search_slack_messages(query, count)
+
+
+@agent.tool
+def read_conversation_history_tool(
+    ctx: RunContext[AgentDeps], channel_id: str, limit: int = 20, cursor: str = "", thread_ts: str = ""
+) -> str:
+    """Read recent messages from a Slack channel, or replies within a thread.
+
+    Use to catch up on a channel or thread you haven't seen. Returns a next_cursor
+    when there is more; call again with it to read older messages.
+
+    Args:
+        channel_id: The channel ID to read.
+        limit: Number of messages (default 20, max 200).
+        cursor: Pagination cursor for older messages.
+        thread_ts: If set, read replies in that thread instead of the channel.
+    """
+    from agent.tools.slack_search import read_conversation_history
+    return read_conversation_history(channel_id, limit, cursor, thread_ts)
 
 
 @agent.tool
