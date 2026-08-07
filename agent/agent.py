@@ -1038,11 +1038,21 @@ def upload_file_from_sandbox(
     """Upload a file from the sandbox to the current Slack channel/thread."""
     channel_id = ctx.deps.channel_id
     thread_ts = ctx.deps.thread_ts
-    user_token = ctx.deps.user_token or os.environ.get("SLACK_USER_TOKEN")
+    # The per-user token may not have file-sharing access to this channel, so
+    # try it first, then the bot's own user token, then the bot token.
+    tokens = list(
+        dict.fromkeys(
+            t for t in (
+                ctx.deps.user_token,
+                os.environ.get("SLACK_USER_TOKEN"),
+                os.environ.get("SLACK_BOT_TOKEN"),
+            ) if t
+        )
+    )
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured"
-    if not user_token:
-        return "Error: SLACK_USER_TOKEN not configured"
+    if not tokens:
+        return "Error: no Slack token configured (SLACK_USER_TOKEN / SLACK_BOT_TOKEN)"
     try:
         sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
         if not sandbox_id:
@@ -1052,43 +1062,46 @@ def upload_file_from_sandbox(
         if file_content is None:
             return f"Error: File not found at {filepath}"
         filename = os.path.basename(filepath)
-        headers = {"Authorization": f"Bearer {user_token}"}
 
-        # files.upload is deprecated (returns method_deprecated); use the
-        # files.uploadV2 flow: get an upload URL, PUT the bytes, then complete.
-        url_resp = requests.post(
-            "https://slack.com/api/files.getUploadURLExternal",
-            headers=headers,
-            data={"filename": filename, "length": len(file_content)},
-        ).json()
-        if not url_resp.get("ok"):
-            return f"Slack upload error: {url_resp.get('error', 'unknown')}"
-        upload_url = url_resp["upload_url"]
-        file_id = url_resp["file_id"]
-
-        put_resp = requests.put(
-            upload_url,
-            data=file_content,
-            headers={"Content-Type": "application/octet-stream"},
-        )
-        if put_resp.status_code != 200:
-            return f"Slack upload error: PUT to upload URL failed ({put_resp.status_code})"
-
-        complete_data = {
-            "files": json.dumps([{"id": file_id, "title": title or filename}]),
-            "channel_id": channel_id,
-            "initial_comment": initial_comment,
-        }
-        if thread_ts:
-            complete_data["thread_ts"] = thread_ts
-        complete_resp = requests.post(
-            "https://slack.com/api/files.completeUploadExternal",
-            headers=headers,
-            data=complete_data,
-        ).json()
-        if complete_resp.get("ok"):
-            return f"Uploaded {filename} to channel {channel_id}"
-        return f"Slack upload error: {complete_resp.get('error', 'unknown')}"
+        errors = []
+        for user_token in tokens:
+            try:
+                # files.upload is deprecated (returns method_deprecated); use the
+                # files.uploadV2 flow: get an upload URL, PUT the bytes, then complete.
+                url_resp = requests.post(
+                    "https://slack.com/api/files.getUploadURLExternal",
+                    headers={"Authorization": f"Bearer {user_token}"},
+                    data={"filename": filename, "length": len(file_content)},
+                ).json()
+                if not url_resp.get("ok"):
+                    errors.append(url_resp.get("error", "unknown"))
+                    continue
+                put_resp = requests.put(
+                    url_resp["upload_url"],
+                    data=file_content,
+                    headers={"Content-Type": "application/octet-stream"},
+                )
+                if put_resp.status_code != 200:
+                    errors.append(f"PUT to upload URL failed ({put_resp.status_code})")
+                    continue
+                complete_data = {
+                    "files": json.dumps([{"id": url_resp["file_id"], "title": title or filename}]),
+                    "channel_id": channel_id,
+                    "initial_comment": initial_comment,
+                }
+                if thread_ts:
+                    complete_data["thread_ts"] = thread_ts
+                complete_resp = requests.post(
+                    "https://slack.com/api/files.completeUploadExternal",
+                    headers={"Authorization": f"Bearer {user_token}"},
+                    data=complete_data,
+                ).json()
+                if complete_resp.get("ok"):
+                    return f"Uploaded {filename} to channel {channel_id}"
+                errors.append(complete_resp.get("error", "unknown"))
+            except Exception as e:
+                errors.append(str(e))
+        return f"Slack upload error: {errors[0] if errors else 'unknown'}"
     except Exception as e:
         return f"Error uploading file: {str(e)}"
 
