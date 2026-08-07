@@ -291,7 +291,7 @@ Download any Slack file (upload, snippet, image, canvas) into the sandbox `~/dow
 - Pass a filename with the correct extension when downloading images (`.png`, `.jpg`, `.jpeg`, `.webp`).
 
 ### upload_file_from_sandbox
-Upload a file from sandbox to the current Slack channel/thread.
+Upload a file from the sandbox and post its hosted link (https://tanjim.org:2390) in the current Slack channel/thread. No size limit.
 
 ## WEB SEARCH (search_web)
 Use `search_web` to search the internet via Exa. Returns titles, URLs, snippets, and dates.
@@ -1035,24 +1035,17 @@ def get_slack_file_tool(ctx: RunContext[AgentDeps], file: str, filename: str = "
 def upload_file_from_sandbox(
     ctx: RunContext[AgentDeps], filepath: str, title: str = "", initial_comment: str = "",
 ) -> str:
-    """Upload a file from the sandbox to the current Slack channel/thread."""
+    """Upload a file from the sandbox and post its hosted link in the current channel/thread.
+
+    Files are hosted on the coolton file server (tanjim.org:2390), so there is
+    no size limit. Slack's own file upload API silently drops shares in this
+    workspace, so the file is served from the coolton server instead and the
+    link is posted with chat.postMessage.
+    """
     channel_id = ctx.deps.channel_id
     thread_ts = ctx.deps.thread_ts
-    # The per-user token may not have file-sharing access to this channel, so
-    # try it first, then the bot's own user token, then the bot token.
-    tokens = list(
-        dict.fromkeys(
-            t for t in (
-                ctx.deps.user_token,
-                os.environ.get("SLACK_USER_TOKEN"),
-                os.environ.get("SLACK_BOT_TOKEN"),
-            ) if t
-        )
-    )
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured"
-    if not tokens:
-        return "Error: no Slack token configured (SLACK_USER_TOKEN / SLACK_BOT_TOKEN)"
     try:
         sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
         if not sandbox_id:
@@ -1063,45 +1056,18 @@ def upload_file_from_sandbox(
             return f"Error: File not found at {filepath}"
         filename = os.path.basename(filepath)
 
-        errors = []
-        for user_token in tokens:
-            try:
-                # files.upload is deprecated (returns method_deprecated); use the
-                # files.uploadV2 flow: get an upload URL, PUT the bytes, then complete.
-                url_resp = requests.post(
-                    "https://slack.com/api/files.getUploadURLExternal",
-                    headers={"Authorization": f"Bearer {user_token}"},
-                    data={"filename": filename, "length": len(file_content)},
-                ).json()
-                if not url_resp.get("ok"):
-                    errors.append(url_resp.get("error", "unknown"))
-                    continue
-                put_resp = requests.put(
-                    url_resp["upload_url"],
-                    data=file_content,
-                    headers={"Content-Type": "application/octet-stream"},
-                )
-                if put_resp.status_code != 200:
-                    errors.append(f"PUT to upload URL failed ({put_resp.status_code})")
-                    continue
-                complete_data = {
-                    "files": json.dumps([{"id": url_resp["file_id"], "title": title or filename}]),
-                    "channel_id": channel_id,
-                    "initial_comment": initial_comment,
-                }
-                if thread_ts:
-                    complete_data["thread_ts"] = thread_ts
-                complete_resp = requests.post(
-                    "https://slack.com/api/files.completeUploadExternal",
-                    headers={"Authorization": f"Bearer {user_token}"},
-                    data=complete_data,
-                ).json()
-                if complete_resp.get("ok"):
-                    return f"Uploaded {filename} to channel {channel_id}"
-                errors.append(complete_resp.get("error", "unknown"))
-            except Exception as e:
-                errors.append(str(e))
-        return f"Slack upload error: {errors[0] if errors else 'unknown'}"
+        from agent.web64_client import upload_bytes
+
+        url = upload_bytes(file_content, filename)
+        label = title or filename
+        message = f"{initial_comment}\n\n📄 *{label}*: {url}" if initial_comment else f"📄 *{label}*: {url}"
+        post_kwargs = {"channel": channel_id, "text": message}
+        if thread_ts:
+            post_kwargs["thread_ts"] = thread_ts
+        post_resp = ctx.deps.client.chat_postMessage(**post_kwargs)
+        if not post_resp.get("ok"):
+            return f"File hosted at {url}, but posting the link failed: {post_resp.get('error', 'unknown')}"
+        return f"Uploaded {filename} and posted the link in the thread."
     except Exception as e:
         return f"Error uploading file: {str(e)}"
 
@@ -1647,9 +1613,9 @@ def send_html_embed(
     thumbnail_url: str = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed",
     user_token: str | None = None,
 ) -> str:
-    minified = minify_html(html)
-    b64 = base64.urlsafe_b64encode(minified.encode()).decode().rstrip("=")
-    url = f"https://tanjim.org:2390/{b64}"
+    from agent.web64_client import upload_bytes
+
+    url = upload_bytes(html.encode(), "embed.html", mime="text/html")
     return send_web_embed(channel_id=channel_id, text=text, url=url, title=title, thumbnail_url=thumbnail_url, user_token=user_token)
 
 
@@ -1660,9 +1626,10 @@ def send_html_embed_tool(
     thumbnail_url: str = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed",
 ) -> str:
     """Send custom HTML as a live embed in the current channel.
-    
-    Your HTML is minified, base64-encoded, and served via https://tanjim.org:2390.
-    
+
+    Your HTML is hosted on the coolton file server (tanjim.org:2390), so there
+    is no size limit.
+
     Args:
         html: Raw HTML content.
         text: Fallback text (default: "html embed").
