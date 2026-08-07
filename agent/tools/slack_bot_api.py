@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 
 
@@ -22,12 +23,15 @@ def slack_api_call_as_bot(method: str, params: dict) -> str:
     
     url = f"https://slack.com/api/{method}"
     headers = {
-        "Authorization": f"Bearer {bot_token}",
-        "Content-Type": "application/json; charset=utf-8"
+        "Authorization": f"Bearer {bot_token}"
+    }
+    form = {
+        k: json.dumps(v) if isinstance(v, (dict, list)) else v
+        for k, v in params.items()
     }
     
     try:
-        response = requests.post(url, json=params, headers=headers, timeout=30)
+        response = requests.post(url, data=form, headers=headers, timeout=30)
         res_json = response.json()
         
         if res_json.get("ok"):

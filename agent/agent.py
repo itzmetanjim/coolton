@@ -5,6 +5,7 @@ import base64
 import re
 import time
 import shutil
+import json
 from urllib.parse import quote
 import subprocess
 import threading
@@ -1207,9 +1208,13 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str
     if not user_token:
         return "Error: SLACK_USER_TOKEN not configured"
     url = f"https://slack.com/api/{method}"
-    headers = {"Authorization": f"Bearer {user_token}", "Content-Type": "application/json; charset=utf-8"}
+    headers = {"Authorization": f"Bearer {user_token}"}
+    form = {
+        k: json.dumps(v) if isinstance(v, (dict, list)) else v
+        for k, v in params.items()
+    }
     try:
-        response = requests.post(url, json=params, headers=headers)
+        response = requests.post(url, data=form, headers=headers)
         res_json = response.json()
         if res_json.get("ok"):
             return f"Success: {res_json}"
