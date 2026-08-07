@@ -285,6 +285,11 @@ if __name__ == "__main__":
 ### download_attachments_to_sandbox
 Download Slack file attachments from the current thread to sandbox's `~/attachments/`.
 
+### get_slack_file
+Download any Slack file (upload, snippet, image, canvas) into the sandbox `~/downloads/` by file id.
+- Takes a file id (e.g. `F0123ABCD`) or a Slack file permalink; not for arbitrary web URLs (use `fetch_url`).
+- Pass a filename with the correct extension when downloading images (`.png`, `.jpg`, `.jpeg`, `.webp`).
+
 ### upload_file_from_sandbox
 Upload a file from sandbox to the current Slack channel/thread.
 
@@ -306,11 +311,12 @@ Use `analyze_image` when a user shares an image and asks you to analyze it (desc
 2. Read the file bytes from the sandbox
 3. Call `analyze_image` with the image data
 
-## IMAGE GENERATION (generate_image_with_byok)
-Use `generate_image_with_byok` to generate AI images from text prompts.
-- Uses DALL-E 3 — requires the user to have an OpenAI API key set via BYOK, or a global OPENAI_API_KEY
-- Args: prompt, n (1-4 images), size (e.g., "1024x1024", "1792x1024")
-- Upload the result URL using `upload_file_from_sandbox` if the user wants it in Slack
+## IMAGE GENERATION (generate_image_tool)
+Use `generate_image_tool` to generate AI images from text prompts.
+- Uses an OpenAI-compatible image model (user BYOK endpoint or global OPENAI_API_KEY)
+- Args: prompt, n (1-4 images), size (e.g., "1024x1024", "1792x1024"), aspect_ratio (e.g., "16:9", "1:1", "9:16")
+- Images are saved into the sandbox ~/downloads/ when a sandbox is active
+- Upload the saved files using `upload_file_from_sandbox` if the user wants them in Slack
 
 ## MERMAID DIAGRAMS (render_mermaid)
 Use `render_mermaid` to create diagrams from Mermaid code.
@@ -462,6 +468,13 @@ human-in-the-loop handoffs).
   injected each turn). Never read your own bot profile for this — the user_id in context is the
   human's id.
 - You can also read any other user's profile by passing their user_id to `users_info`.
+
+## SUBAGENTS (delegate_to_subagent)
+When a subtask is large and self-contained, delegate it instead of doing it inline:
+- `delegate_to_subagent("research", task)` — focused Slack/web/user/channel/thread research; returns compact sourced findings. Use for big research questions.
+- `delegate_to_subagent("explore", task)` — inspect sandbox workspace files (read/list/grep) to gather implementation context without changing anything.
+- `delegate_to_subagent("summarizer", task)` — summarize a long Slack conversation transcript, preserving decisions, open questions, and action items.
+Give the subagent a fully self-contained task (include channel ids, user ids, file paths, exact questions). Subagents cannot post messages or change files.
 """
 
 _cached_model: str | None = None
@@ -986,6 +999,36 @@ def download_attachments_to_sandbox(ctx: RunContext[AgentDeps]) -> str:
 
 
 @agent.tool
+def get_slack_file_tool(ctx: RunContext[AgentDeps], file: str, filename: str = "") -> str:
+    """Download a Slack file (upload, snippet, image, canvas, any type) into the sandbox by file id.
+
+    Takes a Slack file id (e.g. F0123ABCD), which you can get from a message attachment or a
+    Slack file permalink. Not for arbitrary web URLs; use fetch_url for those. When downloading
+    images, pass a filename with the correct extension (.png, .jpg, .jpeg, .webp).
+
+    Args:
+        file: Slack file id (e.g. F0123ABCD), or a Slack file permalink containing the id.
+        filename: Optional name to save it as (defaults to the file's own name).
+    """
+    from agent.tools.slack_file_download import download_file_by_id
+
+    user_token = ctx.deps.user_token or os.environ.get("SLACK_USER_TOKEN")
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured"
+    if not user_token:
+        return "Error: SLACK_USER_TOKEN not configured"
+
+    sandbox = None
+    sandbox_id = get_thread_sandbox_id(ctx.deps.channel_id, ctx.deps.thread_ts)
+    if sandbox_id:
+        try:
+            sandbox = Sandbox.connect(sandbox_id)
+        except Exception as e:
+            return f"Error connecting to sandbox: {e}"
+    return download_file_by_id(file, user_token, sandbox, filename=filename)
+
+
+@agent.tool
 def upload_file_from_sandbox(
     ctx: RunContext[AgentDeps], filepath: str, title: str = "", initial_comment: str = "",
 ) -> str:
@@ -1065,18 +1108,50 @@ def analyze_image_tool(ctx: RunContext[AgentDeps], image_path: str, prompt: str 
 
 
 @agent.tool
-def generate_image_tool(ctx: RunContext[AgentDeps], prompt: str, n: int = 1, size: str = "1024x1024") -> str:
-    """Generate AI images from a text prompt using DALL-E 3.
-    
+def generate_image_tool(
+    ctx: RunContext[AgentDeps],
+    prompt: str,
+    n: int = 1,
+    size: str = "1024x1024",
+    aspect_ratio: str = "",
+) -> str:
+    """Generate AI images from a text prompt using an OpenAI-compatible image model.
+
+    The images are saved into the sandbox ~/downloads/ directory (if a sandbox is active)
+    and their URLs are returned. Use upload_file_from_sandbox to send them to Slack.
+
     Requires the user to have an OpenAI API key (via BYOK or global OPENAI_API_KEY).
-    
+
     Args:
         prompt: Text description of the desired image.
         n: Number of images (1-4, default 1).
         size: Size ("1024x1024", "1792x1024", "1024x1792", default "1024x1024").
+        aspect_ratio: Optional aspect ratio like "16:9", "1:1", "9:16", "4:3".
+            Overrides size when it maps to a known size; otherwise passed through
+            to providers that support an `aspect_ratio` field.
     """
-    from agent.tools.image_gen import generate_image
-    return generate_image(prompt, n, size)
+    from agent.tools.image_gen import generate_image_with_byok, save_images_to_sandbox
+
+    result = generate_image_with_byok(
+        ctx.deps.user_id, prompt, n, size, aspect_ratio or None
+    )
+    if "image(s)" not in result:
+        return result
+
+    if os.environ.get("E2B_API_KEY"):
+        sandbox = None
+        sandbox_id = get_thread_sandbox_id(ctx.deps.channel_id, ctx.deps.thread_ts)
+        if sandbox_id:
+            try:
+                sandbox = Sandbox.connect(sandbox_id)
+            except Exception:
+                sandbox = None
+        if sandbox:
+            urls = [line.split(". ", 1)[-1] for line in result.splitlines()[1:] if line]
+            saved = save_images_to_sandbox(sandbox, urls)
+            if saved:
+                return result + "\n\nSaved to sandbox:\n" + "\n".join(f"- {p}" for p in saved)
+    return result
 
 
 @agent.tool
@@ -1322,7 +1397,7 @@ def read_conversation_history_tool(
         thread_ts: If set, read replies in that thread instead of the channel.
     """
     from agent.tools.slack_search import read_conversation_history
-    return read_conversation_history(channel_id, limit, cursor, thread_ts)
+    return read_conversation_history(channel_id, limit, cursor, thread_ts, current_channel_id=ctx.deps.channel_id)
 
 
 @agent.tool
@@ -1752,6 +1827,28 @@ def agentmail_send_email(
     return send_email_tool(to, subject, text, inbox_id=inbox_id, cc=cc, html=html)
 
 
+@agent.tool
+def delegate_to_subagent(
+    ctx: RunContext[AgentDeps],
+    target: str,
+    task: str,
+) -> str:
+    """Delegate a focused subtask to a specialized subagent and return its findings.
+
+    Use this when a subtask is large, self-contained, and benefits from focused tools:
+    - "research": focused Slack/web/user/channel/thread research, returns compact sourced findings.
+    - "explore": inspect sandbox workspace files (read/list/grep) to gather implementation context.
+    - "summarizer": summarize a Slack conversation transcript, preserving decisions and action items.
+
+    Args:
+        target: One of "research", "explore", "summarizer".
+        task: A fully self-contained instruction describing exactly what to investigate or produce.
+    """
+    from agent.subagents import run_subagent
+
+    return run_subagent(target, task, ctx.deps)
+
+
 def _repo_root() -> str:
     return os.path.abspath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1983,21 +2080,98 @@ def run_agent(text, deps, message_history=None):
     # Mark when this run started so a later !stop from the same user halts us.
     deps.run_started_at = time.time()
 
-    # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
-    provider_order = _build_provider_order(deps.user_id)
-
     # Attribute the incoming message to its sender so the model can tell users apart.
     text = _tag_user_message(text, deps)
-    
-    if not provider_order:
-        raise RuntimeError("No AI provider configured.")
 
+    from listeners.actions.instructions_actions import get_user_instructions as _get_instructions
+    custom_instructions = _get_instructions(deps.user_id)
+    deps.custom_instructions = custom_instructions
+
+    context_info = f"""
+## CURRENT CONTEXT
+- You are in channel_id: `{deps.channel_id}` (thread_ts: `{deps.thread_ts}` if in thread, else DM)
+- Use this channel_id for operations in the current channel unless user specifies otherwise
+- Your user_id (the HUMAN who messaged you): `{deps.user_id}`
+- Your own bot user id (this is YOU, not a third party): `{os.environ.get("COOLTON_BOT_ID", "")}`
+- Your cooltonUser helper account id (acts on your behalf): `{os.environ.get("COOLTON_USER_ID", "")}`
+- Message timestamp: `{deps.message_ts}`
+"""
+    full_prompt = SYSTEM_PROMPT + context_info
+    if custom_instructions:
+        full_prompt += f"\n\n## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n"
+
+    toolsets = []
+    deps.user_token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
+    if deps.user_token:
+        logger.info("Slack MCP Server enabled (user_token present)")
+        try:
+            transport = StreamableHttpTransport(
+                SLACK_MCP_URL,
+                headers={"Authorization": f"Bearer {deps.user_token}"},
+            )
+            toolsets.append(MCPToolset(transport))
+        except Exception as e:
+            logger.exception(f"Failed to create MCP server: {e}")
+    else:
+        logger.info("Slack MCP Server disabled (no user_token)")
+
+    all_tools = list(agent._function_toolset.tools.values())
+    tool_functions = [t.function for t in all_tools]
+
+    agent_dynamic = Agent(
+        deps_type=AgentDeps,
+        system_prompt=full_prompt,
+        tools=tool_functions,
+    )
+
+    capabilities = [PrepareTools(disable_strict_for_all_tools)]
+    if deps.plan_ts:
+        from agent.plan_block import build_plan_hooks
+        capabilities.append(build_plan_hooks())
+
+    from pydantic_ai_skills import SkillsCapability
+    capabilities.append(
+        SkillsCapability(
+            directories=["skills", ".agents/skills"],
+            auto_reload=True,
+        )
+    )
+
+    run_kwargs = dict(
+        user_prompt=text,
+        deps=deps,
+        message_history=message_history,
+        toolsets=toolsets,
+        capabilities=capabilities,
+    )
+
+    try:
+        result, _provider = _run_with_provider_chain(agent_dynamic, run_kwargs, deps)
+        return result
+    except HaltRun:
+        deps.should_skip = True
+        return _SkipResult(message_history)
+
+
+def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
+    """Run an agent against the provider fallback chain, returning (result, provider_name).
+
+    Shared by run_agent (main orchestrator) and subagents (research/explore/summarizer).
+    Uses the global fallback cache: skips providers known to be dead and prefers the
+    last-known-good provider first.
+    """
     from agent.fallback_cache import (
         get_working_provider,
         set_working_provider,
         mark_dead,
         get_dead_providers,
     )
+
+    # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
+    provider_order = _build_provider_order(deps.user_id)
+
+    if not provider_order:
+        raise RuntimeError("No AI provider configured.")
 
     # Global fallback cache: skip providers known to be dead, prefer the
     # last-known-good provider first (shared across all users).
@@ -2065,12 +2239,12 @@ def run_agent(text, deps, message_history=None):
         return any(p in error_str for p in fatal_patterns)
 
     all_errors = []
-    
+
     for provider_name, provider_config in provider_order:
         for attempt in range(max_retries):
             try:
                 model_name = provider_config["model"]
-                
+
                 # Create model object if custom base_url (BYOK, HCAI)
                 model_obj = None
                 if provider_config.get("base_url"):
@@ -2083,7 +2257,7 @@ def run_agent(text, deps, message_history=None):
                             api_key=provider_config["api_key"],
                         ),
                     )
-                
+
                 # Set env vars for this provider
                 if provider_name not in ("byok", "hcai", "hcai_minimax", "hcai_hy3_free", "hcai_hy3") and provider_config.get("api_key"):
                     if provider_name == "anthropic":
@@ -2100,86 +2274,19 @@ def run_agent(text, deps, message_history=None):
                         os.environ["GROQ_API_KEY"] = provider_config["api_key"]
                     elif provider_name == "cerebras":
                         os.environ["CEREBRAS_API_KEY"] = provider_config["api_key"]
-                
+
                 # Rate limit for Cerebras
                 if "cerebras" in model_name.lower():
                     enforce_rate_limit()
 
-                # Build dynamic prompt
-                from listeners.actions.instructions_actions import get_user_instructions as _get_instructions
-                custom_instructions = _get_instructions(deps.user_id)
-                deps.custom_instructions = custom_instructions
-
-                context_info = f"""
-## CURRENT CONTEXT
-- You are in channel_id: `{deps.channel_id}` (thread_ts: `{deps.thread_ts}` if in thread, else DM)
-- Use this channel_id for operations in the current channel unless user specifies otherwise
-- Your user_id (the HUMAN who messaged you): `{deps.user_id}`
-- Your own bot user id (this is YOU, not a third party): `{os.environ.get("COOLTON_BOT_ID", "")}`
-- Your cooltonUser helper account id (acts on your behalf): `{os.environ.get("COOLTON_USER_ID", "")}`
-- Message timestamp: `{deps.message_ts}`
-"""
-                full_prompt = SYSTEM_PROMPT + context_info
-                if custom_instructions:
-                    full_prompt += f"\n\n## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n"
-
-                toolsets = []
-                deps.user_token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
-                if deps.user_token:
-                    logger.info("Slack MCP Server enabled (user_token present)")
-                    try:
-                        transport = StreamableHttpTransport(
-                            SLACK_MCP_URL,
-                            headers={"Authorization": f"Bearer {deps.user_token}"},
-                        )
-                        toolsets.append(MCPToolset(transport))
-                    except Exception as e:
-                        logger.exception(f"Failed to create MCP server: {e}")
-                else:
-                    logger.info("Slack MCP Server disabled (no user_token)")
-
-                all_tools = list(agent._function_toolset.tools.values())
-                tool_functions = [t.function for t in all_tools]
-
-                agent_dynamic = Agent(
-                    deps_type=AgentDeps,
-                    system_prompt=full_prompt,
-                    tools=tool_functions,
-                )
-
-                capabilities = [PrepareTools(disable_strict_for_all_tools)]
-                if deps.plan_ts:
-                    from agent.plan_block import build_plan_hooks
-                    capabilities.append(build_plan_hooks())
-
-                from pydantic_ai_skills import SkillsCapability
-                capabilities.append(
-                    SkillsCapability(
-                        directories=["skills", ".agents/skills"],
-                        auto_reload=True,
-                    )
-                )
-
-                run_kwargs = dict(
-                    user_prompt=text,
-                    deps=deps,
-                    message_history=message_history,
-                    toolsets=toolsets,
-                    capabilities=capabilities,
-                )
-                if model_obj:
-                    run_kwargs["model"] = model_obj
-                else:
-                    run_kwargs["model"] = model_name
-
+                run_kwargs["model"] = model_obj if model_obj else model_name
                 result = agent_dynamic.run_sync(**run_kwargs)
                 set_working_provider(provider_name)
                 deps.model_used = f"{provider_name} / {model_name}"
-                return result
+                return result, provider_name
 
             except HaltRun:
-                deps.should_skip = True
-                return _SkipResult(message_history)
+                raise
 
             except Exception as e:
                 if is_fatal_error(e):
@@ -2198,10 +2305,10 @@ def run_agent(text, deps, message_history=None):
                 else:
                     logger.warning(f"{provider_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
                     break  # Try next provider
-        
+
         # All retries exhausted for this provider, try next provider
         logger.warning(f"Provider {provider_name} exhausted all retries, trying next provider...")
-    
+
     # All providers failed
     errors_str = "\n".join(f"  - {err}" for err in all_errors)
     raise RuntimeError(f"All AI providers failed.\n{errors_str}")
