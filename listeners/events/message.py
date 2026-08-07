@@ -49,6 +49,14 @@ def handle_message(
         )
         return
 
+    # Messages starting with "<>" are only answered when the bot is explicitly
+    # @-mentioned. Without a mention, ignore them even in engaged threads or
+    # DMs (messages that DO mention the bot already return above and are owned
+    # by handle_app_mentioned).
+    if text.strip().startswith("<>"):
+        logger.info(f"Ignoring '<>' message without explicit mention: {text[:80]}")
+        return
+
     # If we've left this thread, ignore non-mention messages here.
     if should_ignore_thread(channel_id, thread_ts, text):
         logger.info(f"Ignoring message in left thread {thread_ts} ({channel_id})")
