@@ -41,6 +41,8 @@ LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 29054
 # Admin endpoint (localhost only) for the agent to issue/revoke per-sandbox tokens.
 ADMIN_PORT = 29055
+# code-mode tool proxy (runs in the coolton app process) for /agent_tools/* calls.
+TOOL_PROXY_PORT = 29057
 PROXY_HOST_SUFFIX = "ghproxy.tanjim.org"
 GITHUB_TOKEN = os.environ.get("COOLTON_GH_TOKEN", "")
 # Token used to authenticate admin calls (set via GH_PROXY_ADMIN_TOKEN; defaults to the
@@ -286,6 +288,39 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"forbidden")
         self.close_connection = True
 
+    def _forward_to_tools(self):
+        """Forward an /agent_tools/* request to the local code-mode tool proxy.
+
+        The token was already validated against the allowlist above. The tool proxy
+        additionally checks the sandbox registration and per-tool allowlist, and executes
+        the tool with that thread's AgentDeps.
+        """
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        body = self.rfile.read(length) if length else None
+        upstream = f"http://127.0.0.1:{TOOL_PROXY_PORT}{self.path}"
+        fwd = {
+            "Authorization": self.headers.get("Authorization", ""),
+            "Content-Type": self.headers.get("Content-Type", "application/json"),
+        }
+        try:
+            req = requests.request(self.command, upstream, data=body, headers=fwd, timeout=320)
+        except Exception as e:
+            logger.warning("tool proxy unreachable: %s", e)
+            payload = json.dumps({"ok": False, "error": f"tool proxy unavailable: {e}"}).encode()
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            self.close_connection = True
+            return
+        self.send_response(req.status_code)
+        self.send_header("Content-Type", req.headers.get("Content-Type", "application/json"))
+        self.send_header("Content-Length", str(len(req.content)))
+        self.end_headers()
+        self.wfile.write(req.content)
+        self.close_connection = True
+
     def _forward(self):
         tok = _extract_token(self.headers)
         if tok is None:
@@ -296,6 +331,12 @@ class _Handler(BaseHTTPRequestHandler):
         if tok not in allowlist:
             logger.warning("deny: tok=%r in_allowlist=False auth=%r", tok, self.headers.get("Authorization", "")[:30])
             self._deny(403)
+            return
+
+        # code-mode: sandboxed code calls coolton's own tools via /agent_tools/*. Route
+        # those to the in-app tool proxy (localhost:29057) instead of github.com.
+        if self.path == "/agent_tools" or self.path.startswith("/agent_tools/"):
+            self._forward_to_tools()
             return
 
         target = self.path

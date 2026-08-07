@@ -30,6 +30,12 @@ from agent.github_proxy_client import (
     issue_sandbox_token,
     revoke_sandbox_token,
 )
+from agent.tool_proxy import (
+    build_sandbox_module,
+    format_signatures,
+    register_sandbox,
+    start as start_tool_proxy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +154,16 @@ You have a persistent Linux sandbox via E2B. It survives across messages in this
 - You have **sudo** access in the sandbox. If a command needs root (e.g. binding a low port,
   writing to a system path, or installing via a package manager that requires it), just prefix it
   with `sudo` — no password needed.
+
+## CODE MODE (code_mode)
+When a task needs the same tool call repeated many times (looping over Slack API results, batch
+checking members/messages, bulk operations), do NOT burn a model turn per call. Write one
+Python program and run it with `code_mode`. Inside, `import agent_tools` and call your own tools
+as `agent_tools.<tool_name>(*args)`. `agent_tools.help()` lists allowed tools + signatures.
+- Sandbox tools (run_linux_command, file tools, data analysis, opencode) and `code_mode` itself
+  are NOT available inside code_mode — do the loop purely through agent_tools.
+- `slack_api_call` and `slack_api_call_as_bot_tool` return parsed JSON dicts inside code_mode.
+- Each tool call runs on the host with your current thread's credentials/context.
 To decode unknown ASCII art, follow this step-by-step method:
 
 1. **Setup:** Use Python's `pyfiglet` library. Rotate the ASCII art 90 degrees so columns become readable horizontal lines.
@@ -737,6 +753,119 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str) -> str:
         result = sandbox.commands.run(command, envs=_proxy_env(proxy_info))
         new_sandbox_id = sandbox.sandbox_id
         save_thread_sandbox_id(channel_id, thread_ts, new_sandbox_id)
+        sandbox.pause()
+        output = []
+        if result.stdout:
+            output.append(f"STDOUT:\n{result.stdout}")
+        if result.stderr:
+            output.append(f"STDERR:\n{result.stderr}")
+        output.append(f"Exit Code: {result.exit_code}")
+        return "\n\n".join(output)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+# Tools a `code_mode` program may NOT call: recursion back into the sandbox, the tool itself,
+# or run-control tools that make no sense from a sandboxed loop.
+CODE_MODE_EXCLUDED_TOOLS = {
+    "code_mode",
+    "run_linux_command",
+    "read_sandbox_file_tool",
+    "write_sandbox_file_tool",
+    "search_sandbox_files_tool",
+    "list_sandbox_files_tool",
+    "download_attachments_to_sandbox",
+    "extract_tar_gz_tool",
+    "analyze_csv_tool",
+    "run_sql_on_csv_tool",
+    "run_python_data_analysis_tool",
+    "install_opencode_tool",
+    "run_opencode_tool",
+    "upload_file_from_sandbox",
+    "skip",
+    "leave_thread_tool",
+}
+
+
+def _code_mode_tools() -> tuple[list[str], dict[str, str]]:
+    registry = agent._function_toolset.tools
+    allowlist = [n for n in registry if n not in CODE_MODE_EXCLUDED_TOOLS]
+    signatures = format_signatures({n: registry[n] for n in allowlist})
+    return allowlist, signatures
+
+
+def _tool_resolver(tool_name: str):
+    td = agent._function_toolset.tools.get(tool_name)
+    return td.function if td else None
+
+
+@agent.tool
+def code_mode(ctx: RunContext[AgentDeps], code: str) -> str:
+    """Run a Python program in your sandbox where you can call your own tools programmatically.
+
+    Use this when you need to repeat a tool call many times (looping over API results, batch
+    checks, bulk Slack operations) -- it runs on the sandbox without burning model tokens per
+    call. Write a program that `import agent_tools` and calls tools as
+    `agent_tools.<tool_name>(*args)`. `agent_tools.help()` lists the allowed tools + signatures.
+
+    Allowed tools exclude the sandbox tools and `code_mode` itself. The generic Slack API tools
+    `slack_api_call` and `slack_api_call_as_bot_tool` return parsed JSON dicts (iterate over
+    them directly). Most other tools return descriptive strings. Each tool call is executed on
+    the host with the current thread's credentials and posts/reads the same channel/thread.
+
+    Example - find bots among channel members:
+    ```python
+    import agent_tools
+    members = agent_tools.slack_api_call_as_bot_tool(
+        "conversations.members", {"channel": "C0B7QEK0MQB"}
+    )["members"]
+    bots = []
+    for uid in members:
+        info = agent_tools.slack_api_call_as_bot_tool("users.info", {"user": uid})
+        if info.get("user", {}).get("is_bot"):
+            bots.append(uid)
+    print(len(bots), "bots:", bots)
+    ```
+
+    Args:
+        code: The full Python source to run.
+    """
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured."
+    channel_id = ctx.deps.channel_id
+    thread_ts = ctx.deps.thread_ts
+    try:
+        start_tool_proxy()
+        sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
+        if sandbox_id:
+            sandbox = Sandbox.connect(sandbox_id)
+            proxy_info = _proxy_cache_get(sandbox_id)
+            if proxy_info is None:
+                tok = issue_sandbox_token(sandbox.sandbox_id)
+                proxy_info = {"proxy_host": PUBLIC_PROXY_HOST, "token": tok}
+                _proxy_cache_set(sandbox.sandbox_id, proxy_info)
+        else:
+            sandbox = Sandbox.create(_sandbox_template_id())
+            tok = issue_sandbox_token(sandbox.sandbox_id)
+            proxy_info = {"proxy_host": PUBLIC_PROXY_HOST, "token": tok}
+            _proxy_cache_set(sandbox.sandbox_id, proxy_info)
+            provision = _provision_sandbox(sandbox, proxy_info)
+            logger.info(f"code_mode sandbox provisioned:\n{provision}")
+        save_thread_sandbox_id(channel_id, thread_ts, sandbox.sandbox_id)
+
+        allowlist, signatures = _code_mode_tools()
+        register_sandbox(sandbox.sandbox_id, proxy_info["token"], ctx.deps, _tool_resolver, allowlist)
+        sandbox.files.write("/home/user/agent_tools.py", build_sandbox_module(allowlist, signatures))
+        sandbox.files.write("/home/user/code_mode_run.py", code)
+        envs = dict(_proxy_env(proxy_info))
+        envs.update({
+            "AGENT_TOOLS_BASE": f"https://{PUBLIC_PROXY_HOST}/agent_tools",
+            "AGENT_TOOLS_TOKEN": proxy_info["token"],
+            "AGENT_TOOLS_SANDBOX": sandbox.sandbox_id,
+        })
+        result = sandbox.commands.run(
+            "cd /home/user && python3 code_mode_run.py", timeout=600, envs=envs
+        )
         sandbox.pause()
         output = []
         if result.stdout:
