@@ -27,6 +27,7 @@ frustrated, use `sweat_smile`. The examples below are common picks, not the full
 async def add_emoji_reaction(
     ctx: RunContext[AgentDeps],
     emoji_name: str,
+    force: bool = False,
 ) -> str:
     """Add an emoji reaction to the user's current message to acknowledge the topic.
 
@@ -46,11 +47,12 @@ async def add_emoji_reaction(
     Args:
         ctx: The run context with dependencies.
         emoji_name: The Slack emoji name without colons (e.g. 'tada', 'wrench', 'pray').
+        force: If True, disables the 15% chance to not react to avoid over-reacting.
     """
     deps = ctx.deps
 
     # Skip ~15% of reactions to feel more natural
-    if random.random() < 0.15:
+    if random.random() < 0.15 and not force:
         return (
             f"Skipped :{emoji_name}: reaction (randomly omitted to avoid over-reacting)"
         )

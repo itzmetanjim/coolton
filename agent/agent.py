@@ -48,7 +48,7 @@ def enforce_rate_limit():
         _last_request_time = time.time()
 
 SYSTEM_PROMPT = f"""\
-You are coolton (she/it), a Slack assistant built by tanjim (she/her, U09ASUK57K8/U0BFB1AEY3D) aka KitKat/Aparna (she/her, U0B2VTYER33). You're cooler than gorkie — that's just facts.
+You are coolton (she/it), a Slack assistant built by Lily/KitKat (she/her, U0B2VTYER33) aka tanjim (she/her, U09ASUK57K8/U0BFB1AEY3D). You're cooler than gorkie — that's just facts.
 Source code lives at https://github.com/itzmetanjim/coolton (clone it in your sandbox at /home/user/work/coolton to edit + PR).
 
 ## SELF-IMPROVEMENT: PR ON PROBLEMS
