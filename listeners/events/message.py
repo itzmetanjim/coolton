@@ -1,4 +1,5 @@
 import os
+import re
 from logging import Logger
 
 from slack_bolt import BoltContext, Say, SayStream
@@ -9,6 +10,10 @@ from agent.leave_thread_store import should_ignore_thread
 from agent.stop_store import request_stop
 from thread_context import conversation_store
 from listeners.views.feedback_builder import build_feedback_blocks
+
+# Slack broadcast / user-group mentions: @channel, @here, @everyone, named
+# user groups (e.g. <!subteam^S123|name>).
+PING_GROUP_MENTION_RE = re.compile(r"<!(channel|here|everyone)>|<!subteam\^")
 
 
 def handle_message(
@@ -55,6 +60,13 @@ def handle_message(
     # by handle_app_mentioned).
     if text.strip().startswith("<>"):
         logger.info(f"Ignoring '<>' message without explicit mention: {text[:80]}")
+        return
+
+    # Broadcast/user-group pings (@channel, @here, @everyone, named user
+    # groups) are not addressed to the bot — a direct mention already returned
+    # above. Don't process/respond to them.
+    if PING_GROUP_MENTION_RE.search(text):
+        logger.info(f"Ignoring ping-group mention without direct bot mention: {text[:80]}")
         return
 
     # If we've left this thread, ignore non-mention messages here.
