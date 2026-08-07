@@ -205,6 +205,7 @@ TOOL_DISPLAY_NAMES = {
     "invite_coolton_user_to_channel": "Inviting cooltonUser",
     "run_linux_command": "Running command in sandbox",
     "download_attachments_to_sandbox": "Downloading attachments",
+    "get_slack_file_tool": "Downloading Slack file",
     "upload_file_from_sandbox": "Uploading file",
     "search_web_tool": "Searching the web",
     "analyze_image_tool": "Analyzing image",
@@ -247,6 +248,7 @@ TOOL_DISPLAY_NAMES = {
     "agentmail_list_messages": "Listing AgentMail messages",
     "agentmail_read_message": "Reading AgentMail message",
     "agentmail_send_email": "Sending AgentMail email",
+    "delegate_to_subagent": "Running focused subagent",
 }
 
 _task_counter = 0

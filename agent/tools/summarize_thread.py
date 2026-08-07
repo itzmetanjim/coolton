@@ -23,8 +23,7 @@ def summarize_thread(channel_id: str, thread_ts: str, user_token: str | None = N
             return "No messages found in this thread."
 
         conversation_text = _format_messages(messages)
-        summary = _call_summary_model(conversation_text)
-        return summary
+        return _call_summary_model(conversation_text, channel_id, thread_ts)
 
     except Exception as e:
         return f"Error summarizing thread: {str(e)}"
@@ -62,7 +61,37 @@ def _format_messages(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _call_summary_model(conversation_text: str) -> str:
+def _call_summary_model(conversation_text: str, channel_id: str = "", thread_ts: str = "") -> str:
+    """Summarize via the summarizer subagent (reuses the main provider fallback chain).
+
+    Falls back to the old direct Anthropic/OpenAI calls if the subagent path is
+    unavailable.
+    """
+    try:
+        from agent.deps import AgentDeps
+        from agent.subagents import run_subagent
+
+        from slack_sdk import WebClient
+
+        client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
+        deps = AgentDeps(
+            client=client,
+            user_id=os.environ.get("COOLTON_USER_ID", "") or "",
+            channel_id=channel_id,
+            thread_ts=thread_ts or "",
+            message_ts="1.0",
+            user_token=os.environ.get("SLACK_USER_TOKEN"),
+        )
+        task = (
+            "Summarize this Slack conversation clearly and concisely. Preserve decisions, "
+            f"open questions, and action items when present.\n\n{conversation_text[:20000]}"
+        )
+        summary = run_subagent("summarizer", task, deps)
+        if summary:
+            return summary
+    except Exception:
+        pass
+
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     openai_key = os.environ.get("OPENAI_API_KEY")
 

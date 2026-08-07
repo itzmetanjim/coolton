@@ -65,11 +65,44 @@ def search_slack_messages(
         return f"Error searching Slack: {str(e)}"
 
 
+def assert_readable_channel(channel_id: str, current_channel_id: str = "") -> str | None:
+    """Refuse to read DMs, private channels, or external conversations (mirrors gorkie).
+
+    Reading the current channel is always allowed. Otherwise the channel must be a
+    workspace-visible (public) channel. Returns an error string, or None if allowed.
+    """
+    if not channel_id or not current_channel_id:
+        return None
+    if channel_id == current_channel_id:
+        return None
+    try:
+        response = requests.get(
+            f"{SLACK_API}/conversations.info",
+            params={"channel": channel_id},
+            headers={"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN', '')}"},
+            timeout=10,
+        )
+        ch = (response.json() or {}).get("channel", {})
+        kind = (ch.get("id") or ch.get("type") or "")[:1]
+        is_private = (
+            ch.get("is_private")
+            or ch.get("is_mpim")
+            or kind in ("D", "G")
+            or ch.get("is_org_shared")
+        )
+        if is_private:
+            return "Reading DMs, private channels, or external conversations is not allowed."
+    except Exception:
+        pass
+    return None
+
+
 def read_conversation_history(
     channel_id: str,
     limit: int = 20,
     cursor: str = "",
     thread_ts: str = "",
+    current_channel_id: str = "",
 ) -> str:
     """Read recent messages from a Slack channel, or replies within a thread.
 
@@ -78,12 +111,17 @@ def read_conversation_history(
         limit: Number of messages to read (default 20, max 200).
         cursor: Pagination cursor to read older messages (pass the returned next_cursor).
         thread_ts: If set, read replies in the thread with this timestamp instead.
+        current_channel_id: The channel the request came from (only this, or public
+            channels, may be read; DMs/private/external are refused).
     """
     bot_token = os.environ.get("SLACK_BOT_TOKEN")
     if not bot_token:
         return "Error: SLACK_BOT_TOKEN not configured"
     if not channel_id:
         return "Error: channel_id is required"
+    denied = assert_readable_channel(channel_id, current_channel_id)
+    if denied:
+        return f"Error: {denied}"
     try:
         if thread_ts:
             method = "conversations.replies"
