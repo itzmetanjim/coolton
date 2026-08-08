@@ -242,6 +242,7 @@ TOOL_DISPLAY_NAMES = {
     "slack_api_call": "Calling Slack API",
     "slack_api_call_as_bot_tool": "Calling Slack API (bot)",
     "leave_thread_tool": "Leaving thread",
+    "join_thread_tool": "Joining thread",
     "send_message": "Sending message",
     "agentmail_create_inbox": "Creating AgentMail inbox",
     "agentmail_list_inboxes": "Listing AgentMail inboxes",
@@ -297,8 +298,8 @@ def build_plan_hooks():
             call.tool_name,
             _truncate(_pretty_args(args), 1000),
         )
-        # If the user sent !stop after this run started, halt before the next tool.
-        if stop_requested_for(deps.user_id, deps.run_started_at):
+        # If the user sent !stop in this thread after this run started, halt before the next tool.
+        if stop_requested_for(deps.channel_id, deps.thread_ts, deps.run_started_at):
             raise HaltRun("!stop requested")
         if not deps.plan_ts:
             return args

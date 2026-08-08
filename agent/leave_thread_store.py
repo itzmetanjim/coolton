@@ -22,40 +22,36 @@ def _save_store(data: dict):
 
 
 def leave_thread(channel_id: str, thread_ts: str) -> str:
-    """Mark a thread as left - bot will ignore future messages in this thread until mentioned."""
+    """Mark a thread as left - bot will ignore future messages here until mentioned again."""
     key = f"{channel_id}:{thread_ts}"
     with leave_thread_lock:
         data = _load_store()
-        data[key] = {"left_at": time.time()}
+        data[key] = {"engaged": False, "updated_at": time.time()}
         _save_store(data)
     return f"Left thread {thread_ts} in channel {channel_id}. I'll ignore messages here until you @mention me again."
 
 
-def is_thread_left(channel_id: str, thread_ts: str) -> bool:
-    """Check if bot has left this thread."""
+def join_thread(channel_id: str, thread_ts: str) -> str:
+    """Mark a thread as joined - bot will respond to every message here until told to leave."""
     key = f"{channel_id}:{thread_ts}"
     with leave_thread_lock:
         data = _load_store()
-        return key in data
+        data[key] = {"engaged": True, "updated_at": time.time()}
+        _save_store(data)
+    return f"Joined thread {thread_ts} in channel {channel_id}. I'll respond to every message here until you tell me to leave."
 
 
-def rejoin_thread(channel_id: str, thread_ts: str) -> str:
-    """Rejoin a previously left thread (called when bot is mentioned)."""
+def is_thread_engaged(channel_id: str, thread_ts: str, is_dm: bool = False) -> bool:
+    """Whether the bot responds to every (non-mentioned) message in this thread.
+
+    DMs are engaged by default. Channel threads are only engaged once joined:
+    auto-joined by a mention on the thread's starter message, or explicitly via
+    the join_thread tool. A mid-thread mention answers once but does not join.
+    """
     key = f"{channel_id}:{thread_ts}"
     with leave_thread_lock:
         data = _load_store()
-        if key in data:
-            del data[key]
-            _save_store(data)
-            return f"Rejoined thread {thread_ts} in channel {channel_id}."
-    return "Thread was not left."
-
-
-def should_ignore_thread(channel_id: str, thread_ts: str, text: str) -> bool:
-    """Check if bot should ignore this message (thread left AND coolton not @mentioned)."""
-    if not is_thread_left(channel_id, thread_ts):
-        return False
-    bot_id = os.environ.get("COOLTON_BOT_ID", "")
-    if bot_id and f"<@{bot_id}>" in text:
-        return False
-    return True
+        entry = data.get(key)
+        if entry is None:
+            return is_dm
+        return bool(entry.get("engaged", is_dm))

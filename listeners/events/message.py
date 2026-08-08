@@ -6,7 +6,7 @@ from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
-from agent.leave_thread_store import should_ignore_thread
+from agent.leave_thread_store import is_thread_engaged
 from agent.stop_store import request_stop
 from thread_context import conversation_store
 from listeners.views.feedback_builder import build_feedback_blocks
@@ -50,9 +50,9 @@ def handle_message(
     thread_ts = event.get("thread_ts") or event["ts"]
     user_id = context.user_id
 
-    # !stop: immediately halt every coolton run this user has going.
+    # !stop: immediately halt every coolton run in this thread.
     if "!stop" in text:
-        request_stop(user_id)
+        request_stop(channel_id, thread_ts)
         say(
             text="⏹️ stopping all your running coolton instances…",
             thread_ts=thread_ts,
@@ -74,23 +74,17 @@ def handle_message(
         logger.info(f"Ignoring ping-group mention without direct bot mention: {text[:80]}")
         return
 
-    # If we've left this thread, ignore non-mention messages here.
-    if should_ignore_thread(channel_id, thread_ts, text):
-        logger.info(f"Ignoring message in left thread {thread_ts} ({channel_id})")
+    is_dm = event.get("channel_type") == "im"
+
+    # Top-level channel messages are handled by app_mentioned.
+    if not is_dm and not event.get("thread_ts"):
         return
 
-    is_dm = event.get("channel_type") == "im"
-    is_thread_reply = event.get("thread_ts") is not None
-
-    if is_dm:
-        pass
-    elif is_thread_reply:
-        # Channel thread replies are handled only if the bot is already engaged
-        history = conversation_store.get_history(channel_id, thread_ts)
-        if history is None:
-            return
-    else:
-        # Top-level channel messages are handled by app_mentioned
+    # Channel thread replies are handled only while the bot is joined (engaged)
+    # in the thread. A mid-thread mention answers once but does not join, so a
+    # non-mentioned reply here means we aren't joined and should be ignored.
+    if not is_thread_engaged(channel_id, thread_ts, is_dm):
+        logger.info(f"Ignoring message in unjoined thread {thread_ts} ({channel_id})")
         return
 
     try:

@@ -6,7 +6,7 @@ from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
 from agent.ensure_coolton_user import ensure_coolton_user_in_channel
-from agent.leave_thread_store import rejoin_thread
+from agent.leave_thread_store import join_thread
 from agent.stop_store import request_stop
 from thread_context import conversation_store
 from listeners.views.feedback_builder import build_feedback_blocks
@@ -37,9 +37,9 @@ def handle_app_mentioned(
         thread_ts = event.get("thread_ts") or event["ts"]
         user_id = context.user_id
 
-        # !stop: immediately halt every coolton run this user has going.
+        # !stop: immediately halt every coolton run in this thread.
         if "!stop" in text:
-            request_stop(user_id)
+            request_stop(channel_id, thread_ts)
             say(
                 text="⏹️ stopping all your running coolton instances…",
                 thread_ts=thread_ts,
@@ -50,8 +50,11 @@ def handle_app_mentioned(
         if event.get("channel_type") != "im":
             ensure_coolton_user_in_channel(client, channel_id)
 
-        # A direct mention re-engages us in a previously left thread.
-        rejoin_thread(channel_id, thread_ts)
+        # A mention on the thread's starter message auto-joins the thread so we
+        # respond to every subsequent message. A mid-thread mention answers once
+        # but does NOT join — we only respond again when mentioned again.
+        if event["ts"] == thread_ts:
+            join_thread(channel_id, thread_ts)
 
         # The bot mention stays in the text verbatim — the model is taught to read
         # <@BOTID> as "@coolton". Only use a stripped copy to test for empty pings.
