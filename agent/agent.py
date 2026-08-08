@@ -853,6 +853,7 @@ CODE_MODE_EXCLUDED_TOOLS = {
     "upload_file_from_sandbox",
     "skip",
     "leave_thread_tool",
+    "join_thread_tool",
 }
 
 
@@ -1685,12 +1686,25 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, params: 
 
 @agent.tool
 def leave_thread_tool(ctx: RunContext[AgentDeps]) -> str:
-    """Leave the current thread - bot will ignore all future messages in this thread until @mentioned again.
-    
-    Use this when you want to stop responding in a thread but still want to be available if mentioned.
+    """Leave the current thread - ignore messages here until coolton is mentioned again.
+
+    Use this when the user asks you to stop responding in a thread. A mid-thread
+    mention still answers once but does not rejoin the thread.
     """
     from agent.leave_thread_store import leave_thread
     return leave_thread(ctx.deps.channel_id, ctx.deps.thread_ts)
+
+
+@agent.tool
+def join_thread_tool(ctx: RunContext[AgentDeps]) -> str:
+    """Join the current thread - respond to every message here until told to leave.
+
+    Normally coolton only joins a thread when its starter message mentions it;
+    a mid-thread mention answers once without joining. Use this when the user
+    asks you to stay in (or keep responding in) this thread.
+    """
+    from agent.leave_thread_store import join_thread
+    return join_thread(ctx.deps.channel_id, ctx.deps.thread_ts)
 
 
 @agent.tool

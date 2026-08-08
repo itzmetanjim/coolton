@@ -14,7 +14,7 @@ Security:
     git traffic). The tool proxy only knows about tokens/sandboxes registered by `code_mode`
     for this process, so a token can never be used outside its own thread's deps.
   * Only allowlisted tools can be called. Sandbox tools (recursion), `code_mode` itself, and
-    control-flow tools (`skip`, `leave_thread_tool`) are excluded.
+    control-flow tools (`skip`, `leave_thread_tool`, `join_thread_tool`) are excluded.
 """
 
 import json

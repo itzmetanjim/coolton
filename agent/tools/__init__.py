@@ -16,7 +16,7 @@ from .data_analysis import (
     install_opencode_in_sandbox,
     run_python_data_analysis,
 )
-from .leave_thread import leave_thread_tool, rejoin_thread_tool
+from .leave_thread import leave_thread_tool, join_thread_tool
 from .slack_bot_api import slack_api_call_as_bot
 from .slack_info import (
     get_user_info,
@@ -52,7 +52,7 @@ __all__ = [
     "install_opencode_in_sandbox",
     "run_python_data_analysis",
     "leave_thread_tool",
-    "rejoin_thread_tool",
+    "join_thread_tool",
     "slack_api_call_as_bot",
     "get_user_info",
     "get_channel_info",
