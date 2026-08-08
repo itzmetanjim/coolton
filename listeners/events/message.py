@@ -33,6 +33,11 @@ def handle_message(
     if event.get("bot_id"):
         return
 
+    # Hardcoded: never respond in this channel, no matter what. The agent
+    # doesn't even start.
+    if context.channel_id == "C06QV2T1P4G":
+        return
+
     # Mentions of the bot are owned by handle_app_mentioned (the app_mention event).
     # Without this guard, a mention inside an engaged thread is picked up here too,
     # launching a second coolton alongside the one from app_mention.

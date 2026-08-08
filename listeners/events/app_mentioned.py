@@ -24,6 +24,12 @@ def handle_app_mentioned(
     """Handle @mentions in channels."""
     try:
         channel_id = context.channel_id
+
+        # Hardcoded: never respond in this channel, no matter what. The agent
+        # doesn't even start.
+        if channel_id == "C06QV2T1P4G":
+            return
+
         text = event.get("text", "")
         if text.strip().startswith("##"):
             logger.info(f"Ignoring message starting with '##': {text}")
