@@ -78,6 +78,9 @@ def handle_app_mentioned(
                 client, channel_id, thread_ts, exclude_ts=event["ts"]
             )
 
+        from agent.tools.vision import download_attached_images
+        images = download_attached_images(client, event.get("files"))
+
         run_agent_turn(
             client=client,
             say_stream=say_stream,
@@ -90,6 +93,7 @@ def handle_app_mentioned(
             user_token=context.user_token,
             text=text,
             history=history,
+            images=images,
         )
     except Exception as e:
         logger.exception(f"Failed to handle app mention: {e}")

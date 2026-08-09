@@ -36,6 +36,7 @@ def run_agent_turn(
     user_token: str | None,
     text: str,
     history,
+    images: list[dict] | None = None,
 ) -> None:
     """Run one agent turn: status → plan message → run → stream → history → kevinton.
 
@@ -70,7 +71,7 @@ def run_agent_turn(
         plan_ts = send_plan_message(deps)
         deps.plan_ts = plan_ts
 
-        result = run_agent(text, deps, message_history=history)
+        result = run_agent(text, deps, message_history=history, images=images)
 
         if deps.should_skip:
             if "!stop" in deps.halt_reason:

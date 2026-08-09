@@ -208,6 +208,7 @@ TOOL_DISPLAY_NAMES = {
     "upload_file_from_sandbox": "Uploading file",
     "search_web_tool": "Searching the web",
     "analyze_image_tool": "Analyzing image",
+    "see_image_from_sandbox": "Viewing sandbox image",
     "generate_image_tool": "Generating image",
     "render_mermaid_tool": "Rendering diagram",
     "summarize_thread_tool": "Summarizing thread",
