@@ -1201,7 +1201,7 @@ def upload_file_from_sandbox(
         if not sandbox_id:
             return "No active sandbox for this thread."
         sandbox = Sandbox.connect(sandbox_id)
-        file_content = sandbox.files.read(filepath)
+        file_content = bytes(sandbox.files.read(filepath, format="bytes"))
         if file_content is None:
             return f"Error: File not found at {filepath}"
         filename = os.path.basename(filepath)
@@ -1255,7 +1255,7 @@ def analyze_image_tool(ctx: RunContext[AgentDeps], image_path: str, prompt: str 
         return "No active sandbox. Use download_attachments_to_sandbox first."
     try:
         sandbox = Sandbox.connect(sandbox_id)
-        image_data = sandbox.files.read(image_path)
+        image_data = bytes(sandbox.files.read(image_path, format="bytes"))
         if image_data is None:
             return f"Error: File not found at {image_path}"
         from agent.tools.vision import analyze_image
@@ -1308,7 +1308,7 @@ def see_image_from_sandbox(ctx: RunContext[AgentDeps], path: str) -> ToolReturn[
         )
     try:
         sandbox = Sandbox.connect(sandbox_id)
-        data = sandbox.files.read(path)
+        data = bytes(sandbox.files.read(path, format="bytes"))
     except Exception as e:
         return ToolReturn(f"Error reading {path} from sandbox: {e}")
     if not data:

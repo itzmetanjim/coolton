@@ -76,8 +76,8 @@ class _FakeFiles:
     def __init__(self, content):
         self._content = content
 
-    def read(self, path):
-        return self._content
+    def read(self, path, format="text"):
+        return self._content if format == "bytes" else self._content.decode("utf-8", errors="replace")
 
 
 class _FakeSandbox:
