@@ -12,7 +12,7 @@ from pydantic_ai import RunContext
 from pydantic_ai import Agent
 from pydantic_ai.messages import BinaryContent, ToolReturn
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
-from pydantic_ai.capabilities import PrepareTools
+from pydantic_ai.capabilities import Hooks, PrepareTools
 from dataclasses import replace
 from agent.deps import AgentDeps
 from agent.stop_store import HaltRun
@@ -722,10 +722,29 @@ def get_user_text_endpoint(user_id: str | None) -> dict | None:
 
 SLACK_MCP_URL = "https://mcp.slack.com/mcp"
 
+def _redact_tool_result(ctx, *, call, tool_def, args, result):
+    if isinstance(result, str):
+        return _redact(result, context=f"tool {tool_def.name}")
+    return result
+
+
+def _redact_output(ctx, *, output_context, output):
+    if isinstance(output, str):
+        return _redact(output, context="final response")
+    return output
+
+
+_hooks = Hooks(
+    after_tool_execute=_redact_tool_result,
+    after_output_process=_redact_output,
+)
+
+
 agent = Agent(
     deps_type=AgentDeps,
     system_prompt=SYSTEM_PROMPT,
     tools=[add_emoji_reaction],
+    capabilities=[_hooks],
 )
 
 @agent.tool
@@ -1749,11 +1768,11 @@ def send_message(ctx: RunContext[AgentDeps], text: str) -> str:
         ctx.deps.client.chat_postMessage(
             channel=ctx.deps.channel_id,
             thread_ts=ctx.deps.thread_ts,
-            text=text,
+            text=_redact(text, context="send_message"),
         )
         return "Message sent."
     except Exception as e:
-        return f"Failed to send message: {e}"
+        return f"Failed to send message: {_redact(str(e), context='send_message')}"
 
 
 @agent.tool

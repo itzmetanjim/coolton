@@ -11,6 +11,7 @@ from slack_bolt import Say, SayStream
 from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
+from agent.redact import redact as _redact
 from thread_context import conversation_store
 from listeners.views.feedback_builder import build_feedback_blocks
 
@@ -85,7 +86,7 @@ def run_agent_turn(
 
             # Stream response in thread with feedback buttons
             streamer = say_stream()
-            streamer.append(markdown_text=result.output)
+            streamer.append(markdown_text=_redact(result.output, context="final response"))
             feedback_blocks = build_feedback_blocks()
             streamer.stop(blocks=feedback_blocks)
             complete_plan_message(deps)
@@ -108,6 +109,6 @@ def run_agent_turn(
         except Exception:
             pass
         say(
-            text=f":warning: Something went wrong! ({type(e).__name__}: {e})",
+            text=f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})",
             thread_ts=thread_ts,
         )
