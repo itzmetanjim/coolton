@@ -460,8 +460,8 @@ Use to create and share a Felix whiteboard (tldraw).
 ## HTML EMBED (send_html_embed_tool)
 Use to send custom HTML as a quick inline preview/demo. NOT a real hosted website — if the user
 wants a site they can keep visiting or share, deploy it with the cf-wrangler skill instead.
-- Hosts the HTML as a short URL on the file server (tanjim.org:2390) and posts the link so
-  Slack renders a preview card. Never put base64 HTML in a URL.
+- Hosts the HTML as a short URL on the file server (2390.proxy.tanjim.org) and sends it as a
+  Slack embed (same mechanism as the whiteboard embed). Never put base64 HTML in a URL.
 
 ## SEND MESSAGE (send_message)
 Use `send_message` to send a message to the current thread mid-turn without ending your turn.
@@ -1703,34 +1703,6 @@ def send_whiteboard_embed_tool(
     return send_whiteboard_embed(channel_id=ctx.deps.channel_id, text=text, title=title, whiteboard_id=whiteboard_id)
 
 
-def _post_link_message(channel_id: str, url: str, text: str, thread_ts: str = "") -> str:
-    """Post a message containing a URL so Slack classic-unfurls it into a link card."""
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    if not token:
-        return "Error: SLACK_BOT_TOKEN not configured"
-    payload = {
-        "channel": channel_id,
-        "text": f"{text}\n{url}",
-        "unfurl_links": True,
-        "unfurl_media": True,
-    }
-    if thread_ts:
-        payload["thread_ts"] = thread_ts
-    try:
-        response = requests.post(
-            "https://slack.com/api/chat.postMessage",
-            json=payload,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"},
-            timeout=20,
-        )
-        res_json = response.json()
-        if res_json.get("ok"):
-            return f"Success: Embed sent to {channel_id}"
-        return f"Error: {res_json.get('error', 'unknown')} | url: {url}"
-    except Exception as e:
-        return f"Error sending embed: {str(e)}"
-
-
 def send_html_embed(
     channel_id: str, html: str, text: str = "html embed", title: str = "html embed",
     user_token: str | None = None,
@@ -1748,7 +1720,8 @@ def send_html_embed(
         url = upload_bytes(html.encode(), "embed.html", mime="text/html")
     except Exception as e:
         return f"Error hosting HTML embed: {e}"
-    return _post_link_message(channel_id=channel_id, url=url, text=text)
+    thumbnail_url = "https://placehold.co/1280x720?text=click%20to%20open%20the%20\\ncoolton%20embed"
+    return send_web_embed(channel_id=channel_id, text=text, url=url, title=title, thumbnail_url=thumbnail_url, user_token=user_token)
 
 
 @agent.tool
@@ -1756,15 +1729,16 @@ def send_html_embed_tool(
     ctx: RunContext[AgentDeps], html: str, text: str = "html embed",
     title: str = "html embed",
 ) -> str:
-    """Send custom HTML as a live link card in the current channel.
+    """Send custom HTML as a live embed in the current channel.
 
-    Your HTML is hosted on the coolton file server (tanjim.org:2390) and the
-    link is posted so Slack renders it as a preview card. There is no size limit.
+    Your HTML is hosted on the coolton file server (2390.proxy.tanjim.org) as a
+    short URL and sent as a Slack embed (same mechanism as the whiteboard embed).
+    There is no size limit.
 
     Args:
         html: Raw HTML content.
         text: Fallback text (default: "html embed").
-        title: Card title (default: "html embed").
+        title: Embed title (default: "html embed").
     """
     return send_html_embed(channel_id=ctx.deps.channel_id, html=html, text=text, title=title)
 
