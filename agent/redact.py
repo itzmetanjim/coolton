@@ -54,3 +54,18 @@ def redact(msg: str, context: str = "") -> str:
         except Exception:
             pass
     return msg
+
+
+def strip_secret_keys(obj):
+    """Recursively drop token/secret-typed keys from parsed JSON (e.g. Slack
+    `api.test` echoes the token back under `args.token`). The value never
+    reaches the output at all, so it can't be leaked or misused."""
+    if isinstance(obj, dict):
+        return {
+            k: strip_secret_keys(v)
+            for k, v in obj.items()
+            if not any(hint in k.upper() for hint in _SECRET_NAME_HINTS)
+        }
+    if isinstance(obj, list):
+        return [strip_secret_keys(item) for item in obj]
+    return obj

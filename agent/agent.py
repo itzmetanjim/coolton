@@ -18,7 +18,7 @@ from agent.deps import AgentDeps
 from agent.stop_store import HaltRun
 from agent.tools import add_emoji_reaction
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
-from agent.redact import redact as _redact
+from agent.redact import redact as _redact, strip_secret_keys as _strip_secret_keys
 from e2b import Sandbox
 from agent.sandbox_store import get_thread_sandbox_id
 from agent.sandbox_helpers import get_or_create_sandbox, _proxy_env
@@ -1710,7 +1710,7 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str
     }
     try:
         response = requests.post(url, data=form, headers=headers)
-        res_json = response.json()
+        res_json = _strip_secret_keys(response.json())
         if res_json.get("ok"):
             return f"Success: {_redact(str(res_json), context='slack_api_call')}"
         return f"Slack API error: {_redact(str(res_json.get('error', 'unknown')), context='slack_api_call')}"
