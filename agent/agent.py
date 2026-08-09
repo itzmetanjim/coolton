@@ -532,14 +532,24 @@ def get_model() -> str:
         _cached_model = "openrouter:moonshotai/kimi-k2.6"
     elif os.environ.get("HCAI_API_KEY"):
         _cached_model = "openai:moonshotai/kimi-k2.6"
+    elif os.environ.get("OPENROUTER_API_KEY"):
+        _cached_model = "openrouter:openai/gpt-4.1-mini"
     elif os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
         _cached_model = "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"
+    elif os.environ.get("GOOGLE_API_KEY"):
+        _cached_model = "google:gemini-3.1-flash-lite"
+    elif os.environ.get("GROQ_API_KEY"):
+        _cached_model = "groq:qwen/qwen3-32b"
+    elif os.environ.get("MISTRAL_API_KEY"):
+        _cached_model = "mistral:mistral-large-2512"
     elif os.environ.get("CEREBRAS_API_KEY"):
         _cached_model = "cerebras:zai-glm-4.7"
     else:
         raise RuntimeError(
-            "No AI provider configured. "
-            "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or JAMS_API_KEY."
+            "No AI provider configured. Set at least one supported provider key: "
+            "ANTHROPIC_API_KEY, OPENAI_API_KEY, JAMS_API_KEY, HCAI_API_KEY, "
+            "OPENROUTER_API_KEY, OPENROUTER_API_KEY_FALLBACK, GOOGLE_API_KEY, "
+            "GROQ_API_KEY, MISTRAL_API_KEY, or CEREBRAS_API_KEY."
         )
     return _cached_model
 
