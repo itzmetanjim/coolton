@@ -2,6 +2,8 @@ import os
 import json
 import requests
 
+from agent.redact import redact
+
 
 def slack_api_call_as_bot(method: str, params: dict) -> str:
     """Make an arbitrary Slack API call as the BOT (not cooltonUser).
@@ -35,9 +37,9 @@ def slack_api_call_as_bot(method: str, params: dict) -> str:
         res_json = response.json()
         
         if res_json.get("ok"):
-            return f"Success: {res_json}"
+            return f"Success: {redact(str(res_json), context='slack_api_call_as_bot')}"
         
-        return f"Slack API error: {res_json.get('error', 'unknown')}"
+        return f"Slack API error: {redact(str(res_json.get('error', 'unknown')), context='slack_api_call_as_bot')}"
         
     except Exception as e:
-        return f"Error executing Slack API call: {str(e)}"
+        return f"Error executing Slack API call: {redact(str(e), context='slack_api_call_as_bot')}"

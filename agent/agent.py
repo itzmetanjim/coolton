@@ -18,6 +18,7 @@ from agent.deps import AgentDeps
 from agent.stop_store import HaltRun
 from agent.tools import add_emoji_reaction
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
+from agent.redact import redact as _redact
 from e2b import Sandbox
 from agent.sandbox_store import get_thread_sandbox_id
 from agent.sandbox_helpers import get_or_create_sandbox, _proxy_env
@@ -707,45 +708,6 @@ def _build_provider_order(deps_user_id: str | None = None) -> list:
     if os.environ.get("CEREBRAS_API_KEY"):
         provider_order.append(("cerebras", {"model": "cerebras:zai-glm-4.7", "base_url": None, "api_key": os.environ["CEREBRAS_API_KEY"]}))
     return provider_order
-
-
-_SECRET_ENV_KEYS = (
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "JAMS_API_KEY",
-    "HCAI_API_KEY",
-    "GROQ_API_KEY",
-    "GOOGLE_API_KEY",
-    "MISTRAL_API_KEY",
-    "CEREBRAS_API_KEY",
-    "OPENROUTER_API_KEY_FALLBACK",
-    "SLACK_BOT_TOKEN",
-    "SLACK_USER_TOKEN",
-    "COOLTON_GH_TOKEN",
-    "GH_PROXY_ADMIN_TOKEN",
-    "GH_PROXY_TOKEN",
-)
-
-_secret_values_cache = None
-_secret_values_lock = threading.Lock()
-
-
-def _secret_values() -> list[str]:
-    global _secret_values_cache
-    with _secret_values_lock:
-        if _secret_values_cache is None:
-            _secret_values_cache = [
-                v for k, v in os.environ.items() if k in _SECRET_ENV_KEYS and v
-            ]
-    return _secret_values_cache
-
-
-def _redact(msg: str) -> str:
-    """Strip API keys/tokens out of an error string before logging or storing it."""
-    for secret in _secret_values():
-        if secret:
-            msg = msg.replace(secret, "***")
-    return msg
 
 
 def get_user_text_endpoint(user_id: str | None) -> dict | None:
@@ -1731,10 +1693,10 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str
         response = requests.post(url, data=form, headers=headers)
         res_json = response.json()
         if res_json.get("ok"):
-            return f"Success: {res_json}"
-        return f"Slack API error: {res_json.get('error', 'unknown')}"
+            return f"Success: {_redact(str(res_json), context='slack_api_call')}"
+        return f"Slack API error: {_redact(str(res_json.get('error', 'unknown')), context='slack_api_call')}"
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {_redact(str(e), context='slack_api_call')}"
 
 
 @agent.tool
@@ -2381,9 +2343,9 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
 
             except Exception as e:
                 if is_fatal_error(e):
-                    logger.critical(f"Fatal error in {provider_name}: {_redact(str(e))}")
+                    logger.critical(f"Fatal error in {provider_name}: {_redact(str(e), context='provider {provider_name}')}")
                     raise
-                err = _redact(str(e))
+                err = _redact(str(e), context=f"provider {provider_name}")
                 all_errors.append(f"{provider_name}: {err}")
                 if is_hard_error(e):
                     if provider_name != "byok":
