@@ -33,3 +33,19 @@ def save_thread_sandbox_id(channel_id: str, thread_ts: str, sandbox_id: str):
         with open(temp, "w") as f:
             json.dump(data, f, indent=2)
         os.replace(temp, SANDBOX_STORE_FILE)
+
+def delete_thread_sandbox_id(channel_id: str, thread_ts: str):
+    """Remove the stored E2B sandbox ID for a specific Slack thread, if present."""
+    data = {}
+    with store_lock:
+        if os.path.exists(SANDBOX_STORE_FILE):
+            try:
+                with open(SANDBOX_STORE_FILE, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        data.pop(f"{channel_id}:{thread_ts}", None)
+        temp = f"{SANDBOX_STORE_FILE}.tmp"
+        with open(temp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(temp, SANDBOX_STORE_FILE)

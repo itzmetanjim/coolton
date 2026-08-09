@@ -93,8 +93,7 @@ def _ctx():
 
 def test_see_image_returns_binary_content(monkeypatch, clean_env):
     monkeypatch.setenv("E2B_API_KEY", "e2b")
-    monkeypatch.setattr(agent_mod, "get_thread_sandbox_id", lambda c, t: "sbx1")
-    monkeypatch.setattr(agent_mod.Sandbox, "connect", lambda sid: _FakeSandbox(b"png-bytes"))
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (_FakeSandbox(b"png-bytes"), {}))
     res = agent_mod.see_image_from_sandbox(_ctx(), "~/downloads/photo.png")
     assert isinstance(res, ToolReturn)
     assert res.return_value.startswith("Here is the image")
@@ -108,7 +107,6 @@ def test_see_image_returns_binary_content(monkeypatch, clean_env):
 
 def test_see_image_rejects_non_image(monkeypatch, clean_env):
     monkeypatch.setenv("E2B_API_KEY", "e2b")
-    monkeypatch.setattr(agent_mod, "get_thread_sandbox_id", lambda c, t: "sbx1")
     res = agent_mod.see_image_from_sandbox(_ctx(), "/home/user/notes.txt")
     assert isinstance(res, ToolReturn)
     assert "unsupported file type" in res.return_value
@@ -116,18 +114,24 @@ def test_see_image_rejects_non_image(monkeypatch, clean_env):
 
 def test_see_image_rejects_path_traversal(monkeypatch, clean_env):
     monkeypatch.setenv("E2B_API_KEY", "e2b")
-    monkeypatch.setattr(agent_mod, "get_thread_sandbox_id", lambda c, t: "sbx1")
     res = agent_mod.see_image_from_sandbox(_ctx(), "/home/user/../../etc/passwd.png")
     assert isinstance(res, ToolReturn)
     assert "relative paths" in res.return_value
 
 
-def test_see_image_no_sandbox(monkeypatch, clean_env):
+def test_see_image_auto_creates_sandbox(monkeypatch, clean_env):
     monkeypatch.setenv("E2B_API_KEY", "e2b")
-    monkeypatch.setattr(agent_mod, "get_thread_sandbox_id", lambda c, t: None)
+    created = []
+
+    def fake_get_or_create(channel, thread_ts):
+        created.append((channel, thread_ts))
+        return _FakeSandbox(b"png-bytes"), {}
+
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", fake_get_or_create)
     res = agent_mod.see_image_from_sandbox(_ctx(), "~/x.png")
     assert isinstance(res, ToolReturn)
-    assert "No active sandbox" in res.return_value
+    assert res.return_value.startswith("Here is the image")
+    assert created == [("C1", "1.1")]
 
 
 # ---------------------------------------------------------------------------
