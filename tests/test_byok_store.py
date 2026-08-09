@@ -15,7 +15,9 @@ def tmp_store(monkeypatch, tmp_path):
 
 
 def test_add_endpoint_sets_text_default(tmp_store):
-    ep_id = store.add_endpoint("U1", "My OpenAI", "https://api.openai.com/v1/", "sk-test", "gpt-4o")
+    ep_id = store.add_endpoint(
+        "U1", "My OpenAI", "https://api.openai.com/v1/", "sk-test", "gpt-4o"
+    )
     assert ep_id.startswith("ep_")
     assert store.get_text_endpoint_id("U1") == ep_id
     # trailing slash stripped
@@ -103,3 +105,37 @@ def test_key_from_file_used_when_env_unset(monkeypatch, tmp_path):
 
     ep_id = store.add_endpoint("U1", "a", "https://1", "k1", "m1")
     assert store.get_endpoint_decrypted("U1", ep_id)["api_key"] == "k1"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://api.example.com/v1",
+        "127.0.0.1",
+        "https://127.0.0.1/v1",
+        "https://localhost/v1",
+        "https://169.254.169.254/latest/meta-data",
+        "https://api.example.com/../../etc/passwd",
+        "https://user:pass@api.example.com/v1",
+    ],
+)
+def test_endpoint_url_rejects_unsafe_urls(tmp_store, url):
+    with pytest.raises(ValueError):
+        store.add_endpoint("U1", "unsafe", url, "key", "model")
+
+
+def test_endpoint_url_accepts_public_https_and_normalizes(tmp_store):
+    ep_id = store.add_endpoint(
+        "U1", "safe", " https://api.example.com/v1/ ", "key", "model"
+    )
+    assert (
+        store.get_endpoint_decrypted("U1", ep_id)["base_url"]
+        == "https://api.example.com/v1"
+    )
+
+
+def test_endpoint_selection_rejects_unknown_endpoint(tmp_store):
+    with pytest.raises(ValueError):
+        store.set_text_endpoint("U1", "ep_missing")
+    with pytest.raises(ValueError):
+        store.set_image_endpoint("U1", "ep_missing")

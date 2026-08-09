@@ -8,6 +8,7 @@ dependencies = [
     "slack-cli-hooks<1.0.0",
     "pydantic-ai[openai]",
     "python-dotenv==1.2.2",
+    "croniter",
 ]
 
 [project.optional-dependencies]
