@@ -202,12 +202,18 @@ EOF
   # ensure /home/user/bin is ahead of /usr/local/bin on PATH for this session
   export PATH="/home/user/bin:$PATH"
 fi
+echo "==> common tools (wget, unzip, jq, ...):"
+command -v wget >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || \
+  (sudo apt-get update -qq 2>&1 | tail -1 || true) && \
+  (sudo apt-get install -y -qq wget curl unzip zip jq ca-certificates less nano vim-tiny htop file sqlite3 2>&1 | tail -1 || echo "APT_INSTALL_FAILED")
 echo "==> versions:"
 echo "git:  $(git --version 2>&1)"
 echo "node: $(node --version 2>&1)"
 echo "npm:  $(npm --version 2>&1)"
 echo "gh:   $(gh --version 2>&1 | head -1)"
 echo "py:   $(python3 --version 2>&1)"
+echo "wget: $(wget --version 2>&1 | head -1)"
+echo "jq:   $(jq --version 2>&1)"
 echo "==> python data libs (pandas, numpy, duckdb):"
 python3 -c "import pandas, numpy, duckdb" 2>/dev/null || sudo pip3 install -q --break-system-packages numpy pandas duckdb 2>&1 | tail -2 || echo "PYLIBS_INSTALL_FAILED"
 echo "==> agent-browser CLI (for web browsing):"

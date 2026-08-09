@@ -43,18 +43,10 @@ def download_attached_images(client, files, max_images: int = 4, max_bytes: int 
 
 
 def analyze_image(image_data: bytes, filename: str, prompt: str = "Describe this image in detail.") -> str:
-    """Analyze an image using the AI model with vision capabilities.
+    """Analyze an image using a vision-capable model.
 
-    Uses the globally configured model (Claude or GPT-4o). The image is
-    passed as a base64-encoded data URI.
-
-    Args:
-        image_data: Raw bytes of the image file.
-        filename: Original filename (used to infer mime type).
-        prompt: The analysis prompt (default: "Describe this image in detail.").
-
-    Returns:
-        Analysis text from the vision model.
+    Tries the vision provider chain in order and returns the first success.
+    Each provider is OpenAI-compatible (chat completions with image_url).
     """
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else "png"
     mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
@@ -62,55 +54,54 @@ def analyze_image(image_data: bytes, filename: str, prompt: str = "Describe this
     b64 = base64.b64encode(image_data).decode()
     data_uri = f"data:{mime};base64,{b64}"
 
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    openai_key = os.environ.get("OPENAI_API_KEY")
-
-    if anthropic_key:
-        return _analyze_with_anthropic(data_uri, prompt, anthropic_key)
-    elif openai_key:
-        return _analyze_with_openai(data_uri, prompt, openai_key)
-    else:
-        return "Error: No AI provider configured with vision capabilities (Anthropic or OpenAI)."
+    errors = []
+    for provider, base_url, api_key, model in _vision_provider_chain():
+        result = _analyze_openai_compatible(data_uri, prompt, base_url, api_key, model)
+        if result and not result.startswith("Error"):
+            return result
+        errors.append(f"{provider}/{model}: {result or 'empty response'}")
+    return "Error: All vision providers failed:\n" + "\n".join(errors)
 
 
-def _analyze_with_anthropic(data_uri: str, prompt: str, api_key: str) -> str:
+_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+_HCAI_BASE = "https://ai.hackclub.com/proxy/v1"
+
+
+def _vision_provider_chain() -> list[tuple[str, str, str, str]]:
+    """(provider_label, base_url, api_key, model) pairs in fallback order.
+
+    gpt-5.6-luna first (JAMS then HCAI), then the free gemma models via
+    OpenRouter fallback, then the free gemmas on JAMS/HCAI, then the paid
+    gemmas on JAMS/HCAI. JAMS is OpenRouter with a different API key.
+    """
+    chain = []
+    jams = os.environ.get("JAMS_API_KEY")
+    hcai = os.environ.get("HCAI_API_KEY")
+    orfb = os.environ.get("OPENROUTER_API_KEY_FALLBACK")
+
+    if jams:
+        chain.append(("jams", _OPENROUTER_BASE, jams, "openai/gpt-5.6-luna"))
+    if hcai:
+        chain.append(("hcai", _HCAI_BASE, hcai, "openai/gpt-5.6-luna"))
+    if orfb:
+        chain.append(("openrouter_fb", _OPENROUTER_BASE, orfb, "google/gemma-4-31b-it:free"))
+        chain.append(("openrouter_fb", _OPENROUTER_BASE, orfb, "google/gemma-4-26b-a4b-it:free"))
+    for model in ("google/gemma-4-31b-it", "google/gemma-4-26b-a4b-it"):
+        for variant in (":free", ""):
+            m = model + variant
+            if jams:
+                chain.append(("jams", _OPENROUTER_BASE, jams, m))
+            if hcai:
+                chain.append(("hcai", _HCAI_BASE, hcai, m))
+    return chain
+
+
+def _analyze_openai_compatible(data_uri: str, prompt: str, base_url: str, api_key: str, model: str) -> str:
     try:
         response = requests.post(
-            "https://api.anthropic.com/v1/messages",
+            f"{base_url}/chat/completions",
             json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 4096,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": data_uri.split(";")[0].split(":")[1], "data": data_uri.split(",")[1]}},
-                            {"type": "text", "text": prompt},
-                        ],
-                    }
-                ],
-            },
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
-            timeout=30,
-        )
-        res = response.json()
-        if "content" in res:
-            return "".join(b["text"] for b in res["content"] if b.get("type") == "text")
-        return f"Anthropic API error: {res.get('error', {}).get('message', 'unknown')}"
-    except Exception as e:
-        return f"Error analyzing image with Anthropic: {str(e)}"
-
-
-def _analyze_with_openai(data_uri: str, prompt: str, api_key: str) -> str:
-    try:
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            json={
-                "model": "gpt-4o",
+                "model": model,
                 "max_tokens": 4096,
                 "messages": [
                     {
@@ -126,11 +117,15 @@ def _analyze_with_openai(data_uri: str, prompt: str, api_key: str) -> str:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            timeout=30,
+            timeout=120,
         )
         res = response.json()
-        if "choices" in res:
-            return res["choices"][0]["message"]["content"]
-        return f"OpenAI API error: {res.get('error', {}).get('message', 'unknown')}"
+        if "choices" in res and res["choices"]:
+            content = res["choices"][0].get("message", {}).get("content")
+            if content:
+                return content
+        err = res.get("error", {})
+        message = err.get("message") if isinstance(err, dict) else err
+        return f"Error: {message or res}"
     except Exception as e:
-        return f"Error analyzing image with OpenAI: {str(e)}"
+        return f"Error: {e}"
