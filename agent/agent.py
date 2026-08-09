@@ -462,6 +462,9 @@ Use to send custom HTML as a quick inline preview/demo. NOT a real hosted websit
 wants a site they can keep visiting or share, deploy it with the cf-wrangler skill instead.
 - Hosts the HTML as a short URL on the file server (2390.proxy.tanjim.org) and sends it as a
   Slack embed (same mechanism as the whiteboard embed). Never put base64 HTML in a URL.
+- ALWAYS set explicit CSS colors (background-color AND text color, e.g. a styled <body> or <div>)
+  — the embed's default background varies by viewer theme (black, white, etc.), so relying on
+  defaults can make text invisible (e.g. black on black).
 
 ## SEND MESSAGE (send_message)
 Use `send_message` to send a message to the current thread mid-turn without ending your turn.
@@ -1734,6 +1737,12 @@ def send_html_embed_tool(
     Your HTML is hosted on the coolton file server (2390.proxy.tanjim.org) as a
     short URL and sent as a Slack embed (same mechanism as the whiteboard embed).
     There is no size limit.
+
+    IMPORTANT: the embed's default background varies (it can be black, white, or
+    the viewer's theme), so NEVER rely on default colors — always set an explicit
+    background-color AND text color in the CSS (e.g. a styled <body> or <div>
+    wrapper), otherwise text can be invisible (e.g. black text on a black
+    background).
 
     Args:
         html: Raw HTML content.
