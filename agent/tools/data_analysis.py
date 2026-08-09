@@ -14,7 +14,10 @@ def _get_sandbox(channel_id: str, thread_ts: str):
     sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
     if not sandbox_id:
         return None, "No active sandbox for this thread. Run a command first."
-    return Sandbox.connect(sandbox_id), None
+    try:
+        return Sandbox.connect(sandbox_id), None
+    except Exception as e:
+        return None, f"Error connecting to sandbox: {str(e)}"
 
 
 def extract_tar_gz_in_sandbox(channel_id: str, thread_ts: str, archive_path: str, extract_to: str = "/home/user/data") -> str:

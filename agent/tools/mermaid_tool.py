@@ -37,10 +37,14 @@ def _render_with_mermaid_ink(diagram_code: str, theme: str) -> str:
         compressed = zlib.compress(diagram_code.encode())
         encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
         url = f"{MERMAID_INK_URL}/img/{encoded}?theme={theme}"
-        # Quick HEAD request to verify
-        resp = requests.head(url, timeout=5)
+        # Some public renderers reject HEAD even when GET works. Verify with a
+        # bounded GET and discard the body so valid diagrams are not reported as
+        # failures just because the server lacks HEAD support.
+        resp = requests.get(url, timeout=10, stream=True)
         if resp.status_code == 200:
+            resp.close()
             return url
+        resp.close()
     except Exception:
         pass
     return ""
@@ -56,9 +60,11 @@ def _render_with_kroki(diagram_code: str, theme: str) -> str:
         # kroki accepts theme via query params
         if theme != "default":
             url += f"?theme={theme}"
-        resp = requests.head(url, timeout=5)
+        resp = requests.get(url, timeout=10, stream=True)
         if resp.status_code == 200:
+            resp.close()
             return url
+        resp.close()
     except Exception:
         pass
     return "Error: Failed to render diagram on both mermaid.ink and kroki.io"
