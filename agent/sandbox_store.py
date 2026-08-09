@@ -29,5 +29,7 @@ def save_thread_sandbox_id(channel_id: str, thread_ts: str, sandbox_id: str):
             except Exception:
                 pass
         data[f"{channel_id}:{thread_ts}"] = sandbox_id
-        with open(SANDBOX_STORE_FILE, "w") as f:
+        temp = f"{SANDBOX_STORE_FILE}.tmp"
+        with open(temp, "w") as f:
             json.dump(data, f, indent=2)
+        os.replace(temp, SANDBOX_STORE_FILE)

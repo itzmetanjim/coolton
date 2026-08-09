@@ -1,20 +1,14 @@
 import logging
-import os
 import threading
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent
 from pydantic_ai.capabilities import PrepareTools
 from dataclasses import replace
 
 from agent.deps import AgentDeps
 from agent.agent import (
-    create_skill,
-    install_skill,
-    rename_skill,
-    delete_skill,
     get_thread_sandbox_id,
 )
-from agent.tools.sandbox_files import read_sandbox_file
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +78,11 @@ behavior it worked around instead of fixing, or a "this should be in code, not a
 (skills/pr-and-notify) for the exact branch/commit/push/PR/DM workflow. The skill tells you to \
 DM KitKat (U0B2VTYER33) after opening the PR — ALWAYS do that step, even though you are normally \
 silent. The PR + DM is the whole point here; a fix with no PR is incomplete.
+- REMEMBER: a push is NOT a deploy. You are `coolton-agent` and cannot push to \
+`itzmetanjim/coolton`; only code KitKat merges from your PR and pulls on the host ever goes live. \
+Push your fix branch to the `coolton-agent/coolton` fork and open a PR into `itzmetanjim/coolton`. \
+NEVER push to `main`, and never report a pushed fix as "live", "deployed", or "shipped" — report it \
+as "PR opened".
 - Prefer editing the actual source (agent/*.py, listeners/*, skills/*) over creating a skill when \
 the fix is a code change. Read the relevant file in the sandbox first (read_sandbox_file) to \
 ground the fix.

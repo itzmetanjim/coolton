@@ -1,4 +1,5 @@
 import os
+import shlex
 
 from agent.sandbox_store import get_thread_sandbox_id
 try:
@@ -61,7 +62,7 @@ def write_sandbox_file(channel_id: str, thread_ts: str, path: str, content: str)
     try:
         parent = os.path.dirname(path)
         if parent:
-            sandbox.commands.run(f"mkdir -p {parent}")
+            sandbox.commands.run(f"mkdir -p {shlex.quote(parent)}")
         sandbox.files.write(path, content.encode())
         return f"Written {len(content)} bytes to {path}"
     except Exception as e:
@@ -84,7 +85,7 @@ def search_sandbox_files(channel_id: str, thread_ts: str, pattern: str, path: st
     if err:
         return err
     try:
-        result = sandbox.commands.run(f"grep -rn '{pattern}' {path} 2>/dev/null || echo 'No matches found'")
+        result = sandbox.commands.run(f"grep -rn {shlex.quote(pattern)} {shlex.quote(path)} 2>/dev/null || echo 'No matches found'")
         output = []
         if result.stdout:
             output.append(result.stdout)
@@ -111,7 +112,7 @@ def list_sandbox_files(channel_id: str, thread_ts: str, pattern: str = "*", path
     if err:
         return err
     try:
-        result = sandbox.commands.run(f"find {path} -name '{pattern}' -type f 2>/dev/null | head -50")
+        result = sandbox.commands.run(f"find {shlex.quote(path)} -name {shlex.quote(pattern)} -type f 2>/dev/null | head -50")
         if result.stdout:
             return result.stdout
         return "No files found."

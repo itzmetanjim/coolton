@@ -57,6 +57,10 @@ oauth_settings = OAuthSettings(
 # work before anyone has completed the OAuth flow.
 
 _fallback_bot_token = os.environ.get("SLACK_BOT_TOKEN")
+# The fallback token only applies to the team it was minted for. If the app was
+# installed for a specific team, refuse to serve other teams with it (no
+# cross-tenant token sharing). Leave empty for legacy single-team setups.
+_fallback_team_id = os.environ.get("SLACK_TEAM_ID", "")
 
 if _fallback_bot_token:
     _original_authorize = oauth_settings.authorize
@@ -82,6 +86,14 @@ if _fallback_bot_token:
         )
         if result is not None:
             return result
+
+        if _fallback_team_id and team_id and team_id != _fallback_team_id:
+            logger.warning(
+                "Refusing to serve team %s with the initial SLACK_BOT_TOKEN (expected %s)",
+                team_id,
+                _fallback_team_id,
+            )
+            return None
 
         logger.info(
             "No OAuth installation found (team=%s); falling back to SLACK_BOT_TOKEN",

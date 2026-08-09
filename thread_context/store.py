@@ -107,11 +107,13 @@ class ConversationStore:
                 loaded_count = 0
                 
                 for key_str, entry in raw_data.items():
-                    # Skip expired histories
-                    if now - entry["timestamp"] > self._ttl_seconds:
-                        continue
-                    
                     try:
+                        if not isinstance(entry, dict) or "timestamp" not in entry:
+                            raise ValueError("malformed entry (missing timestamp)")
+                        # Skip expired histories
+                        if now - entry["timestamp"] > self._ttl_seconds:
+                            continue
+                        
                         # Split the string key "channel_id:thread_ts" back into a tuple
                         channel_id, thread_ts = key_str.split(":", 1)
                         key_tuple = (channel_id, thread_ts)

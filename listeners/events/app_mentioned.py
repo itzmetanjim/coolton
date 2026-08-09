@@ -4,12 +4,11 @@ from logging import Logger
 from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
-from agent import AgentDeps, run_agent
 from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import join_thread
 from agent.stop_store import request_stop
 from thread_context import conversation_store
-from listeners.views.feedback_builder import build_feedback_blocks
+from listeners.events.turn import run_agent_turn
 
 
 def handle_app_mentioned(
@@ -67,20 +66,6 @@ def handle_app_mentioned(
             )
             return
 
-        # Set assistant thread status with loading messages
-        client.assistant_threads_setStatus(
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            status="Thinking...",
-            loading_messages=[
-                "Teaching the hamsters to type faster…",
-                "Untangling the internet cables…",
-                "Consulting the office goldfish…",
-                "Polishing up the response just for you…",
-                "Convincing the AI to stop overthinking…",
-            ],
-        )
-
         # Get conversation history
         history = conversation_store.get_history(channel_id, thread_ts)
 
@@ -93,51 +78,21 @@ def handle_app_mentioned(
                 client, channel_id, thread_ts, exclude_ts=event["ts"]
             )
 
-        # Run the agent
-        deps = AgentDeps(
+        run_agent_turn(
             client=client,
-            user_id=user_id,
+            say_stream=say_stream,
+            say=say,
+            logger=logger,
             channel_id=channel_id,
             thread_ts=thread_ts,
             message_ts=event["ts"],
+            user_id=user_id,
             user_token=context.user_token,
+            text=text,
+            history=history,
         )
-
-        from agent.plan_block import send_plan_message, finalize_plan_message, complete_plan_message, delete_plan_message
-        plan_ts = send_plan_message(deps)
-        deps.plan_ts = plan_ts
-
-        result = run_agent(text, deps, message_history=history)
-
-        if deps.should_skip:
-            if plan_ts:
-                delete_plan_message(deps)
-        else:
-            finalize_plan_message(deps, result.output)
-
-            # Stream response in thread with feedback buttons
-            streamer = say_stream()
-            streamer.append(markdown_text=result.output)
-            feedback_blocks = build_feedback_blocks()
-            streamer.stop(blocks=feedback_blocks)
-            complete_plan_message(deps)
-
-        # Store conversation history
-        conversation_store.set_history(channel_id, thread_ts, result.all_messages())
-
-        # kevinton: silent background skill-capture agent (runs after every turn)
-        if not deps.should_skip:
-            from agent.kevinton import spawn_kevinton
-
-            spawn_kevinton(text, result.all_messages(), channel_id, thread_ts, deps)
-
     except Exception as e:
         logger.exception(f"Failed to handle app mention: {e}")
-        try:
-            from agent.plan_block import set_plan_error
-            set_plan_error(deps, str(e))
-        except Exception:
-            pass
         say(
             text=f":warning: Something went wrong! ({type(e).__name__}: {e})",
             thread_ts=event.get("thread_ts") or event["ts"],

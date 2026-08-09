@@ -3,14 +3,14 @@ import zlib
 import requests
 
 
-MERMAID_INK_URL = "https://mermaid.ink"
 KROKI_URL = "https://kroki.io"
+MERMAID_INK_URL = "https://mermaid.ink"
 
 
 def render_mermaid(diagram_code: str, theme: str = "default") -> str:
     """Render a Mermaid diagram and return a URL to the PNG image.
 
-    Tries mermaid.ink first, falls back to kroki.io for better compatibility.
+    Tries kroki.io first (reliable), falls back to mermaid.ink.
 
     Args:
         diagram_code: The Mermaid diagram definition (e.g. "graph TD; A-->B;").
@@ -19,59 +19,54 @@ def render_mermaid(diagram_code: str, theme: str = "default") -> str:
     Returns:
         A URL string pointing to the rendered PNG, or an error message.
     """
-    # Validate diagram code isn't empty
     if not diagram_code.strip():
         return "Error: Empty diagram code"
 
-    # Try mermaid.ink first
-    url = _render_with_mermaid_ink(diagram_code, theme)
+    url = _render_with_kroki(diagram_code, theme)
     if url.startswith("http"):
         return url
 
-    # Fallback to kroki.io
-    return _render_with_kroki(diagram_code, theme)
+    return _render_with_mermaid_ink(diagram_code, theme)
 
 
-def _render_with_mermaid_ink(diagram_code: str, theme: str) -> str:
+def _verify_get(url: str) -> bool:
+    """GET the render URL and check it actually renders (2xx).
+
+    Renders are verified with GET, not HEAD: kroki.io returns 404 on HEAD but 200
+    on GET, and mermaid.ink returns 400 on HEAD. Streaming keeps only the status.
+    """
+    try:
+        resp = requests.get(url, stream=True, timeout=30)
+        ok = resp.status_code == 200
+        resp.close()
+        return ok
+    except Exception:
+        return False
+
+
+def _render_with_kroki(diagram_code: str, theme: str) -> str:
+    """Primary renderer using kroki.io."""
     try:
         compressed = zlib.compress(diagram_code.encode())
         encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
-        url = f"{MERMAID_INK_URL}/img/{encoded}?theme={theme}"
-        # Quick HEAD request to verify
-        resp = requests.head(url, timeout=5)
-        if resp.status_code == 200:
+        url = f"{KROKI_URL}/mermaid/png/{encoded}"
+        if theme != "default":
+            url += f"?theme={theme}"
+        if _verify_get(url):
             return url
     except Exception:
         pass
     return ""
 
 
-def _render_with_kroki(diagram_code: str, theme: str) -> str:
-    """Fallback renderer using kroki.io which supports more Mermaid features."""
+def _render_with_mermaid_ink(diagram_code: str, theme: str) -> str:
+    """Fallback renderer using mermaid.ink."""
     try:
         compressed = zlib.compress(diagram_code.encode())
         encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
-        # kroki.io uses a different encoding path
-        url = f"{KROKI_URL}/mermaid/svg/{encoded}"
-        # kroki accepts theme via query params
-        if theme != "default":
-            url += f"?theme={theme}"
-        resp = requests.head(url, timeout=5)
-        if resp.status_code == 200:
+        url = f"{MERMAID_INK_URL}/img/{encoded}?theme={theme}"
+        if _verify_get(url):
             return url
     except Exception:
         pass
-    return "Error: Failed to render diagram on both mermaid.ink and kroki.io"
-
-
-def render_mermaid_svg(diagram_code: str, theme: str = "default") -> str:
-    """Render a Mermaid diagram as SVG using kroki.io (more reliable)."""
-    try:
-        compressed = zlib.compress(diagram_code.encode())
-        encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
-        url = f"{KROKI_URL}/mermaid/svg/{encoded}"
-        if theme != "default":
-            url += f"?theme={theme}"
-        return url
-    except Exception as e:
-        return f"Error rendering Mermaid SVG: {str(e)}"
+    return "Error: Failed to render diagram on both kroki.io and mermaid.ink"

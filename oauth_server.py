@@ -49,8 +49,12 @@ def _exchange(code: str) -> dict:
         "code": code,
         "redirect_uri": _redirect_uri(),
     }
-    resp = requests.post(TOKEN_URL, data=data, timeout=30)
-    return resp.json()
+    try:
+        resp = requests.post(TOKEN_URL, data=data, timeout=30)
+        return resp.json()
+    except Exception as e:
+        logger.exception("oauth.v2.access request failed")
+        return {"ok": False, "error": f"request_failed: {e}"}
 
 
 def _update_env(bot_token: str, user_token: str) -> int:

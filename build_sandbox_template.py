@@ -12,10 +12,9 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from e2b import Template
 
 load_dotenv()
-
-from e2b import Template
 
 TEMPLATE_NAME = "coolton-debian13"
 
@@ -63,6 +62,11 @@ git config --global user.email "coolton-agent@users.noreply.github.com"
 git config --global init.defaultBranch main
 git config --global pull.rebase false
 git config --global alias.pr '!gh pr create'
+
+# --- python data libs for the data-analysis tools (pandas, numpy, duckdb) ---
+echo "--- python data libs ---"
+sudo pip3 install -q --break-system-packages numpy pandas duckdb 2>&1 | tail -2 || echo "PYLIBS_INSTALL_FAILED"
+python3 -c "import pandas, numpy, duckdb; print('pandas', pandas.__version__, '| duckdb', duckdb.__version__)" 2>&1 || true
 
 # --- pre-clone the coolton repo (public) so the agent can edit + PR immediately ---
 mkdir -p /home/user/work

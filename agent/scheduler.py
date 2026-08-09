@@ -15,10 +15,14 @@ _scheduler = None
 
 
 def _load_reminders() -> dict:
-    if not os.path.exists(REMINDERS_FILE):
+    try:
+        with open(REMINDERS_FILE, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or "reminders" not in data:
+            return {"reminders": []}
+        return data
+    except (FileNotFoundError, json.JSONDecodeError):
         return {"reminders": []}
-    with open(REMINDERS_FILE, "r") as f:
-        return json.load(f)
 
 
 def _save_reminders(data: dict):
@@ -43,15 +47,6 @@ def schedule_reminder(user_id: str, channel_id: str, text: str, delay_seconds: i
         })
         _save_reminders(data)
     return reminder_id
-
-
-def get_user_reminders(user_id: str) -> list[dict]:
-    """Get all reminders for a user, sorted by due time."""
-    with reminders_lock:
-        data = _load_reminders()
-        user_reminders = [r for r in data["reminders"] if r["user_id"] == user_id]
-        user_reminders.sort(key=lambda r: r["due_at"])
-        return user_reminders
 
 
 def _get_due_reminders() -> list[dict]:
@@ -83,10 +78,14 @@ ADMIN_USER_IDS = {"U0B2VTYER33", "U09ASUK57K8", "U0BFB1AEY3D", "U0BDCU34308"}
 
 
 def _load_tasks() -> dict:
-    if not os.path.exists(SCHEDULED_TASKS_FILE):
+    try:
+        with open(SCHEDULED_TASKS_FILE, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or "tasks" not in data:
+            return {"tasks": []}
+        return data
+    except (FileNotFoundError, json.JSONDecodeError):
         return {"tasks": []}
-    with open(SCHEDULED_TASKS_FILE, "r") as f:
-        return json.load(f)
 
 
 def _save_tasks(data: dict):
@@ -191,24 +190,20 @@ def _fire_task(task_id: str):
             timeout=20,
         )
         res_json = response.json()
-        with scheduled_tasks_lock:
-            data = _load_tasks()
-            updated = next((t for t in data["tasks"] if t["id"] == task_id), None)
-            if updated:
-                updated["last_run_at"] = time.time()
-                tz = "UTC"
-                try:
-                    tz = updated.get("timezone", "UTC")
-                except Exception:
-                    pass
-                try:
-                    from datetime import datetime
-                    from croniter import croniter
-                    updated["next_run_at"] = croniter(updated["cron"], datetime.now(_resolve_tz(tz))).get_next(float)
-                except Exception:
-                    updated["next_run_at"] = None
-                _save_tasks(data)
         if res_json.get("ok"):
+            with scheduled_tasks_lock:
+                data = _load_tasks()
+                updated = next((t for t in data["tasks"] if t["id"] == task_id), None)
+                if updated:
+                    updated["last_run_at"] = time.time()
+                    tz = updated.get("timezone", "UTC")
+                    try:
+                        from datetime import datetime
+                        from croniter import croniter
+                        updated["next_run_at"] = croniter(updated["cron"], datetime.now(_resolve_tz(tz))).get_next(float)
+                    except Exception:
+                        updated["next_run_at"] = None
+                    _save_tasks(data)
             logger.info("Scheduled task %s fired to %s", task_id, task["channel_id"])
         else:
             logger.error("Scheduled task %s post failed: %s", task_id, res_json.get("error", "unknown"))
@@ -255,8 +250,8 @@ def create_scheduled_task(
 def _format_ts(ts: float | None) -> str:
     if not ts:
         return "n/a"
-    from datetime import datetime
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M UTC")
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def list_scheduled_tasks(user_id: str, view_all: bool = False) -> str:
@@ -364,7 +359,7 @@ def start_scheduler(app):
         due = _get_due_reminders()
         for reminder in due:
             try:
-                requests.post(
+                resp = requests.post(
                     "https://slack.com/api/chat.postMessage",
                     json={
                         "channel": reminder["user_id"],
@@ -374,7 +369,12 @@ def start_scheduler(app):
                         "Authorization": f"Bearer {slack_bot_token}",
                         "Content-Type": "application/json",
                     },
+                    timeout=20,
                 )
+                res_json = resp.json()
+                if not res_json.get("ok"):
+                    logger.error("Failed to send reminder %s: %s", reminder["id"], res_json.get("error", "unknown"))
+                    continue
                 _mark_sent(reminder["id"])
                 logger.info("Sent reminder %s to user %s", reminder["id"], reminder["user_id"])
             except Exception as e:
@@ -384,10 +384,3 @@ def start_scheduler(app):
     _scheduler.start()
     _sync_cron_jobs()
     logger.info("Reminder scheduler started")
-
-
-def stop_scheduler():
-    global _scheduler
-    if _scheduler:
-        _scheduler.shutdown(wait=False)
-        _scheduler = None

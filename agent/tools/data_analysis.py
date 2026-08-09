@@ -17,6 +17,18 @@ def _get_sandbox(channel_id: str, thread_ts: str):
     return Sandbox.connect(sandbox_id), None
 
 
+def _ensure_py_libs(sandbox, libs: list[str]) -> str | None:
+    """Ensure the given Python packages are importable in the sandbox, pip-installing if missing."""
+    import_script = shlex.quote("\n".join(f"import {lib}" for lib in libs))
+    check = sandbox.commands.run(f"python3 -c {import_script}")
+    if check.exit_code == 0:
+        return None
+    install = sandbox.commands.run("pip install --quiet " + " ".join(libs))
+    if install.exit_code != 0:
+        return f"Failed to install {', '.join(libs)}: {install.stderr or install.stdout}"
+    return None
+
+
 def extract_tar_gz_in_sandbox(channel_id: str, thread_ts: str, archive_path: str, extract_to: str = "/home/user/data") -> str:
     """Extract a .tar.gz or .tgz file in the sandbox.
     
@@ -34,13 +46,13 @@ def extract_tar_gz_in_sandbox(channel_id: str, thread_ts: str, archive_path: str
         return err
     try:
         # Create extraction directory
-        sandbox.commands.run(f"mkdir -p {extract_to}")
+        sandbox.commands.run(f"mkdir -p {shlex.quote(extract_to)}")
         
         # Extract using tar
-        result = sandbox.commands.run(f"tar -xzf {archive_path} -C {extract_to} 2>&1")
+        result = sandbox.commands.run(f"tar -xzf {shlex.quote(archive_path)} -C {shlex.quote(extract_to)} 2>&1")
         
         # List extracted files
-        list_result = sandbox.commands.run(f"find {extract_to} -type f | head -20")
+        list_result = sandbox.commands.run(f"find {shlex.quote(extract_to)} -type f | head -20")
         
         output = []
         if result.stdout:
@@ -70,9 +82,17 @@ def analyze_csv_in_sandbox(channel_id: str, thread_ts: str, csv_path: str, query
     sandbox, err = _get_sandbox(channel_id, thread_ts)
     if err:
         return err
+    err = _ensure_py_libs(sandbox, ["pandas"])
+    if err:
+        return err
     try:
+        # csv_path is user-supplied: escape it for the shell command AND for the
+        # single-quoted Python string literal it is embedded into below.
+        shell_path = shlex.quote(csv_path)
+        py_path = csv_path.replace("\\", "\\\\").replace("'", "\\'")
+
         # First check the CSV structure
-        check_result = sandbox.commands.run(f"head -5 {csv_path}")
+        check_result = sandbox.commands.run(f"head -5 {shell_path}")
         if check_result.stdout:
             check_result.stdout
         else:
@@ -84,7 +104,7 @@ def analyze_csv_in_sandbox(channel_id: str, thread_ts: str, csv_path: str, query
 import pandas as pd
 import sys
 
-df = pd.read_csv('{csv_path}')
+df = pd.read_csv('{py_path}')
 print("=== SHAPE ===")
 print(df.shape)
 print("\\n=== COLUMNS ===")
@@ -106,7 +126,7 @@ print(df.memory_usage(deep=True).sum(), "bytes")
 import pandas as pd
 import sys
 
-df = pd.read_csv('{csv_path}')
+df = pd.read_csv('{py_path}')
 print("=== RESULT ===")
 try:
     result = {query}
@@ -118,7 +138,7 @@ except Exception as e:
     print(f"Error: {{e}}")
 """
         
-        result = sandbox.commands.run(f"python3 -c \"{script}\"")
+        result = sandbox.commands.run(f"python3 -c {shlex.quote(script)}")
         output = []
         if result.stdout:
             output.append(result.stdout)
@@ -143,6 +163,9 @@ def run_sql_on_csv(channel_id: str, thread_ts: str, csv_path: str, sql_query: st
         Query results.
     """
     sandbox, err = _get_sandbox(channel_id, thread_ts)
+    if err:
+        return err
+    err = _ensure_py_libs(sandbox, ["duckdb"])
     if err:
         return err
     try:
@@ -260,6 +283,9 @@ def run_python_data_analysis(channel_id: str, thread_ts: str, code: str) -> str:
     sandbox, err = _get_sandbox(channel_id, thread_ts)
     if err:
         return err
+    err = _ensure_py_libs(sandbox, ["pandas", "numpy", "duckdb"])
+    if err:
+        return err
     try:
         # Wrap code with common imports
         wrapped_code = f"""
@@ -273,7 +299,7 @@ conn = duckdb.connect()
 
 {code}
 """
-        result = sandbox.commands.run(f"python3 -c \"{wrapped_code}\"", timeout=120)
+        result = sandbox.commands.run(f"python3 -c {shlex.quote(wrapped_code)}", timeout=120)
         output = []
         if result.stdout:
             output.append(result.stdout)

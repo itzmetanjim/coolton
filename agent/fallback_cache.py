@@ -76,13 +76,6 @@ def mark_dead(provider_name: str, reason: str):
     logger.warning(f"Fallback cache: marked {provider_name} dead ({reason[:120]})")
 
 
-def unmark_dead(provider_name: str):
-    with _cache_lock:
-        cache = _load_cache()
-        cache.setdefault("dead", {}).pop(provider_name, None)
-        _save_cache(cache)
-
-
 def clear_cache():
     """Clear the whole fallback cache (working provider + dead marks)."""
     with _cache_lock:

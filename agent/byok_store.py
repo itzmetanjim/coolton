@@ -175,22 +175,3 @@ def get_image_endpoint_id(user_id: str) -> str | None:
     with store_lock:
         data = _load_store()
         return data.get(user_id, {}).get("image_endpoint_id")
-
-
-def has_any_endpoint(user_id: str) -> bool:
-    with store_lock:
-        data = _load_store()
-        return bool(data.get(user_id, {}).get("endpoints"))
-
-
-def get_preferred_model(user_id: str) -> str | None:
-    with store_lock:
-        data = _load_store()
-        return data.get(user_id, {}).get("preferred_model")
-
-
-def set_preferred_model(user_id: str, model: str):
-    with store_lock:
-        data = _load_store()
-        data.setdefault(user_id, {})["preferred_model"] = model
-        _save_store(data)

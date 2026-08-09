@@ -7,11 +7,6 @@ if TYPE_CHECKING:
     from e2b import Sandbox
 
 
-SLACK_FILE_URL_PATTERN = re.compile(
-    r"https?://[\w.-]+\.slack\.com/files/[\w-]+/([A-Z0-9]+)/"
-)
-
-
 def is_slack_host(raw_url: str) -> bool:
     """True only if the URL is Slack-hosted (defends against a spoofed
     files.info response pointing the bot token at another host)."""
@@ -28,22 +23,6 @@ def is_slack_host(raw_url: str) -> bool:
         or host == "slack-files.com"
         or host.endswith(".slack-files.com")
     )
-
-
-def extract_file_id(url: str) -> str | None:
-    """Extract Slack file ID from various URL formats.
-    
-    Supported formats:
-    - https://workspace.slack.com/files/USER/FILE_ID/filename
-    - https://workspace.enterprise.slack.com/files/USER/FILE_ID/filename
-    - Just the file ID (e.g., F0B35316GS1)
-    """
-    if re.match(r"^F[A-Z0-9]+$", url):
-        return url
-    match = SLACK_FILE_URL_PATTERN.search(url)
-    if match:
-        return match.group(1)
-    return None
 
 
 def download_file_by_id(
@@ -72,11 +51,8 @@ def download_file_by_id(
     # Accept a Slack file permalink too; pull out the F... id.
     match = re.search(r"\b(F[A-Z0-9]{6,})\b", file_id)
     file_id = match.group(1) if match else file_id
-
     if not re.match(r"^F[A-Z0-9]+$", file_id):
-        return f"Error: Not a Slack file id: {file_id}. get_slack_file only downloads Slack files; use fetch_url for arbitrary web URLs."
-
-    # Get file info
+        return f"Error: Not a Slack file id: {file_id}. get_slack_file only downloads Slack files; use fetch_url for arbitrary web URLs."    # Get file info
     info_url = "https://slack.com/api/files.info"
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -93,13 +69,17 @@ def download_file_by_id(
                     "Ask an admin to reinstall the app with files:read, or share the file "
                     "as an attachment in a message so download_attachments_to_sandbox can grab it."
                 )
+            if err == "file_not_found":
+                return (
+                    f"Slack API error: file_not_found — no file matches '{file_id}'. Use the "
+                    "exact file id (F...) from the message's attachments, not a guessed id."
+                )
             return f"Slack API error: {err}"
 
         file_info = info.get("file", {})
         file_url = file_info.get("url_private_download") or file_info.get("url_private")
         default_name = file_info.get("name", file_id)
         mimetype = file_info.get("mimetype", "")
-        expected_size = file_info.get("size", 0)
 
         if not file_url:
             return f"Error: No download URL available for file {file_id}. It may have been deleted, or the token may not have access."
@@ -136,24 +116,3 @@ def download_file_by_id(
         return "Error: Download timed out"
     except Exception as e:
         return f"Error downloading file: {str(e)}"
-
-
-def download_file_from_url(
-    url: str,
-    user_token: str | None = None,
-    sandbox: "Sandbox | None" = None,
-) -> str:
-    """Download a Slack file from a URL (auto-extracts file ID).
-    
-    Args:
-        url: Full Slack file URL
-        user_token: Slack user token
-        sandbox: Optional E2B sandbox to save file to
-        
-    Returns:
-        Summary of download result
-    """
-    file_id = extract_file_id(url)
-    if not file_id:
-        return f"Error: Could not extract file ID from URL: {url}"
-    return download_file_by_id(file_id, user_token, sandbox)

@@ -1,12 +1,10 @@
 import logging
 import os
 import random
-import base64
 import re
 import time
-import shutil
 import json
-from urllib.parse import quote
+import shutil
 import subprocess
 import threading
 import requests
@@ -19,16 +17,11 @@ from agent.deps import AgentDeps
 from agent.stop_store import HaltRun
 from agent.tools import add_emoji_reaction
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
-try:
-    from e2b import Sandbox
-except ImportError:
-    os.system('pip install e2b')
-    raise RuntimeError("e2b has been installed please rerun")
+from e2b import Sandbox
 from agent.sandbox_store import get_thread_sandbox_id, save_thread_sandbox_id
 from agent.github_proxy_client import (
     PUBLIC_PROXY_HOST,
     issue_sandbox_token,
-    revoke_sandbox_token,
 )
 from agent.tool_proxy import (
     build_sandbox_module,
@@ -45,14 +38,16 @@ RATE_LIMIT_INTERVAL = 15.0
 
 def enforce_rate_limit():
     global _last_request_time
+    now = time.time()
     with rate_limit_lock:
-        now = time.time()
         elapsed = now - _last_request_time
-        if elapsed < RATE_LIMIT_INTERVAL:
-            sleep_needed = RATE_LIMIT_INTERVAL - elapsed
-            logger.warning(f"Rate Limit Check: Sleeping for {sleep_needed:.2f}s")
-            time.sleep(sleep_needed)
-        _last_request_time = time.time()
+        if elapsed >= RATE_LIMIT_INTERVAL:
+            _last_request_time = now
+            return
+        sleep_needed = RATE_LIMIT_INTERVAL - elapsed
+        _last_request_time = now + sleep_needed
+    logger.warning(f"Rate Limit Check: Sleeping for {sleep_needed:.2f}s")
+    time.sleep(sleep_needed)
 
 SYSTEM_PROMPT = f"""\
 You are coolton (she/it), a Slack assistant built by Lily/KitKat (she/her, U0B2VTYER33) aka tanjim (she/her, U09ASUK57K8/U0BFB1AEY3D). You're cooler than gorkie — that's just facts.
@@ -67,6 +62,19 @@ Source code lives at https://github.com/itzmetanjim/coolton (clone it in your sa
   kevinton opens on your behalf.
 - Use the `pr-and-notify` skill (`skills/pr-and-notify`) for the exact branch/commit/push/PR/DM
   workflow so the steps stay consistent.
+
+### HOW DEPLOYMENT ACTUALLY WORKS (READ THIS — pushing does NOT deploy anything)
+- The LIVE code runs from `https://github.com/itzmetanjim/coolton`, pulled onto the host server and
+  restarted by KitKat. That repo is the ONLY code that matters.
+- You authenticate as `coolton-agent`, which has NO write access to `itzmetanjim/coolton`. A
+  `git push` to `origin` (which points at itzmetanjim/coolton) is REJECTED — that is expected.
+- Pushing to `main` in the `coolton-agent/coolton` fork (or anywhere else) does NOTHING. It is not a
+  deploy, it does not ship anything, and the live bot is never affected. NEVER push to `main`, and
+  never claim a change is "live", "deployed", or "shipped" after a push — it isn't.
+- The ONLY way your code reaches the live bot: push your fix branch to the `coolton-agent/coolton`
+  fork, open a pull request INTO `itzmetanjim/coolton`, and KitKat must accept/merge it AND pull it
+  on the host. Until then your fix is just a proposal. Report it as "PR opened" — never "done",
+  "deployed", or "live".
 
 ## IDENTITY (read this carefully — this is the #1 source of confusion)
 - **You are ONE entity: coolton.** There is no second AI, no committee, no "other coolton".
@@ -121,7 +129,7 @@ Source code lives at https://github.com/itzmetanjim/coolton (clone it in your sa
 
 ## RESPONSE GUIDELINES
 - 3 sentences max. Be punchy, scannable, actionable
-- End with a clear next step on its own line
+- Do NOT end with a "next step?" / "what should I do next?" / "let me know" line. Just stop when you're done.
 - Bullet list only for multi-step instructions
 - Casual, conversational language. **Reply in lowercase.** Contractions are fine
 - Emoji sparingly — at most one per message, only if it actually adds something
@@ -337,6 +345,7 @@ Use `list_channel_threads` to see recent threads in the current channel.
 ## REMINDERS (schedule_reminder_tool)
 Use `schedule_reminder_tool` to schedule one-time reminders.
 - Args: text (reminder message), delay_seconds (when to send)
+- delay_seconds MUST be a positive number of seconds from NOW. Compute it as `(target_timestamp - current_time)`; if unsure of current time, call `current_time_tool` first. Negative or zero is rejected.
 - Max delay: 120 days
 - Reminder is sent as a DM to the user
 
@@ -361,6 +370,9 @@ Use `read_conversation_history_tool` to read recent messages from a channel, or 
 - `get_user_tool` → display name, real name, pronouns, timezone, title, status, custom fields, bot flag.
   Use people's pronouns!
 - `get_channel_info_tool` → channel name, type (public/private/DM), member count, topic, purpose
+- NEVER invent/guess Slack ids. Pass the exact id from the message context, or the mention
+  itself (<@U...>, <#C...|name>, @username, #channel) — the tools resolve those. Guessed ids
+  fail with user_not_found / team_access_not_granted.
 
 ## POST MESSAGE (post_message_tool)
 Use `post_message_tool` when the user explicitly asks you to post a message somewhere mid-turn.
@@ -375,32 +387,34 @@ Use `leave_channel_tool` when the user asks coolton to leave/be removed from a c
 Use `remove_reaction_tool` to remove an emoji reaction you added to a message.
 
 ## SLACK MCP SERVER
-You may have access to the Slack MCP Server (requires `SLACK_USER_TOKEN` in env). 
+You may have access to the Slack MCP Server (requires `SLACK_USER_TOKEN` in env).
 When connected, these tools are available automatically — just call them:
 
-**Channel & Message Tools:**
-- `conversations_list` — list channels (filter by type: public_channel, private_channel, etc.)
-- `conversations_history` — read message history from any channel (pass `channel_id`)
-- `conversations_replies` — read thread replies (pass `channel_id` and `ts`)
-- `conversations_info` — get channel metadata (name, topic, purpose, member count)
-- `chat_postMessage` — send a message to any channel (pass `channel_id`, `text`, optional `thread_ts`)
-- `chat_update` — update a message (pass `channel_id`, `ts`, `text`)
-- `chat_delete` — delete a message
-- `search_messages` — search messages across channels (pass `query`, optional `channel_id`)
+**Read tools:**
+- `slack_read_channel` — read recent messages from a channel (pass `channel_id`, `limit`)
+- `slack_read_thread` — read a thread (parent + replies) (pass `channel_id`, `message_ts`)
+- `slack_read_user_profile` — detailed user profile (contact, status, timezone, role)
+- `slack_read_canvas` — read a Canvas document's markdown
+- `slack_list_channel_members` — list channel/group/MPIM members
+- `slack_read_file` — read a Slack file's content by file ID
+- `slack_get_reactions` — reactions on a message
+- `slack_search_emojis` — search custom emojis by name
 
-**Canvas Tools:**
-- `canvases_create` — create a new canvas (pass `title`, optional `document_content`, optional `channel_id` to share)
-- `canvases_read` — read a canvas by ID (pass `canvas_id`)
-- `canvases_update` — update a canvas (pass `canvas_id`, `document_content`)
-- `canvases_list` — list canvases (optional `channel_id` to filter)
-- `canvases_delete` — delete a canvas
-- `canvases_share` — share a canvas with users/channels (pass `canvas_id`, `channel_ids`, `user_ids`)
+**Write tools:**
+- `slack_send_message` — send a message (DM a user by passing their user_id as channel_id)
+- `slack_schedule_message` — schedule a message for later
+- `slack_send_message_draft` — create an unsent draft
+- `slack_create_conversation` — create a channel/DM/group DM
+- `slack_add_reaction` — add a reaction to a message
+- `slack_create_canvas` / `slack_update_canvas` — create/update a Canvas
 
-**User & Search:**
-- `users_info` — get user profile (pass `user_id`)
-- `users_list` — list users in workspace
-- `search_messages` — search all messages
-- `search_files` — search files
+**Search tools (BROKEN on this workspace — do not rely on them):**
+- `slack_search_public`, `slack_search_public_and_private`, `slack_search_channels`, `slack_search_users`
+- These return "No results found" for every query on this Hack Club workspace
+  (a limitation of Slack's hosted MCP server on enterprise grids — the direct
+  `search_slack_tool` finds the same content). For ANY search, use `search_slack_tool`
+  (messages, pass `query` and optional `count`) and `read_conversation_history_tool`
+  (channel history).
 
 **Current Context:**
 - You are in the current channel/thread where the user messaged you
@@ -414,6 +428,8 @@ Use `slack_api_call` when you need to do something in Slack that has no built-in
 
 ## SKILLS
 You have access to on-demand **skills** (reusable playbooks with instructions and scripts). When a request matches a skill's description, call `list_skills` to see what's available, then `load_skill` to pull in its instructions before doing the work. Skills live in the repo's `skills/` directory — only load one when it's actually relevant.
+
+- After `load_skill`, the returned output lists the skill's **exact** resource and script names. When calling `read_skill_resource` or `run_skill_script`, use ONLY names that `load_skill` listed verbatim — do not guess or invent names (guessing fails with "not found in skill ... Available: []"). If you need a file that wasn't listed, say it isn't available rather than guessing.
 
 **IMPORTANT — the agent sandbox is isolated.** Any shell/CLI commands you run in your own sandbox (e.g. `npx skills ...`, `mkdir`, file writes) have **NO effect** on this agent and are thrown away. Never tell the user you "installed" or "created" a skill via sandbox commands. To actually change skills, you MUST use the dedicated tools below — these are the only things that touch the real skill files:
 - `install_skill(package, skill?)` — install a skill from the skills.sh marketplace (Vercel's Agent Skills CLI). Use when the user says "install a skill" or names a package/repo (e.g. `vercel-labs/agent-skills` or a GitHub URL). After installing, load it with `load_skill`.
@@ -444,6 +460,8 @@ Use to create and share a Felix whiteboard (tldraw).
 ## HTML EMBED (send_html_embed_tool)
 Use to send custom HTML as a quick inline preview/demo. NOT a real hosted website — if the user
 wants a site they can keep visiting or share, deploy it with the cf-wrangler skill instead.
+- Hosts the HTML as a short URL on the file server (tanjim.org:2390) and posts the link so
+  Slack renders a preview card. Never put base64 HTML in a URL.
 
 ## SEND MESSAGE (send_message)
 Use `send_message` to send a message to the current thread mid-turn without ending your turn.
@@ -540,10 +558,12 @@ def _apply_provider_env(provider_name: str, api_key: str) -> None:
 
 
 def get_runtime_model(deps_user_id: str | None = None) -> str:
-    """Resolve the provider model string AND set its env key, like run_agent does.
+    """Resolve the provider model AND set its env key, like run_agent does.
 
     Returns the model string for the first viable provider in the fallback order
-    (BYOK user endpoint first when present). Raises RuntimeError if none configured.
+    (BYOK user endpoint first when present), or a fully-configured model object
+    for providers with a custom base_url (BYOK/HCAI). Raises RuntimeError if none
+    configured.
     """
     provider_order = _build_provider_order(deps_user_id)
     for provider_name, provider_config in provider_order:
@@ -551,6 +571,16 @@ def get_runtime_model(deps_user_id: str | None = None) -> str:
         if not api_key and provider_name != "byok":
             continue
         model_name = provider_config["model"]
+        if provider_config.get("base_url"):
+            from pydantic_ai.models.openai import OpenAIChatModel
+            from pydantic_ai.providers.openai import OpenAIProvider
+            return OpenAIChatModel(
+                model_name,
+                provider=OpenAIProvider(
+                    base_url=provider_config["base_url"],
+                    api_key=provider_config["api_key"],
+                ),
+            )
         _apply_provider_env(provider_name, api_key or "")
         return model_name
     raise RuntimeError(
@@ -606,17 +636,43 @@ def _build_provider_order(deps_user_id: str | None = None) -> list:
     return provider_order
 
 
-def get_model_for_user(user_id: str | None) -> str | None:
-    """Get the model string for a user's BYOK text endpoint, or None to use global."""
-    if not user_id:
-        return None
-    ep_id = get_text_endpoint_id(user_id)
-    if not ep_id:
-        return None
-    ep = get_endpoint_decrypted(user_id, ep_id)
-    if not ep:
-        return None
-    return ep["model"]
+_SECRET_ENV_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "JAMS_API_KEY",
+    "HCAI_API_KEY",
+    "GROQ_API_KEY",
+    "GOOGLE_API_KEY",
+    "MISTRAL_API_KEY",
+    "CEREBRAS_API_KEY",
+    "OPENROUTER_API_KEY_FALLBACK",
+    "SLACK_BOT_TOKEN",
+    "SLACK_USER_TOKEN",
+    "COOLTON_GH_TOKEN",
+    "GH_PROXY_ADMIN_TOKEN",
+    "GH_PROXY_TOKEN",
+)
+
+_secret_values_cache = None
+_secret_values_lock = threading.Lock()
+
+
+def _secret_values() -> list[str]:
+    global _secret_values_cache
+    with _secret_values_lock:
+        if _secret_values_cache is None:
+            _secret_values_cache = [
+                v for k, v in os.environ.items() if k in _SECRET_ENV_KEYS and v
+            ]
+    return _secret_values_cache
+
+
+def _redact(msg: str) -> str:
+    """Strip API keys/tokens out of an error string before logging or storing it."""
+    for secret in _secret_values():
+        if secret:
+            msg = msg.replace(secret, "***")
+    return msg
 
 
 def get_user_text_endpoint(user_id: str | None) -> dict | None:
@@ -649,6 +705,8 @@ def invite_coolton_user_to_channel(ctx: RunContext[AgentDeps]) -> str:
     
     if not coolton_user_id:
         return "Error: COOLTON_USER_ID not configured."
+    if not bot_token:
+        return "Error: SLACK_BOT_TOKEN not configured."
         
     url = "https://slack.com/api/conversations.invite"
     headers = {
@@ -671,14 +729,21 @@ def invite_coolton_user_to_channel(ctx: RunContext[AgentDeps]) -> str:
 
 
 _proxy_cache: dict[str, dict | None] = {}
+_proxy_cache_lock = threading.Lock()
+_PROXY_CACHE_MAX = 256
 
 
 def _proxy_cache_set(sandbox_id: str, proxy_info: dict | None) -> None:
-    _proxy_cache[sandbox_id] = proxy_info
+    with _proxy_cache_lock:
+        _proxy_cache[sandbox_id] = proxy_info
+        if len(_proxy_cache) > _PROXY_CACHE_MAX:
+            for key in list(_proxy_cache)[: len(_proxy_cache) - _PROXY_CACHE_MAX]:
+                _proxy_cache.pop(key, None)
 
 
 def _proxy_cache_get(sandbox_id: str) -> dict | None:
-    return _proxy_cache.get(sandbox_id)
+    with _proxy_cache_lock:
+        return _proxy_cache.get(sandbox_id)
 
 
 def _sandbox_template_id() -> str | None:
@@ -771,6 +836,8 @@ echo "node: $(node --version 2>&1)"
 echo "npm:  $(npm --version 2>&1)"
 echo "gh:   $(gh --version 2>&1 | head -1)"
 echo "py:   $(python3 --version 2>&1)"
+echo "==> python data libs (pandas, numpy, duckdb):"
+python3 -c "import pandas, numpy, duckdb" 2>/dev/null || sudo pip3 install -q --break-system-packages numpy pandas duckdb 2>&1 | tail -2 || echo "PYLIBS_INSTALL_FAILED"
 echo "==> gh api self (authenticated via host proxy):"
 gh api user --jq .login 2>&1 || true
 """.replace("__GH_USER__", gh_user)
@@ -819,10 +886,12 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str) -> str:
             logger.info(f"coolton sandbox provisioned:\n{provision}")
         # Pass the GitHub proxy env directly (E2B `envs=`) so gh/git/curl are authenticated
         # via the host proxy on every command; the real token never enters the sandbox.
-        result = sandbox.commands.run(command, envs=_proxy_env(proxy_info))
-        new_sandbox_id = sandbox.sandbox_id
-        save_thread_sandbox_id(channel_id, thread_ts, new_sandbox_id)
-        sandbox.pause()
+        try:
+            result = sandbox.commands.run(command, envs=_proxy_env(proxy_info))
+            new_sandbox_id = sandbox.sandbox_id
+            save_thread_sandbox_id(channel_id, thread_ts, new_sandbox_id)
+        finally:
+            sandbox.pause()
         output = []
         if result.stdout:
             output.append(f"STDOUT:\n{result.stdout}")
@@ -854,6 +923,8 @@ CODE_MODE_EXCLUDED_TOOLS = {
     "skip",
     "leave_thread_tool",
     "join_thread_tool",
+    "add_emoji_reaction",
+    "delegate_to_subagent",
 }
 
 
@@ -933,10 +1004,12 @@ def code_mode(ctx: RunContext[AgentDeps], code: str) -> str:
             "AGENT_TOOLS_TOKEN": proxy_info["token"],
             "AGENT_TOOLS_SANDBOX": sandbox.sandbox_id,
         })
-        result = sandbox.commands.run(
-            "cd /home/user && python3 code_mode_run.py", timeout=600, envs=envs
-        )
-        sandbox.pause()
+        try:
+            result = sandbox.commands.run(
+                "cd /home/user && python3 code_mode_run.py", timeout=600, envs=envs
+            )
+        finally:
+            sandbox.pause()
         output = []
         if result.stdout:
             output.append(f"STDOUT:\n{result.stdout}")
@@ -1009,6 +1082,7 @@ def get_slack_file_tool(ctx: RunContext[AgentDeps], file: str, filename: str = "
     Takes a Slack file id (e.g. F0123ABCD), which you can get from a message attachment or a
     Slack file permalink. Not for arbitrary web URLs; use fetch_url for those. When downloading
     images, pass a filename with the correct extension (.png, .jpg, .jpeg, .webp).
+    NEVER guess the file id — pull the real F... id from the message's attachments or permalink.
 
     Args:
         file: Slack file id (e.g. F0123ABCD), or a Slack file permalink containing the id.
@@ -1163,23 +1237,50 @@ def generate_image_tool(
     return result
 
 
+def _post_image_to_channel(channel_id: str, thread_ts: str, image_url: str, alt_text: str) -> str | None:
+    """Post an image block to a channel/thread. Returns None on success or an error string."""
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token:
+        return "Error: SLACK_BOT_TOKEN not configured"
+    blocks = [{"type": "image", "image_url": image_url, "alt_text": alt_text}]
+    payload = {"channel": channel_id, "text": alt_text, "blocks": blocks}
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    try:
+        response = requests.post(
+            "https://slack.com/api/chat.postMessage",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"},
+            timeout=20,
+        )
+        res_json = response.json()
+        if res_json.get("ok"):
+            return None
+        return f"Error posting diagram: {res_json.get('error', 'unknown')}"
+    except Exception as e:
+        return f"Error posting diagram: {str(e)}"
+
+
 @agent.tool
 def render_mermaid_tool(ctx: RunContext[AgentDeps], diagram_code: str, theme: str = "default") -> str:
-    """Render a Mermaid diagram and return a URL to the PNG image.
-    
+    """Render a Mermaid diagram and post the PNG image into the current thread.
+
     Supports: flowcharts, sequence diagrams, class diagrams, state diagrams,
     Gantt charts, pie charts, entity relationship diagrams, user journey, etc.
-    The URL can be embedded via send_web_embed_tool or downloaded.
-    
+    The rendered image is posted directly into the current channel/thread.
+
     Args:
         diagram_code: Mermaid diagram definition (e.g., "graph TD; A-->B;").
         theme: Theme ("default", "dark", "forest", "neutral", default "default").
     """
     from agent.tools.mermaid_tool import render_mermaid
     url = render_mermaid(diagram_code, theme)
-    if url.startswith("http"):
-        return f"Diagram rendered: {url}"
-    return url
+    if not url.startswith("http"):
+        return url
+    error = _post_image_to_channel(ctx.deps.channel_id, ctx.deps.thread_ts, url, "Mermaid diagram")
+    if error:
+        return f"{error} | url: {url}"
+    return f"Diagram rendered and posted to the thread: {url}"
 
 
 @agent.tool
@@ -1602,42 +1703,70 @@ def send_whiteboard_embed_tool(
     return send_whiteboard_embed(channel_id=ctx.deps.channel_id, text=text, title=title, whiteboard_id=whiteboard_id)
 
 
-def minify_html(html: str) -> str:
-    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
-    html = re.sub(r"\s+", " ", html)
-    html = re.sub(r"\s*>\s*<", "><", html)
-    return html.strip()
+def _post_link_message(channel_id: str, url: str, text: str, thread_ts: str = "") -> str:
+    """Post a message containing a URL so Slack classic-unfurls it into a link card."""
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token:
+        return "Error: SLACK_BOT_TOKEN not configured"
+    payload = {
+        "channel": channel_id,
+        "text": f"{text}\n{url}",
+        "unfurl_links": True,
+        "unfurl_media": True,
+    }
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    try:
+        response = requests.post(
+            "https://slack.com/api/chat.postMessage",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"},
+            timeout=20,
+        )
+        res_json = response.json()
+        if res_json.get("ok"):
+            return f"Success: Embed sent to {channel_id}"
+        return f"Error: {res_json.get('error', 'unknown')} | url: {url}"
+    except Exception as e:
+        return f"Error sending embed: {str(e)}"
 
 
 def send_html_embed(
     channel_id: str, html: str, text: str = "html embed", title: str = "html embed",
-    thumbnail_url: str = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed",
     user_token: str | None = None,
 ) -> str:
-    from agent.web64_client import upload_bytes
+    from html import escape as _html_escape
 
-    url = upload_bytes(html.encode(), "embed.html", mime="text/html")
-    return send_web_embed(channel_id=channel_id, text=text, url=url, title=title, thumbnail_url=thumbnail_url, user_token=user_token)
+    try:
+        from agent.web64_client import upload_bytes
+        if "<head" not in html.lower():
+            meta = (
+                f'<head><meta property="og:title" content="{_html_escape(title)}"/>'
+                f'<meta property="og:description" content="{_html_escape(text)}"/></head>'
+            )
+            html = meta + html
+        url = upload_bytes(html.encode(), "embed.html", mime="text/html")
+    except Exception as e:
+        return f"Error hosting HTML embed: {e}"
+    return _post_link_message(channel_id=channel_id, url=url, text=text)
 
 
 @agent.tool
 def send_html_embed_tool(
     ctx: RunContext[AgentDeps], html: str, text: str = "html embed",
     title: str = "html embed",
-    thumbnail_url: str = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed",
 ) -> str:
-    """Send custom HTML as a live embed in the current channel.
+    """Send custom HTML as a live link card in the current channel.
 
-    Your HTML is hosted on the coolton file server (tanjim.org:2390), so there
-    is no size limit.
+    Your HTML is hosted on the coolton file server (tanjim.org:2390) and the
+    link is posted so Slack renders it as a preview card. There is no size limit.
 
     Args:
         html: Raw HTML content.
         text: Fallback text (default: "html embed").
-        title: Embed title (default: "html embed").
-        thumbnail_url: Optional custom thumbnail.
+        title: Card title (default: "html embed").
     """
-    return send_html_embed(channel_id=ctx.deps.channel_id, html=html, text=text, title=title, thumbnail_url=thumbnail_url)
+    return send_html_embed(channel_id=ctx.deps.channel_id, html=html, text=text, title=title)
 
 
 @agent.tool
@@ -1752,9 +1881,6 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
         skill: Optional specific skill name inside a multi-skill repo. Leave empty
             to install all skills in the package.
     """
-    import shutil
-    import subprocess
-
     cmd = ["npx", "-y", "skills@latest", "add", package, "-y"]
     if skill:
         cmd += ["-s", skill]
@@ -1894,7 +2020,7 @@ def _build_skill_md(slug: str, description: str, body: str) -> str:
     The description is single-quoted so embedded colons (the exact thing that
     broke the catalog before) can't terminate the YAML mapping early.
     """
-    desc = description.replace("'", "\\'")
+    desc = description.replace("'", "''")
     return (
         "---\n"
         f"name: {slug}\n"
@@ -2171,8 +2297,9 @@ def run_agent(text, deps, message_history=None):
     try:
         result, _provider = _run_with_provider_chain(agent_dynamic, run_kwargs, deps)
         return result
-    except HaltRun:
+    except HaltRun as e:
         deps.should_skip = True
+        deps.halt_reason = str(e)
         return _SkipResult(message_history)
 
 
@@ -2196,23 +2323,29 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
     if not provider_order:
         raise RuntimeError("No AI provider configured.")
 
+    # BYOK endpoints are per-user (their own base_url + key), so the GLOBAL fallback
+    # cache (dead marks / last-known-good provider, shared across all users) must not
+    # reorder them or let another user's marks suppress them.
+    has_byok = provider_order[0][0] == "byok"
+
     # Global fallback cache: skip providers known to be dead, prefer the
     # last-known-good provider first (shared across all users).
-    dead_providers = get_dead_providers()
-    if dead_providers:
-        alive = [(n, c) for n, c in provider_order if n not in dead_providers]
-        skipped = len(provider_order) - len(alive)
-        if skipped:
-            logger.info(f"Fallback cache: skipping {skipped} dead provider(s): {sorted(dead_providers)}")
-        provider_order = alive or provider_order
+    if not has_byok:
+        dead_providers = get_dead_providers()
+        if dead_providers:
+            alive = [(n, c) for n, c in provider_order if n not in dead_providers]
+            skipped = len(provider_order) - len(alive)
+            if skipped:
+                logger.info(f"Fallback cache: skipping {skipped} dead provider(s): {sorted(dead_providers)}")
+            provider_order = alive or provider_order
 
-    cached_provider = get_working_provider()
-    if cached_provider:
-        for i, (name, _) in enumerate(provider_order):
-            if name == cached_provider:
-                provider_order.insert(0, provider_order.pop(i))
-                logger.info(f"Fallback cache: trying {cached_provider} first (global)")
-                break
+        cached_provider = get_working_provider()
+        if cached_provider:
+            for i, (name, _) in enumerate(provider_order):
+                if name == cached_provider:
+                    provider_order.insert(0, provider_order.pop(i))
+                    logger.info(f"Fallback cache: trying {cached_provider} first (global)")
+                    break
 
     # Retry configuration
     max_retries = 3
@@ -2304,7 +2437,8 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
 
                 run_kwargs["model"] = model_obj if model_obj else model_name
                 result = agent_dynamic.run_sync(**run_kwargs)
-                set_working_provider(provider_name)
+                if provider_name != "byok":
+                    set_working_provider(provider_name)
                 deps.model_used = f"{provider_name} / {model_name}"
                 return result, provider_name
 
@@ -2313,20 +2447,22 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
 
             except Exception as e:
                 if is_fatal_error(e):
-                    logger.critical(f"Fatal error in {provider_name}: {e}")
+                    logger.critical(f"Fatal error in {provider_name}: {_redact(str(e))}")
                     raise
-                all_errors.append(f"{provider_name}: {e}")
+                err = _redact(str(e))
+                all_errors.append(f"{provider_name}: {err}")
                 if is_hard_error(e):
-                    mark_dead(provider_name, str(e))
-                    logger.warning(f"{provider_name} failed with a hard error (marked dead): {e}")
+                    if provider_name != "byok":
+                        mark_dead(provider_name, err)
+                    logger.warning(f"{provider_name} failed with a hard error (marked dead): {err}")
                     break  # Don't retry auth/config errors; skip this provider
                 if is_retryable_error(e) and attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
-                    logger.warning(f"{provider_name} attempt {attempt + 1} failed with retryable error: {e}. Retrying in {delay}s...")
+                    logger.warning(f"{provider_name} attempt {attempt + 1} failed with retryable error: {err}. Retrying in {delay}s...")
                     time.sleep(delay)
                     continue
                 else:
-                    logger.warning(f"{provider_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
+                    logger.warning(f"{provider_name} failed (attempt {attempt + 1}/{max_retries}): {err}")
                     break  # Try next provider
 
         # All retries exhausted for this provider, try next provider

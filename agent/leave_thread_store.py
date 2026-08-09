@@ -8,10 +8,11 @@ leave_thread_lock = threading.Lock()
 
 
 def _load_store() -> dict:
-    if not os.path.exists(LEAVE_THREAD_STORE_FILE):
+    try:
+        with open(LEAVE_THREAD_STORE_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
         return {}
-    with open(LEAVE_THREAD_STORE_FILE, "r") as f:
-        return json.load(f)
 
 
 def _save_store(data: dict):
