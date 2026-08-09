@@ -5,6 +5,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 import importlib
 
 import agent.sandbox_helpers as helpers_mod
+import agent.redact as redact_mod
 
 
 
@@ -37,9 +38,9 @@ def clean_env(monkeypatch):
 
 @pytest.fixture
 def fresh_secret_cache(monkeypatch):
-    monkeypatch.setattr(agent_mod, "_secret_values_cache", None)
+    monkeypatch.setattr(redact_mod, "_secret_values_cache", None)
     yield
-    monkeypatch.setattr(agent_mod, "_secret_values_cache", None)
+    monkeypatch.setattr(redact_mod, "_secret_values_cache", None)
 
 
 def test_redact_masks_known_secret(monkeypatch, fresh_secret_cache):
@@ -51,11 +52,43 @@ def test_redact_masks_known_secret(monkeypatch, fresh_secret_cache):
 
 def test_redact_masks_multiple_secrets(monkeypatch, fresh_secret_cache):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-oa-1")
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-bot")
-    msg = "key sk-oa-1 and token xoxb-bot leaked"
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-bot-token")
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-user-token")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-1-app-token")
+    msg = "key sk-oa-1 and token xoxb-bot-token plus xoxp-user-token and xapp-1-app-token"
     redacted = agent_mod._redact(msg)
     assert "sk-oa-1" not in redacted
-    assert "xoxb-bot" not in redacted
+    assert "xoxb-bot-token" not in redacted
+    assert "xoxp-user-token" not in redacted
+    assert "xapp-1-app-token" not in redacted
+
+
+def test_redact_does_not_mask_token_shaped_strings_without_env(fresh_secret_cache):
+    msg = "leaked bot=xoxb-9991336848048-11487252350550-ABCDEFGH and user=xoxp-1-abc-123"
+    assert agent_mod._redact(msg) == msg
+
+
+def test_redact_notifies_on_secret_hit(monkeypatch, fresh_secret_cache):
+    monkeypatch.setenv("JAMS_API_KEY", "sk-jams-secret-123")
+    notified = []
+    redact_mod.set_notifier(lambda keys, context: notified.append((keys, context)))
+    try:
+        redacted = agent_mod._redact("provider key sk-jams-secret-123 leaked", context="test tool")
+        assert "sk-jams-secret-123" not in redacted
+        assert notified == [(["sk-jams-secret-123"], "test tool")]
+    finally:
+        redact_mod.set_notifier(None)
+
+
+def test_redact_does_not_notify_without_secret(monkeypatch, fresh_secret_cache):
+    monkeypatch.setenv("JAMS_API_KEY", "sk-jams-secret-123")
+    notified = []
+    redact_mod.set_notifier(lambda keys, context: notified.append((keys, context)))
+    try:
+        assert agent_mod._redact("nothing to hide") == "nothing to hide"
+        assert notified == []
+    finally:
+        redact_mod.set_notifier(None)
 
 
 def test_redact_leaves_other_text_alone(monkeypatch, fresh_secret_cache):

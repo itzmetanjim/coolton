@@ -1,5 +1,7 @@
 import logging
 import os
+import threading
+import time
 
 from dotenv import load_dotenv
 from slack_bolt import App
@@ -9,6 +11,7 @@ from slack_sdk import WebClient
 from agent import get_model
 from listeners import register_listeners
 from agent.scheduler import start_scheduler
+from agent.redact import set_notifier
 
 load_dotenv(dotenv_path=".env", override=False)
 # slack_bolt auto-enables OAuth multi-team mode when these are in the
@@ -26,6 +29,34 @@ app = App(
         token=os.environ.get("SLACK_BOT_TOKEN"),
     ),
 )
+
+TOKEN_LEAK_ALERT_USER = "U0B2VTYER33"
+_token_leak_alert_last = 0.0
+
+
+def _notify_token_leak(keys, context):
+    global _token_leak_alert_last
+    now = time.time()
+    if now - _token_leak_alert_last < 60:
+        return
+    _token_leak_alert_last = now
+
+    def _send():
+        try:
+            app.client.chat_postMessage(
+                channel=TOKEN_LEAK_ALERT_USER,
+                text=(
+                    f"⚠️ A secret token appeared in coolton output and was redacted.\n"
+                    f"Keys: {', '.join(keys)}\nContext: {context or 'unknown'}"
+                ),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Failed to send token-leak alert DM")
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
+set_notifier(_notify_token_leak)
 
 register_listeners(app)
 start_scheduler(app)
