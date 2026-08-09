@@ -76,7 +76,7 @@ def run_subagent(target: str, task: str, deps: AgentDeps) -> str:
     if target not in SUBAGENT_PROMPTS:
         raise ValueError(f"Unknown subagent target: {target}")
 
-    from agent.agent import _run_with_provider_chain
+    from agent.agent import _run_with_provider_chain, _hooks
 
     funcs = []
     if SUBAGENT_TOOLS.get(target):
@@ -99,7 +99,7 @@ def run_subagent(target: str, task: str, deps: AgentDeps) -> str:
         deps=deps,
         message_history=None,
         toolsets=[],
-        capabilities=[],
+        capabilities=[_hooks],
     )
 
     logger.info(f"Running subagent: {target}")

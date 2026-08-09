@@ -2206,7 +2206,7 @@ def run_agent(text, deps, message_history=None, images=None):
         tools=tool_functions,
     )
 
-    capabilities = [PrepareTools(disable_strict_for_all_tools)]
+    capabilities = [_hooks, PrepareTools(disable_strict_for_all_tools)]
     if deps.plan_ts:
         from agent.plan_block import build_plan_hooks
         capabilities.append(build_plan_hooks())

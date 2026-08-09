@@ -297,7 +297,7 @@ def build_plan_hooks():
         logger.info(
             "TOOL INPUT  | %s | %s",
             call.tool_name,
-            _truncate(_pretty_args(args), 1000),
+            _truncate(_redact(_pretty_args(args), context=f"tool input {call.tool_name}"), 1000),
         )
         # If the user sent !stop in this thread after this run started, halt before the next tool.
         if stop_requested_for(deps.channel_id, deps.thread_ts, deps.run_started_at):
@@ -312,7 +312,7 @@ def build_plan_hooks():
             "task_id": task_id,
             "title": display,
             "status": "in_progress",
-            "input": _truncate(_pretty_args(args), 500),
+            "input": _truncate(_redact(_pretty_args(args), context=f"tool input {call.tool_name}"), 500),
         }
         update_plan_message(deps)
         return args
@@ -323,7 +323,7 @@ def build_plan_hooks():
         logger.info(
             "TOOL OUTPUT | %s | %s",
             call.tool_name,
-            _truncate(_pretty_args(result), 1000),
+            _truncate(_redact(_pretty_args(result), context=f"tool output {call.tool_name}"), 1000),
         )
         if not deps.plan_ts:
             return result
@@ -331,7 +331,9 @@ def build_plan_hooks():
         task = deps.plan_tasks.get(task_id)
         if task is not None:
             task["status"] = "complete"
-            task["output"] = _combined_io(task.get("input", ""), str(result))
+            task["output"] = _combined_io(
+                task.get("input", ""), _redact(str(result), context=f"tool output {call.tool_name}")
+            )
             update_plan_message(deps)
         return result
 
@@ -341,14 +343,16 @@ def build_plan_hooks():
         logger.error(
             "TOOL ERROR  | %s | %s",
             call.tool_name,
-            _truncate(str(error), 1000),
+            _truncate(_redact(str(error), context=f"tool error {call.tool_name}"), 1000),
         )
         if deps.plan_ts:
             task_id = f"task_{call.tool_call_id}"
             task = deps.plan_tasks.get(task_id)
             if task is not None:
                 task["status"] = "error"
-                task["output"] = _combined_io(task.get("input", ""), str(error))
+                task["output"] = _combined_io(
+                    task.get("input", ""), _redact(str(error), context=f"tool error {call.tool_name}")
+                )
                 update_plan_message(deps)
         raise error
 
