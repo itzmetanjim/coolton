@@ -75,7 +75,7 @@ def test_redact_notifies_on_secret_hit(monkeypatch, fresh_secret_cache):
     try:
         redacted = agent_mod._redact("provider key sk-jams-secret-123 leaked", context="test tool")
         assert "sk-jams-secret-123" not in redacted
-        assert notified == [(["sk-jams-secret-123"], "test tool")]
+        assert notified == [(["JAMS_API_KEY"], "test tool")]
     finally:
         redact_mod.set_notifier(None)
 
@@ -89,6 +89,13 @@ def test_redact_does_not_notify_without_secret(monkeypatch, fresh_secret_cache):
         assert notified == []
     finally:
         redact_mod.set_notifier(None)
+
+
+def test_redact_masks_hardcoded_canary(fresh_secret_cache):
+    msg = "endpoint returned COOLTON-CANARY-c7e6f357-5197-4d5e-8682-9e0758561d8f here"
+    redacted = agent_mod._redact(msg)
+    assert "COOLTON-CANARY-c7e6f357-5197-4d5e-8682-9e0758561d8f" not in redacted
+    assert "***" in redacted
 
 
 def test_redact_leaves_other_text_alone(monkeypatch, fresh_secret_cache):
