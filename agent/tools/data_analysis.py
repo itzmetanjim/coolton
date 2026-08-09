@@ -20,12 +20,20 @@ def _get_sandbox(channel_id: str, thread_ts: str):
 def _ensure_py_libs(sandbox, libs: list[str]) -> str | None:
     """Ensure the given Python packages are importable in the sandbox, pip-installing if missing."""
     import_script = shlex.quote("\n".join(f"import {lib}" for lib in libs))
-    check = sandbox.commands.run(f"python3 -c {import_script}")
-    if check.exit_code == 0:
+    try:
+        sandbox.commands.run(f"python3 -c {import_script}")
         return None
-    install = sandbox.commands.run("pip install --quiet " + " ".join(libs))
-    if install.exit_code != 0:
-        return f"Failed to install {', '.join(libs)}: {install.stderr or install.stdout}"
+    except Exception:
+        pass
+    try:
+        sandbox.commands.run(
+            "python3 -m pip install --break-system-packages --quiet " + " ".join(libs),
+            timeout=300,
+        )
+    except Exception as e:
+        stderr = getattr(e, "stderr", None) or ""
+        stdout = getattr(e, "stdout", None) or ""
+        return f"Failed to install {', '.join(libs)}: {stderr or stdout or str(e)}"
     return None
 
 
