@@ -1,6 +1,7 @@
 import logging
 import time
 
+from agent.redact import redact as _redact
 from agent.stop_store import HaltRun, stop_requested_for
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,7 @@ def set_plan_error(deps, error_text: str) -> None:
         "task_id": err_id,
         "title": "Something went wrong",
         "status": "error",
-        "output": _rich_output(error_text, 300),
+        "output": _rich_output(_redact(error_text, context="plan error"), 300),
     }
     blocks = build_plan_blocks("Error", list(deps.plan_tasks.values()))
     try:

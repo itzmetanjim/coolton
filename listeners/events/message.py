@@ -121,7 +121,8 @@ def handle_message(
 
     except Exception as e:
         logger.exception(f"Failed to handle message: {e}")
+        from agent.redact import redact as _redact
         say(
-            text=f":warning: Something went wrong! ({type(e).__name__}: {e})",
+            text=f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})",
             thread_ts=event.get("thread_ts") or event.get("ts"),
         )

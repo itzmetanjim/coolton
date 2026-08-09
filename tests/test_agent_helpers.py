@@ -98,6 +98,32 @@ def test_redact_masks_hardcoded_canary(fresh_secret_cache):
     assert "***" in redacted
 
 
+def test_agent_hooks_redact_tool_result_and_output(monkeypatch, fresh_secret_cache):
+    monkeypatch.setenv("JAMS_API_KEY", "sk-jams-secret-123")
+    from pydantic_ai import RunContext
+    from pydantic_ai.messages import ToolCallPart
+    from types import SimpleNamespace
+
+    ctx = RunContext(model=None, usage=None, prompt="", deps=None)
+    tool_def = SimpleNamespace(name="run_linux_command")
+    call = ToolCallPart(tool_name="run_linux_command", args={})
+
+    tool_result = agent_mod._redact_tool_result(
+        ctx, call=call, tool_def=tool_def, args={}, result="STDOUT sk-jams-secret-123 here"
+    )
+    assert "sk-jams-secret-123" not in tool_result
+    assert "***" in tool_result
+
+    output = agent_mod._redact_output(ctx, output_context=None, output="final sk-jams-secret-123")
+    assert "sk-jams-secret-123" not in output
+    assert "***" in output
+
+    non_str = agent_mod._redact_tool_result(
+        ctx, call=call, tool_def=tool_def, args={}, result={"key": "sk-jams-secret-123"}
+    )
+    assert non_str == {"key": "sk-jams-secret-123"}
+
+
 def test_redact_leaves_other_text_alone(monkeypatch, fresh_secret_cache):
     monkeypatch.delenv("JAMS_API_KEY", raising=False)
     msg = "no secrets here, just a normal error"
