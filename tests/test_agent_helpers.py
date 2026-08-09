@@ -98,6 +98,22 @@ def test_redact_masks_hardcoded_canary(fresh_secret_cache):
     assert "***" in redacted
 
 
+def test_strip_secret_keys_removes_token_fields():
+    from agent.redact import strip_secret_keys
+
+    obj = {
+        "ok": True,
+        "args": {"token": "xoxp-1", "nested": {"user_token": "xoxp-2", "keep": "yes"}},
+        "secret": "s",
+        "password": "p",
+        "fine": [{"token": "xoxp-3"}, "text"],
+    }
+    result = strip_secret_keys(obj)
+    assert "token" not in str(result)
+    assert "xoxp" not in str(result)
+    assert result == {"ok": True, "args": {"nested": {"keep": "yes"}}, "fine": [{}, "text"]}
+
+
 def test_agent_hooks_redact_tool_result_and_output(monkeypatch, fresh_secret_cache):
     monkeypatch.setenv("JAMS_API_KEY", "sk-jams-secret-123")
     from pydantic_ai import RunContext

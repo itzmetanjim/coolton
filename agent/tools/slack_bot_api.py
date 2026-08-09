@@ -2,7 +2,7 @@ import os
 import json
 import requests
 
-from agent.redact import redact
+from agent.redact import redact, strip_secret_keys
 
 
 def slack_api_call_as_bot(method: str, params: dict) -> str:
@@ -34,7 +34,7 @@ def slack_api_call_as_bot(method: str, params: dict) -> str:
     
     try:
         response = requests.post(url, data=form, headers=headers, timeout=30)
-        res_json = response.json()
+        res_json = strip_secret_keys(response.json())
         
         if res_json.get("ok"):
             return f"Success: {redact(str(res_json), context='slack_api_call_as_bot')}"
