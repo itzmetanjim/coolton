@@ -1,20 +1,14 @@
 import os
 import shlex
 
-from agent.sandbox_store import get_thread_sandbox_id
-try:
-    from e2b import Sandbox
-except ImportError:
-    Sandbox = None
+from agent.sandbox_helpers import get_or_create_sandbox
 
 
 def _get_sandbox(channel_id: str, thread_ts: str):
-    if Sandbox is None:
-        return None, "E2B sandbox library not available."
-    sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
-    if not sandbox_id:
-        return None, "No active sandbox for this thread. Run a command first."
-    return Sandbox.connect(sandbox_id), None
+    try:
+        return get_or_create_sandbox(channel_id, thread_ts)[0], None
+    except Exception as e:
+        return None, f"Error: {e}"
 
 
 def read_sandbox_file(channel_id: str, thread_ts: str, path: str) -> str:

@@ -4,6 +4,8 @@ from pydantic_ai.models.openai import OpenAIChatModel
 
 import importlib
 
+import agent.sandbox_helpers as helpers_mod
+
 
 
 agent_mod = importlib.import_module("agent.agent")
@@ -239,24 +241,24 @@ def test_runtime_model_no_provider_raises(monkeypatch, clean_env):
 
 
 # ---------------------------------------------------------------------------
-# proxy cache
+# proxy cache (sandbox_helpers)
 # ---------------------------------------------------------------------------
 
 
 def test_proxy_cache_capped(monkeypatch):
-    monkeypatch.setattr(agent_mod, "_proxy_cache", {})
+    monkeypatch.setattr(helpers_mod, "_proxy_cache", {})
     for i in range(300):
-        agent_mod._proxy_cache_set(f"sandbox-{i}", {"token": f"t{i}"})
-    assert len(agent_mod._proxy_cache) <= agent_mod._PROXY_CACHE_MAX
+        helpers_mod._proxy_cache_set(f"sandbox-{i}", {"token": f"t{i}"})
+    assert len(helpers_mod._proxy_cache) <= helpers_mod._PROXY_CACHE_MAX
     # most recent survives
-    assert agent_mod._proxy_cache_get("sandbox-299") == {"token": "t299"}
+    assert helpers_mod._proxy_cache_get("sandbox-299") == {"token": "t299"}
     # the very first ones were evicted
-    assert agent_mod._proxy_cache_get("sandbox-0") is None
+    assert helpers_mod._proxy_cache_get("sandbox-0") is None
 
 
 def test_proxy_cache_get_missing(monkeypatch):
-    monkeypatch.setattr(agent_mod, "_proxy_cache", {})
-    assert agent_mod._proxy_cache_get("sandbox-nope") is None
+    monkeypatch.setattr(helpers_mod, "_proxy_cache", {})
+    assert helpers_mod._proxy_cache_get("sandbox-nope") is None
 
 
 # ---------------------------------------------------------------------------
