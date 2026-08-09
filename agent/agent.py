@@ -10,6 +10,7 @@ import threading
 import requests
 from pydantic_ai import RunContext
 from pydantic_ai import Agent
+from pydantic_ai.messages import BinaryContent, ToolReturn
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.capabilities import PrepareTools
 from dataclasses import replace
@@ -313,8 +314,18 @@ Use `fetch_url` to fetch the readable text of a specific known URL (Exa).
 - Best for: summarizing a shared article/link, reading a specific page, getting past a snippet
 - Args: url, max_characters (default 8000)
 
+## VISION (reading images)
+Whether you can SEE images depends on the model you're running on — this is told to you each turn
+in CURRENT CONTEXT.
+- **If you're a vision model:** images attached to the user's message are shown to you DIRECTLY —
+  you can actually see them, no extra tool needed. To view an image that's sitting in your sandbox
+  (downloaded with `get_slack_file` / `download_attachments_to_sandbox`, or generated), call
+  `see_image_from_sandbox` with its path — the image is sent back to you so you can see it.
+- **If you're a non-vision model:** you CANNOT see images directly. To analyze an image, use
+  `analyze_image` after downloading it (below).
+
 ## IMAGE ANALYSIS (analyze_image)
-Use `analyze_image` when a user shares an image and asks you to analyze it (describe, extract text, identify objects, etc.).
+Use `analyze_image` when you need an AI description of an image (describe, extract text, identify objects, etc.) — this is the fallback for non-vision models.
 1. First download the image using `download_attachments_to_sandbox`
 2. Read the file bytes from the sandbox
 3. Call `analyze_image` with the image data
@@ -590,6 +601,67 @@ def get_runtime_model(deps_user_id: str | None = None) -> str:
         "No AI provider configured. "
         "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or JAMS_API_KEY."
     )
+
+
+_VISION_MODEL_MARKERS = (
+    "claude",
+    "gpt-4",
+    "gpt-5",
+    "o1",
+    "o3",
+    "o4",
+    "luna",
+    "gemini",
+    "kimi",
+    "minimax",
+    "gemma",
+    "versatile",
+    "llava",
+    "vision",
+    "vlm",
+    "-vl",
+)
+
+
+def _is_vision_capable(model_name: str) -> bool:
+    """Best-effort check of whether a model string supports image input."""
+    m = model_name.lower()
+    if m.startswith("anthropic:"):
+        return True
+    return any(marker in m for marker in _VISION_MODEL_MARKERS)
+
+
+def _resolve_provider_order(deps_user_id: str | None = None) -> list:
+    """The provider fallback order the run loop will actually try, cache-adjusted.
+
+    Applies the global fallback cache (skip dead providers, prefer the
+    last-known-good provider first) the same way _run_with_provider_chain does,
+    so the vision gate in run_agent agrees with the model that runs.
+    """
+    from agent.fallback_cache import get_dead_providers, get_working_provider
+
+    provider_order = _build_provider_order(deps_user_id)
+    if not provider_order:
+        raise RuntimeError("No AI provider configured.")
+
+    has_byok = provider_order[0][0] == "byok"
+    if not has_byok:
+        dead_providers = get_dead_providers()
+        if dead_providers:
+            alive = [(n, c) for n, c in provider_order if n not in dead_providers]
+            skipped = len(provider_order) - len(alive)
+            if skipped:
+                logger.info(f"Fallback cache: skipping {skipped} dead provider(s): {sorted(dead_providers)}")
+            provider_order = alive or provider_order
+
+        cached_provider = get_working_provider()
+        if cached_provider:
+            for i, (name, _) in enumerate(provider_order):
+                if name == cached_provider:
+                    provider_order.insert(0, provider_order.pop(i))
+                    logger.info(f"Fallback cache: trying {cached_provider} first (global)")
+                    break
+    return provider_order
 
 
 def _build_provider_order(deps_user_id: str | None = None) -> list:
@@ -1191,6 +1263,65 @@ def analyze_image_tool(ctx: RunContext[AgentDeps], image_path: str, prompt: str 
         return analyze_image(image_data, filename, prompt)
     except Exception as e:
         return f"Error analyzing image: {str(e)}"
+
+
+_IMAGE_MIME_BY_EXT = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "bmp": "image/bmp",
+}
+
+
+@agent.tool
+def see_image_from_sandbox(ctx: RunContext[AgentDeps], path: str) -> ToolReturn[str]:
+    """View an image file that is in your sandbox.
+
+    You can actually SEE the image: its pixels are sent back to your vision model.
+    Use this to read text off a screenshot, describe a chart or photo, check a
+    generated/downloaded image, extract details from a diagram, etc. Only works on
+    image files (png, jpg, jpeg, gif, webp, bmp).
+
+    Args:
+        path: Path to the image in the sandbox (e.g. ~/downloads/photo.png or
+              /home/user/attachments/screenshot.jpg).
+    """
+    if not os.environ.get("E2B_API_KEY"):
+        return ToolReturn("Error: E2B_API_KEY not configured")
+    sandbox_id = get_thread_sandbox_id(ctx.deps.channel_id, ctx.deps.thread_ts)
+    if not sandbox_id:
+        return ToolReturn("Error: No active sandbox. Download the image first (get_slack_file or download_attachments_to_sandbox).")
+    path = path.strip()
+    if path.startswith("~/"):
+        path = "/home/user/" + path[2:]
+    elif not path.startswith("/"):
+        path = "/home/user/" + path
+    if ".." in path.split("/"):
+        return ToolReturn("Error: relative paths (..) are not allowed.")
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    mime = _IMAGE_MIME_BY_EXT.get(ext)
+    if not mime:
+        return ToolReturn(
+            f"Error: unsupported file type '.{ext}'. Supported: png, jpg, jpeg, gif, webp, bmp."
+        )
+    try:
+        sandbox = Sandbox.connect(sandbox_id)
+        data = sandbox.files.read(path)
+    except Exception as e:
+        return ToolReturn(f"Error reading {path} from sandbox: {e}")
+    if not data:
+        return ToolReturn(f"Error: no file found at {path}")
+    if len(data) > 15 * 1024 * 1024:
+        return ToolReturn(f"Error: {path} is {len(data)} bytes; images over 15MB can't be sent to the model.")
+    return ToolReturn(
+        f"Here is the image from your sandbox at {path} ({len(data)} bytes, {mime}).",
+        content=[
+            f"(Image from {path} via see_image_from_sandbox)",
+            BinaryContent(data=data, media_type=mime, vendor_metadata={"detail": "high"}),
+        ],
+    )
 
 
 @agent.tool
@@ -2208,7 +2339,7 @@ class _SkipResult:
         return self._history
 
 
-def run_agent(text, deps, message_history=None):
+def run_agent(text, deps, message_history=None, images=None):
     # Mark when this run started so a later !stop from the same user halts us.
     deps.run_started_at = time.time()
 
@@ -2219,6 +2350,16 @@ def run_agent(text, deps, message_history=None):
     custom_instructions = _get_instructions(deps.user_id)
     deps.custom_instructions = custom_instructions
 
+    # The model that will actually run (cache-adjusted provider order) decides whether
+    # the agent is vision-capable: attached images are passed straight to a vision model,
+    # and see_image_from_sandbox is only exposed to one.
+    try:
+        provider_order = _resolve_provider_order(deps.user_id)
+        first_model = provider_order[0][1]["model"]
+    except Exception:
+        first_model = ""
+    is_vision = _is_vision_capable(first_model)
+
     context_info = f"""
 ## CURRENT CONTEXT
 - You are in channel_id: `{deps.channel_id}` (thread_ts: `{deps.thread_ts}` if in thread, else DM)
@@ -2227,6 +2368,7 @@ def run_agent(text, deps, message_history=None):
 - Your own bot user id (this is YOU, not a third party): `{os.environ.get("COOLTON_BOT_ID", "")}`
 - Your cooltonUser helper account id (acts on your behalf): `{os.environ.get("COOLTON_USER_ID", "")}`
 - Message timestamp: `{deps.message_ts}`
+- Model: {first_model or "unknown"} — {"VISION-capable: attached images are visible to you, and you can call `see_image_from_sandbox` to view images in your sandbox." if is_vision else "NOT vision-capable: you cannot see images directly; download them to your sandbox and use `analyze_image`."}
 """
     full_prompt = SYSTEM_PROMPT + context_info
     if custom_instructions:
@@ -2248,6 +2390,8 @@ def run_agent(text, deps, message_history=None):
         logger.info("Slack MCP Server disabled (no user_token)")
 
     all_tools = list(agent._function_toolset.tools.values())
+    if not is_vision:
+        all_tools = [t for t in all_tools if t.name != "see_image_from_sandbox"]
     tool_functions = [t.function for t in all_tools]
 
     agent_dynamic = Agent(
@@ -2269,8 +2413,22 @@ def run_agent(text, deps, message_history=None):
         )
     )
 
+    user_prompt: str | list = text
+    if images and is_vision:
+        user_prompt = [
+            text,
+            *[
+                BinaryContent(
+                    data=img["data"],
+                    media_type=img["media_type"],
+                    vendor_metadata={"detail": "high"},
+                )
+                for img in images
+            ],
+        ]
+
     run_kwargs = dict(
-        user_prompt=text,
+        user_prompt=user_prompt,
         deps=deps,
         message_history=message_history,
         toolsets=toolsets,
@@ -2293,42 +2451,10 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
     Uses the global fallback cache: skips providers known to be dead and prefers the
     last-known-good provider first.
     """
-    from agent.fallback_cache import (
-        get_working_provider,
-        set_working_provider,
-        mark_dead,
-        get_dead_providers,
-    )
+    from agent.fallback_cache import set_working_provider, mark_dead
 
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
-    provider_order = _build_provider_order(deps.user_id)
-
-    if not provider_order:
-        raise RuntimeError("No AI provider configured.")
-
-    # BYOK endpoints are per-user (their own base_url + key), so the GLOBAL fallback
-    # cache (dead marks / last-known-good provider, shared across all users) must not
-    # reorder them or let another user's marks suppress them.
-    has_byok = provider_order[0][0] == "byok"
-
-    # Global fallback cache: skip providers known to be dead, prefer the
-    # last-known-good provider first (shared across all users).
-    if not has_byok:
-        dead_providers = get_dead_providers()
-        if dead_providers:
-            alive = [(n, c) for n, c in provider_order if n not in dead_providers]
-            skipped = len(provider_order) - len(alive)
-            if skipped:
-                logger.info(f"Fallback cache: skipping {skipped} dead provider(s): {sorted(dead_providers)}")
-            provider_order = alive or provider_order
-
-        cached_provider = get_working_provider()
-        if cached_provider:
-            for i, (name, _) in enumerate(provider_order):
-                if name == cached_provider:
-                    provider_order.insert(0, provider_order.pop(i))
-                    logger.info(f"Fallback cache: trying {cached_provider} first (global)")
-                    break
+    provider_order = _resolve_provider_order(deps.user_id)
 
     # Retry configuration
     max_retries = 3

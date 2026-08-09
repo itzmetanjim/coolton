@@ -95,7 +95,7 @@ def test_happy_path(mocks):
 def test_skip_path_deletes_plan_and_does_not_stream(mocks):
     import agent.plan_block as pb
 
-    def fake_run_agent(text, deps, message_history=None):
+    def fake_run_agent(text, deps, message_history=None, images=None):
         deps.should_skip = True
         return SimpleNamespace(output="", all_messages=lambda: [])
 
@@ -115,7 +115,7 @@ def test_skip_path_deletes_plan_and_does_not_stream(mocks):
 def test_stop_path_keeps_plan_and_sets_error(mocks):
     import agent.plan_block as pb
 
-    def fake_run_agent(text, deps, message_history=None):
+    def fake_run_agent(text, deps, message_history=None, images=None):
         deps.should_skip = True
         deps.halt_reason = "!stop requested"
         return SimpleNamespace(output="", all_messages=lambda: [])

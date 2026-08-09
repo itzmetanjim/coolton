@@ -2,6 +2,45 @@ import base64
 import os
 import requests
 
+IMAGE_MIME_PREFIX = "image/"
+_UNSUPPORTED_IMAGE_MIMES = {"image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"}
+
+
+def download_attached_images(client, files, max_images: int = 4, max_bytes: int = 10 * 1024 * 1024) -> list[dict]:
+    """Download image files attached to a Slack message event.
+
+    Args:
+        client: Slack WebClient (used for its bot token).
+        files: The `files` array from a Slack message event.
+        max_images: Maximum number of images to fetch.
+        max_bytes: Per-image size cap.
+
+    Returns:
+        List of {"data": bytes, "media_type": str, "name": str} dicts.
+    """
+    token = getattr(client, "token", None)
+    if not token:
+        return []
+    images = []
+    for f in files or []:
+        if len(images) >= max_images:
+            break
+        mimetype = (f.get("mimetype") or "").lower()
+        name = f.get("name") or f.get("filetype") or "image"
+        if not mimetype.startswith(IMAGE_MIME_PREFIX) or mimetype in _UNSUPPORTED_IMAGE_MIMES:
+            continue
+        url = f.get("url_private_download") or f.get("url_private")
+        if not url:
+            continue
+        try:
+            resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+            if resp.status_code != 200 or len(resp.content) > max_bytes:
+                continue
+            images.append({"data": resp.content, "media_type": mimetype, "name": name})
+        except requests.RequestException:
+            continue
+    return images
+
 
 def analyze_image(image_data: bytes, filename: str, prompt: str = "Describe this image in detail.") -> str:
     """Analyze an image using the AI model with vision capabilities.

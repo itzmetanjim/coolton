@@ -115,8 +115,8 @@ def read_message_tool(inbox_id: str = DEFAULT_INBOX, message_id: str = "") -> st
         message_id: The message id from list_messages.
 
     Returns: sender, subject, and the message body text. If AgentMail's single-message
-    read endpoint 404s (a known AgentMail-side list/get inconsistency), falls back to the
-    metadata already returned by list_messages so the agent still gets something useful.
+    read endpoint 404s, falls back to the metadata already returned by list_messages so
+    the agent still gets something useful.
     """
     client = _client()
     if client is None:
