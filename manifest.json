@@ -100,10 +100,6 @@
                 "users:write"
             ],
             "user": [
-                "admin.roles:read",
-                "admin.roles:write",
-                "admin.usergroups:read",
-                "admin.usergroups:write",
                 "bookmarks:read",
                 "bookmarks:write",
                 "calls:read",
