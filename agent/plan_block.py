@@ -1,7 +1,5 @@
-import inspect
 import logging
 import time
-from typing import Any
 
 from agent.stop_store import HaltRun, stop_requested_for
 
@@ -186,10 +184,11 @@ def complete_plan_message(deps) -> None:
 
 
 def delete_plan_message(deps) -> None:
-    """Delete the plan/thinking message entirely (used on skip / !stop).
+    """Delete the plan/thinking message entirely (used when the model skips the turn).
 
     Prevents the thinking block from being left stuck 'in_progress' when the
-    turn is halted without a final answer.
+    turn is halted without a final answer. A !stop halt keeps the block instead
+    (set_plan_error), so the user can see the turn was manually stopped.
     """
     if not deps.plan_ts:
         return

@@ -139,6 +139,35 @@ def _rewrite_url(host: str, path: str) -> str:
     return translate_ghe_to_github(f"https://{host}{path}")
 
 
+# Upstream hosts the proxy is allowed to forward to. Everything else is denied so a
+# compromised sandbox cannot turn the proxy into an open relay and exfiltrate the PAT.
+_ALLOWED_UPSTREAM_HOSTS = (
+    "github.com",
+    "api.github.com",
+    "uploads.github.com",
+    "raw.githubusercontent.com",
+    "gist.github.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
+    "media.githubusercontent.com",
+    "camo.githubusercontent.com",
+    "avatars.githubusercontent.com",
+    "*.githubusercontent.com",
+    "github.io",
+    "*.github.io",
+)
+
+
+def _is_allowed_upstream(url: str) -> bool:
+    host = urlparse(url).netloc.split(":")[0].lower()
+    if host in _ALLOWED_UPSTREAM_HOSTS:
+        return True
+    for suffix in ("githubusercontent.com", "github.io"):
+        if host.endswith("." + suffix):
+            return True
+    return False
+
+
 class _Allowlist:
     def __init__(self):
         self._set = set()
@@ -241,15 +270,6 @@ class _AdminHandler(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
 
-def issue_token(tok: str):
-    """Authorize a sandbox token (callable from the agent process directly OR via admin HTTP)."""
-    allowlist.add(tok)
-
-
-def revoke_token(tok: str):
-    allowlist.remove(tok)
-
-
 def _extract_token(headers: dict) -> str | None:
     """Return the sandbox token from the request, or None if not authorized.
 
@@ -350,6 +370,11 @@ class _Handler(BaseHTTPRequestHandler):
         # gh treats GH_HOST as GitHub Enterprise, so its URLs are GHE-formatted
         # (/api/v3, /api/graphql, bare host for git/UI). Translate back to github.com.
         upstream = _rewrite_url(host.split(":")[0], self.path)
+
+        if not _is_allowed_upstream(upstream):
+            logger.warning("deny: non-github upstream %r", upstream)
+            self._deny(502)
+            return
 
         body = None
         if self.command in ("POST", "PUT", "PATCH"):

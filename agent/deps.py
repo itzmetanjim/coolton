@@ -15,5 +15,6 @@ class AgentDeps:
     plan_ts: str | None = None
     plan_tasks: dict = field(default_factory=dict)
     should_skip: bool = False
+    halt_reason: str = ""
     model_used: str = ""
     run_started_at: float = 0.0

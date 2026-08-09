@@ -9,7 +9,6 @@ its own short-lived token, authorized on sandbox start and revoked on sandbox st
 real GitHub PAT never leaves the host.
 """
 
-import json
 import os
 import secrets
 

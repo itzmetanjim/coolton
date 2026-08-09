@@ -5,11 +5,10 @@ from logging import Logger
 from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
-from agent import AgentDeps, run_agent
 from agent.leave_thread_store import is_thread_engaged
 from agent.stop_store import request_stop
 from thread_context import conversation_store
-from listeners.views.feedback_builder import build_feedback_blocks
+from listeners.events.turn import run_agent_turn
 
 # Slack broadcast / user-group mentions: @channel, @here, @everyone, named
 # user groups (e.g. <!subteam^S123|name>).
@@ -49,14 +48,22 @@ def handle_message(
     channel_id = context.channel_id
     thread_ts = event.get("thread_ts") or event["ts"]
     user_id = context.user_id
+    is_dm = event.get("channel_type") == "im"
 
-    # !stop: immediately halt every coolton run in this thread.
+    # !stop: immediately halt every coolton run in this thread. Only honored
+    # when the bot is explicitly @-mentioned (that path lives in
+    # handle_app_mentioned) or in a DM, where every message is directed at the
+    # bot. A bare "!stop" in a channel thread without a mention is ignored —
+    # it must never kill running coolton instances on its own.
     if "!stop" in text:
-        request_stop(channel_id, thread_ts)
-        say(
-            text="⏹️ stopping all your running coolton instances…",
-            thread_ts=thread_ts,
-        )
+        if not is_dm:
+            logger.info("Ignoring '!stop' without an @mention")
+        else:
+            request_stop(channel_id, thread_ts)
+            say(
+                text="⏹️ stopping all your running coolton instances…",
+                thread_ts=thread_ts,
+            )
         return
 
     # Messages starting with "<>" are only answered when the bot is explicitly
@@ -73,8 +80,6 @@ def handle_message(
     if PING_GROUP_MENTION_RE.search(text):
         logger.info(f"Ignoring ping-group mention without direct bot mention: {text[:80]}")
         return
-
-    is_dm = event.get("channel_type") == "im"
 
     # Top-level channel messages are handled by app_mentioned.
     if not is_dm and not event.get("thread_ts"):
@@ -96,65 +101,22 @@ def handle_message(
         # Get conversation history
         history = conversation_store.get_history(channel_id, thread_ts)
 
-        # Set assistant thread status with loading messages
-        client.assistant_threads_setStatus(
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            status="Thinking...",
-            loading_messages=[
-                "Teaching the hamsters to type faster…",
-                "Untangling the internet cables…",
-                "Consulting the office goldfish…",
-                "Polishing up the response just for you…",
-                "Convincing the AI to stop overthinking…",
-            ],
-        )
-
-        # Run the agent
-        deps = AgentDeps(
+        run_agent_turn(
             client=client,
-            user_id=user_id,
+            say_stream=say_stream,
+            say=say,
+            logger=logger,
             channel_id=channel_id,
             thread_ts=thread_ts,
             message_ts=event["ts"],
+            user_id=user_id,
             user_token=context.user_token,
+            text=text,
+            history=history,
         )
-
-        from agent.plan_block import send_plan_message, finalize_plan_message, complete_plan_message, delete_plan_message
-        plan_ts = send_plan_message(deps)
-        deps.plan_ts = plan_ts
-
-        result = run_agent(text, deps, message_history=history)
-
-        if deps.should_skip:
-            if plan_ts:
-                delete_plan_message(deps)
-        else:
-            finalize_plan_message(deps, result.output)
-
-            # Stream response in thread with feedback buttons
-            streamer = say_stream()
-            streamer.append(markdown_text=result.output)
-            feedback_blocks = build_feedback_blocks()
-            streamer.stop(blocks=feedback_blocks)
-            complete_plan_message(deps)
-
-        # Store conversation history
-        conversation_store.set_history(channel_id, thread_ts, result.all_messages())
-
-        # kevinton: silent background skill-capture agent (runs after every turn)
-        if not deps.should_skip:
-            from agent.kevinton import spawn_kevinton
-
-            spawn_kevinton(text, result.all_messages(), channel_id, thread_ts, deps)
 
     except Exception as e:
         logger.exception(f"Failed to handle message: {e}")
-        try:
-            from agent.plan_block import set_plan_error
-            set_plan_error(deps, str(e))
-        except Exception:
-            pass
         say(
             text=f":warning: Something went wrong! ({type(e).__name__}: {e})",
             thread_ts=event.get("thread_ts") or event.get("ts"),

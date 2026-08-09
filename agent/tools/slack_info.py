@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 
 SLACK_API = "https://slack.com/api"
@@ -7,6 +8,88 @@ SLACK_API = "https://slack.com/api"
 def _bot_headers():
     token = os.environ.get("SLACK_BOT_TOKEN")
     return {"Authorization": f"Bearer {token}"} if token else None
+
+
+def _team_id() -> str:
+    return os.environ.get("SLACK_TEAM_ID", "")
+
+
+def _strip_mention(text: str) -> str:
+    """Strip a Slack mention wrapper like <@U123|name> / <#C123|name> / <F123|name> to its id."""
+    text = text.strip()
+    if text.startswith("<") and ">" in text:
+        inner = text[1:text.index(">")]
+        candidate = inner.split("|")[0]
+        if candidate.startswith(("@", "#", "!")):
+            candidate = candidate[1:]
+        return candidate
+    return text
+
+
+def _resolve_user_id(user_id: str) -> str:
+    """Return a Slack user id (U...) given an id, <@mention>, or @username/display name."""
+    user_id = _strip_mention(user_id)
+    if re.match(r"^U[A-Z0-9]+$", user_id):
+        return user_id
+    name = user_id.lstrip("@").lower()
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token or not name:
+        return user_id
+    try:
+        params = {"limit": 200}
+        team_id = _team_id()
+        if team_id:
+            params["team_id"] = team_id
+        resp = requests.get(
+            f"{SLACK_API}/users.list", params=params, headers=_bot_headers(), timeout=15
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            return user_id
+        for member in data.get("members", []):
+            if not member or member.get("deleted"):
+                continue
+            profile = member.get("profile", {})
+            cands = {
+                member.get("name", ""),
+                profile.get("display_name", ""),
+                profile.get("real_name", ""),
+                (profile.get("email", "") or "").split("@")[0],
+                profile.get("email", "") or "",
+            }
+            if name in {c.lower() for c in cands if c}:
+                return member["id"]
+    except Exception:
+        pass
+    return user_id
+
+
+def _resolve_channel_id(channel_id: str) -> str:
+    """Return a Slack channel id (C/D/G...) given an id, <#mention>, or #channel name."""
+    channel_id = _strip_mention(channel_id)
+    if re.match(r"^[CDG][A-Z0-9]+$", channel_id):
+        return channel_id
+    name = channel_id.lstrip("#").lower()
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token or not name:
+        return channel_id
+    try:
+        params = {"limit": 200, "types": "public_channel,private_channel,mpim,im"}
+        team_id = _team_id()
+        if team_id:
+            params["team_id"] = team_id
+        resp = requests.get(
+            f"{SLACK_API}/conversations.list", params=params, headers=_bot_headers(), timeout=15
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            return channel_id
+        for ch in data.get("channels", []):
+            if (ch.get("name") or "").lower() == name or ch.get("id") == channel_id:
+                return ch["id"]
+    except Exception:
+        pass
+    return channel_id
 
 
 def get_user_info(user_id: str) -> str:
@@ -21,16 +104,28 @@ def get_user_info(user_id: str) -> str:
         return "Error: SLACK_BOT_TOKEN not configured"
     if not user_id:
         return "Error: user_id is required"
+    user_id = _resolve_user_id(user_id)
     try:
+        params = {"user": user_id}
+        team_id = _team_id()
+        if team_id:
+            params["team_id"] = team_id
         response = requests.get(
             f"{SLACK_API}/users.info",
-            params={"user": user_id},
+            params=params,
             headers=_bot_headers(),
             timeout=15,
         )
         res_json = response.json()
         if not res_json.get("ok"):
-            return f"Slack API error: {res_json.get('error', 'unknown')}"
+            err = res_json.get('error', 'unknown')
+            if err in ("user_not_found", "team_access_not_granted"):
+                return (
+                    f"Slack API error: {err} — no user matches '{user_id}'. Use the exact "
+                    "user id (U...), an <@U...> mention, or an @username from the message "
+                    "context; don't guess ids."
+                )
+            return f"Slack API error: {err}"
         user = res_json.get("user", {})
         profile = user.get("profile", {})
         is_bot = bool(user.get("is_bot") or user.get("is_app_user"))
@@ -75,16 +170,28 @@ def get_channel_info(channel_id: str) -> str:
         return "Error: SLACK_BOT_TOKEN not configured"
     if not channel_id:
         return "Error: channel_id is required"
+    channel_id = _resolve_channel_id(channel_id)
     try:
+        params = {"channel": channel_id}
+        team_id = _team_id()
+        if team_id:
+            params["team_id"] = team_id
         response = requests.get(
             f"{SLACK_API}/conversations.info",
-            params={"channel": channel_id},
+            params=params,
             headers=_bot_headers(),
             timeout=15,
         )
         res_json = response.json()
         if not res_json.get("ok"):
-            return f"Slack API error: {res_json.get('error', 'unknown')}"
+            err = res_json.get('error', 'unknown')
+            if err in ("team_access_not_granted", "channel_not_found", "not_in_channel"):
+                return (
+                    f"Slack API error: {err} — no channel matches '{channel_id}'. Use the exact "
+                    "channel id (C.../D.../G...), an <#C...|name> mention, or a #channel name "
+                    "from the message context; don't guess ids."
+                )
+            return f"Slack API error: {err}"
         channel = res_json.get("channel", {})
         channel_type = channel.get("id", "")[0] if channel.get("id") else ""
         if channel_type == "D":
@@ -132,7 +239,7 @@ def post_message_to_target(
     if not token:
         return "Error: SLACK_BOT_TOKEN not configured"
 
-    if channel_id and channel_id.startswith("C") and current_channel and channel_id != current_channel:
+    if channel_id and channel_id[0] in ("C", "G") and current_channel and channel_id != current_channel:
         return (
             "Error: You can only post to the channel you are currently in. "
             "Refusing to post to a different channel."

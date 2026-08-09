@@ -16,7 +16,14 @@
     "bot_user": {
       "display_name": "coolton",
       "always_online": true
-    }
+    },
+    "unfurl_domains": [
+      "tanjim.org",
+      "whiteboard.felix.hackclub.app",
+      "placehold.co",
+      "kroki.io",
+      "mermaid.ink"
+    ]
   },
   "oauth_config": {
     "redirect_urls": [
@@ -177,6 +184,7 @@
         "app_home_opened",
         "app_mention",
         "assistant_thread_started",
+        "link_shared",
         "message.channels",
         "message.groups",
         "message.im"

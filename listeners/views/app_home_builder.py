@@ -76,6 +76,22 @@ def build_app_home_view(
     if ep_count > 0:
         blocks.append({"type": "divider"})
 
+    # Custom instructions
+    if has_instructions:
+        instructions_status = "Your custom instructions are active."
+    else:
+        instructions_status = "No custom instructions yet. Set some to shape how coolton talks to you."
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": f"*Custom Instructions*\n{instructions_status}"},
+    })
+    blocks.append({
+        "type": "actions",
+        "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "Edit Instructions", "emoji": True}, "action_id": "instructions_open"},
+        ],
+    })
+
     # TEXT default dropdown
     text_options = [{"text": {"type": "plain_text", "text": "Use global key (no BYOK)"}, "value": "none"}]
     text_initial = "none"
@@ -136,13 +152,6 @@ def build_app_home_view(
     blocks.append({
         "type": "section",
         "text": {"type": "mrkdwn", "text": f"*⏰ Reminders*\n{reminders_text}"},
-    })
-    
-    blocks.append({
-        "type": "actions",
-        "elements": [
-            {"type": "button", "text": {"type": "plain_text", "text": "Set Reminder", "emoji": True}, "action_id": "reminder_open"},
-        ],
     })
 
     # Fallback cache section
