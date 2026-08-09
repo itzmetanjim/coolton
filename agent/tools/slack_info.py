@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import requests
 
 SLACK_API = "https://slack.com/api"
@@ -40,25 +41,34 @@ def _resolve_user_id(user_id: str) -> str:
         team_id = _team_id()
         if team_id:
             params["team_id"] = team_id
-        resp = requests.get(
-            f"{SLACK_API}/users.list", params=params, headers=_bot_headers(), timeout=15
-        )
-        data = resp.json()
-        if not data.get("ok"):
-            return user_id
-        for member in data.get("members", []):
-            if not member or member.get("deleted"):
-                continue
-            profile = member.get("profile", {})
-            cands = {
-                member.get("name", ""),
-                profile.get("display_name", ""),
-                profile.get("real_name", ""),
-                (profile.get("email", "") or "").split("@")[0],
-                profile.get("email", "") or "",
-            }
-            if name in {c.lower() for c in cands if c}:
-                return member["id"]
+        for _ in range(10):
+            resp = requests.get(
+                f"{SLACK_API}/users.list", params=params, headers=_bot_headers(), timeout=15
+            )
+            data = resp.json()
+            if not data.get("ok"):
+                if data.get("error") == "ratelimited":
+                    time.sleep(0.5)
+                    continue
+                return user_id
+            for member in data.get("members", []):
+                if not member or member.get("deleted"):
+                    continue
+                profile = member.get("profile", {})
+                cands = {
+                    member.get("name", ""),
+                    profile.get("display_name", ""),
+                    profile.get("real_name", ""),
+                    (profile.get("email", "") or "").split("@")[0],
+                    profile.get("email", "") or "",
+                }
+                if name in {c.lower() for c in cands if c}:
+                    return member["id"]
+            next_cursor = (data.get("response_metadata") or {}).get("next_cursor")
+            if not next_cursor:
+                break
+            params["cursor"] = next_cursor
+            time.sleep(0.15)
     except Exception:
         pass
     return user_id
@@ -78,15 +88,24 @@ def _resolve_channel_id(channel_id: str) -> str:
         team_id = _team_id()
         if team_id:
             params["team_id"] = team_id
-        resp = requests.get(
-            f"{SLACK_API}/conversations.list", params=params, headers=_bot_headers(), timeout=15
-        )
-        data = resp.json()
-        if not data.get("ok"):
-            return channel_id
-        for ch in data.get("channels", []):
-            if (ch.get("name") or "").lower() == name or ch.get("id") == channel_id:
-                return ch["id"]
+        for _ in range(10):
+            resp = requests.get(
+                f"{SLACK_API}/conversations.list", params=params, headers=_bot_headers(), timeout=15
+            )
+            data = resp.json()
+            if not data.get("ok"):
+                if data.get("error") == "ratelimited":
+                    time.sleep(0.5)
+                    continue
+                return channel_id
+            for ch in data.get("channels", []):
+                if (ch.get("name") or "").lower() == name or ch.get("id") == channel_id:
+                    return ch["id"]
+            next_cursor = (data.get("response_metadata") or {}).get("next_cursor")
+            if not next_cursor:
+                break
+            params["cursor"] = next_cursor
+            time.sleep(0.15)
     except Exception:
         pass
     return channel_id
@@ -105,6 +124,11 @@ def get_user_info(user_id: str) -> str:
     if not user_id:
         return "Error: user_id is required"
     user_id = _resolve_user_id(user_id)
+    if not re.match(r"^U[A-Z0-9]+$", user_id):
+        return (
+            f"Error: could not resolve '{user_id}' to a Slack user id. Pass the <@U...> mention, "
+            "an @username, or the U... id from the message context."
+        )
     try:
         params = {"user": user_id}
         team_id = _team_id()
@@ -171,6 +195,11 @@ def get_channel_info(channel_id: str) -> str:
     if not channel_id:
         return "Error: channel_id is required"
     channel_id = _resolve_channel_id(channel_id)
+    if not re.match(r"^[CDG][A-Z0-9]+$", channel_id):
+        return (
+            f"Error: could not resolve '{channel_id}' to a Slack channel id. Pass the <#C...|name> "
+            "mention, a #channel name, or the C.../D.../G... id from the message context."
+        )
     try:
         params = {"channel": channel_id}
         team_id = _team_id()
