@@ -928,23 +928,45 @@ def download_slack_attachments(
     channel_id: str, thread_ts: str, sandbox: "Sandbox",
     user_token: str | None = None, limit: int = 20,
 ) -> str:
+    """Download files attached to messages in this thread only.
+
+    Uses conversations.replies so files are scoped to the thread's own
+    messages, never files shared elsewhere in the channel.
+    """
     token = user_token or os.environ.get("SLACK_USER_TOKEN")
     if not token:
         return "Error: SLACK_USER_TOKEN not configured"
     sandbox.commands.run("mkdir -p ~/attachments")
-    url = "https://slack.com/api/files.list"
+    url = "https://slack.com/api/conversations.replies"
     headers = {"Authorization": f"Bearer {token}"}
-    params = {"channel": channel_id, "ts_from": "0", "ts_to": str(int(float(thread_ts) + 1)), "count": limit}
+
+    files = []
+    cursor = None
     try:
-        response = requests.get(url, headers=headers, params=params)
-        res_json = response.json()
-        if not res_json.get("ok"):
-            return f"Slack API error: {res_json.get('error', 'unknown')}"
-        files = res_json.get("files", [])
+        while len(files) < limit:
+            params = {"channel": channel_id, "ts": thread_ts, "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            response = requests.get(url, headers=headers, params=params)
+            res_json = response.json()
+            if not res_json.get("ok"):
+                return f"Slack API error: {res_json.get('error', 'unknown')}"
+            messages = res_json.get("messages", [])
+            for message in messages:
+                for f in message.get("files") or []:
+                    files.append(f)
+                    if len(files) >= limit:
+                        break
+                if len(files) >= limit:
+                    break
+            cursor = (res_json.get("response_metadata") or {}).get("next_cursor")
+            if not cursor or not messages:
+                break
+
         if not files:
             return "No files found in this thread."
         results = []
-        for f in files:
+        for f in files[:limit]:
             file_url = f.get("url_private_download") or f.get("url_private")
             if not file_url:
                 continue
