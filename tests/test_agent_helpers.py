@@ -397,3 +397,18 @@ def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
     assert agent_mod._resolve_skill("../etc") is None
     assert agent_mod._resolve_skill("a/b") is None
     assert agent_mod._resolve_skill("") is None
+
+@pytest.mark.parametrize(
+    ("env_key", "expected"),
+    [
+        ("OPENROUTER_API_KEY", "openrouter:openai/gpt-4.1-mini"),
+        ("OPENROUTER_API_KEY_FALLBACK", "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"),
+        ("GOOGLE_API_KEY", "google:gemini-3.1-flash-lite"),
+        ("GROQ_API_KEY", "groq:qwen/qwen3-32b"),
+        ("MISTRAL_API_KEY", "mistral:mistral-large-2512"),
+        ("CEREBRAS_API_KEY", "cerebras:zai-glm-4.7"),
+    ],
+)
+def test_get_model_accepts_documented_provider_keys(monkeypatch, clean_env, env_key, expected):
+    monkeypatch.setenv(env_key, "test-key")
+    assert agent_mod.get_model() == expected
