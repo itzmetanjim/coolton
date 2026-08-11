@@ -4,6 +4,8 @@ import base64
 import logging
 import threading
 import uuid
+import ipaddress
+from urllib.parse import urlparse
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -16,15 +18,63 @@ BYOK_ENV_KEY = "BYOK_ENCRYPTION_KEY"
 store_lock = threading.Lock()
 
 
+def validate_endpoint_url(base_url: str) -> str:
+    """Validate and normalize a user-supplied HTTPS API endpoint.
+
+    BYOK credentials are sent to this URL, so reject non-HTTPS URLs, embedded
+    credentials, malformed hosts, local/private network targets, and traversal
+    segments before persisting the endpoint.
+    """
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise ValueError("Endpoint URL is required")
+    value = base_url.strip()
+    parsed = urlparse(value)
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ValueError("Endpoint URL must be a valid HTTPS URL")
+    if parsed.username or parsed.password:
+        raise ValueError("Endpoint URL must not contain embedded credentials")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("Endpoint URL contains invalid control characters")
+    if any(part in (".", "..") for part in parsed.path.split("/")):
+        raise ValueError("Endpoint URL must not contain path traversal segments")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Endpoint URL must include a hostname")
+    hostname = hostname.rstrip(".").lower()
+    if hostname in {"localhost", "metadata.google.internal", "metadata.google.com"}:
+        raise ValueError("Endpoint URL must not target a local or metadata host")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None and (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_unspecified
+    ):
+        raise ValueError("Endpoint URL must not target a private or local address")
+    return value.rstrip("/")
+
+
 def _get_fernet() -> Fernet:
     key = os.environ.get(BYOK_ENV_KEY)
     if key:
         key_bytes = key.encode() if isinstance(key, str) else key
         if len(key_bytes) != 44:
-            kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=b"coolton-byok-salt", iterations=100000)
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=b"coolton-byok-salt",
+                iterations=100000,
+            )
             key_bytes = base64.urlsafe_b64encode(kdf.derive(key_bytes))
         else:
-            key_bytes = key_bytes if isinstance(key_bytes, bytes) else key_bytes.encode()
+            key_bytes = (
+                key_bytes if isinstance(key_bytes, bytes) else key_bytes.encode()
+            )
         return Fernet(key_bytes)
 
     if os.path.exists(BYOK_KEY_FILE):
@@ -70,12 +120,14 @@ def get_user_endpoints(user_id: str) -> list[dict]:
         endpoints = data.get(user_id, {}).get("endpoints", {})
         result = []
         for ep_id, ep in endpoints.items():
-            result.append({
-                "id": ep_id,
-                "name": ep["name"],
-                "base_url": ep["base_url"],
-                "model": ep["model"],
-            })
+            result.append(
+                {
+                    "id": ep_id,
+                    "name": ep["name"],
+                    "base_url": ep["base_url"],
+                    "model": ep["model"],
+                }
+            )
         return result
 
 
@@ -103,16 +155,21 @@ def get_endpoint_decrypted(user_id: str, ep_id: str) -> dict | None:
     }
 
 
-def add_endpoint(user_id: str, name: str, base_url: str, api_key: str, model: str) -> str:
+def add_endpoint(
+    user_id: str, name: str, base_url: str, api_key: str, model: str
+) -> str:
     fernet = _get_fernet()
     ep_id = _new_id()
     with store_lock:
         data = _load_store()
-        user_data = data.setdefault(user_id, {"endpoints": {}, "text_endpoint_id": None, "image_endpoint_id": None})
+        user_data = data.setdefault(
+            user_id,
+            {"endpoints": {}, "text_endpoint_id": None, "image_endpoint_id": None},
+        )
         endpoints = user_data.setdefault("endpoints", {})
         endpoints[ep_id] = {
             "name": name,
-            "base_url": base_url.rstrip("/"),
+            "base_url": validate_endpoint_url(base_url),
             "api_key_encrypted": _enc(fernet, api_key),
             "model": model,
         }
@@ -122,7 +179,9 @@ def add_endpoint(user_id: str, name: str, base_url: str, api_key: str, model: st
     return ep_id
 
 
-def update_endpoint(user_id: str, ep_id: str, name: str, base_url: str, api_key: str, model: str):
+def update_endpoint(
+    user_id: str, ep_id: str, name: str, base_url: str, api_key: str, model: str
+):
     fernet = _get_fernet()
     with store_lock:
         data = _load_store()
@@ -130,7 +189,7 @@ def update_endpoint(user_id: str, ep_id: str, name: str, base_url: str, api_key:
         if not ep:
             raise ValueError(f"Endpoint {ep_id} not found")
         ep["name"] = name
-        ep["base_url"] = base_url.rstrip("/")
+        ep["base_url"] = validate_endpoint_url(base_url)
         if api_key and api_key != "••••••••":
             ep["api_key_encrypted"] = _enc(fernet, api_key)
         ep["model"] = model
@@ -154,14 +213,20 @@ def delete_endpoint(user_id: str, ep_id: str):
 def set_text_endpoint(user_id: str, ep_id: str | None):
     with store_lock:
         data = _load_store()
-        data.setdefault(user_id, {})["text_endpoint_id"] = ep_id
+        user_data = data.setdefault(user_id, {})
+        if ep_id is not None and ep_id not in user_data.get("endpoints", {}):
+            raise ValueError(f"Endpoint {ep_id} not found")
+        user_data["text_endpoint_id"] = ep_id
         _save_store(data)
 
 
 def set_image_endpoint(user_id: str, ep_id: str | None):
     with store_lock:
         data = _load_store()
-        data.setdefault(user_id, {})["image_endpoint_id"] = ep_id
+        user_data = data.setdefault(user_id, {})
+        if ep_id is not None and ep_id not in user_data.get("endpoints", {}):
+            raise ValueError(f"Endpoint {ep_id} not found")
+        user_data["image_endpoint_id"] = ep_id
         _save_store(data)
 
 
