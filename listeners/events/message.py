@@ -104,6 +104,16 @@ def handle_message(
         from agent.tools.vision import download_attached_images
         images = download_attached_images(client, event.get("files"))
 
+        from agent import AgentDeps
+        deps = AgentDeps(
+            client=client,
+            user_id=user_id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            message_ts=event["ts"],
+            user_token=context.user_token,
+        )
+
         run_agent_turn(
             client=client,
             say_stream=say_stream,
@@ -122,6 +132,12 @@ def handle_message(
     except Exception as e:
         logger.exception(f"Failed to handle message: {e}")
         from agent.redact import redact as _redact
+        from agent.plan_block import set_plan_error
+        try:
+            if 'deps' in locals():
+                set_plan_error(deps, _redact(str(e)))
+        except Exception:
+            pass
         say(
             text=f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})",
             thread_ts=event.get("thread_ts") or event.get("ts"),

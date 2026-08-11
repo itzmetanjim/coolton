@@ -50,6 +50,13 @@ def extract_tar_gz_in_sandbox(channel_id: str, thread_ts: str, archive_path: str
         # Create extraction directory
         sandbox.commands.run(f"mkdir -p {shlex.quote(extract_to)}")
         
+        # Validate tar members before extraction to prevent path traversal
+        check_result = sandbox.commands.run(f"tar -tzf {shlex.quote(archive_path)} 2>&1")
+        if check_result.exit_code != 0:
+            return f"Error reading archive: {check_result.stderr or check_result.stdout}"
+        for member in check_result.stdout.splitlines():
+            if member.startswith("/") or ".." in member or member.startswith("./.."):
+                return f"Error: Archive contains unsafe path: {member}"
         # Extract using tar
         result = sandbox.commands.run(f"tar -xzf {shlex.quote(archive_path)} -C {shlex.quote(extract_to)} 2>&1")
         
