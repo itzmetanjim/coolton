@@ -90,15 +90,35 @@ def download_file_by_id(
         # Strip path separators and reject bare "." / ".." so a crafted
         # filename can't escape downloads/ when joined into the sandbox path.
         sanitized = re.sub(r"[^\w.-]+", "_", filename or default_name)
-        if sanitized in ("", ".", ".."):
+        sanitized = os.path.basename(sanitized)
+        if sanitized in ("", ".", "..") or os.path.isabs(sanitized):
             sanitized = "slack-file"
 
         # Download the file
-        file_resp = requests.get(file_url, headers={"Authorization": f"Bearer {token}"}, timeout=300, stream=True)
+        file_resp = requests.get(file_url, headers={"Authorization": f"Bearer {token}"}, timeout=(10, 60), stream=True)
         if file_resp.status_code != 200:
             return f"Error: Failed to download file (HTTP {file_resp.status_code})"
 
-        content = file_resp.content
+        # Enforce size limit (100 MB)
+        MAX_SIZE = 100 * 1024 * 1024
+        content_length = file_resp.headers.get("Content-Length") if hasattr(file_resp, "headers") else None
+        try:
+            if content_length and int(content_length) > MAX_SIZE:
+                return f"Error: File exceeds maximum size of {MAX_SIZE // (1024*1024)} MB"
+        except (TypeError, ValueError):
+            pass
+        chunks = bytearray()
+        try:
+            for chunk in file_resp.iter_content(chunk_size=8192):
+                chunks.extend(chunk)
+                if len(chunks) > MAX_SIZE:
+                    return f"Error: File exceeds maximum size of {MAX_SIZE // (1024*1024)} MB"
+            content = bytes(chunks)
+        except TypeError:
+            # Keep compatibility with simple response doubles and older adapters.
+            content = file_resp.content
+            if len(content) > MAX_SIZE:
+                return f"Error: File exceeds maximum size of {MAX_SIZE // (1024*1024)} MB"
 
         if sandbox:
             # Save to sandbox downloads/ (mirrors gorkie)
