@@ -1282,7 +1282,7 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str
         res_json = _strip_secret_keys(response.json())
         if res_json.get("ok"):
             return f"Success: {_redact(str(res_json), context='slack_api_call')}"
-        return f"Slack API error: {_redact(str(res_json.get('error', 'unknown')), context='slack_api_call')}"
+        return f"Slack API error: {_redact(str(res_json), context='slack_api_call')}"
     except Exception as e:
         return f"Error: {_redact(str(e), context='slack_api_call')}"
 

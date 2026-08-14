@@ -489,6 +489,24 @@ def test_slack_api_call_allows_empty_params_for_other_methods(monkeypatch):
     post.assert_called_once()
 
 
+def test_slack_api_call_returns_full_error_json(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {
+            "ok": False,
+            "error": "missing_argument",
+            "required": "channel",
+            "provided": ["token"],
+        }
+        result = agent_mod.slack_api_call(
+            _run_ctx(Mock()), method="conversations.info", params={}
+        )
+    assert "missing_argument" in result
+    assert "required" in result
+    assert "channel" in result
+    assert "provided" in result
+
+
 def test_slack_api_call_as_bot_rejects_chat_post_message_without_channel(monkeypatch):
     from agent.tools import slack_bot_api
 
