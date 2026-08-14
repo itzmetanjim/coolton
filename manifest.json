@@ -1,7 +1,7 @@
 {
   "display_information": {
     "name": "coolton (UNSTABLE BETA)",
-    "description": "coolton is a much cooler cooler ai than gorkie, this one is prod",
+    "description": "coolton is a self-improving agent on slack. this one is prod. made by Lily (KitKat)",
     "background_color": "#083927"
   },
   "features": {
@@ -11,7 +11,7 @@
       "messages_tab_read_only_enabled": false
     },
     "assistant_view": {
-      "assistant_description": "cool cool coool ai cooler than gorkie, made by tanjim"
+      "assistant_description": "coolton is a self-improving agent on slack. this one is prod. made by Lily (KitKat)"
     },
     "bot_user": {
       "display_name": "coolton",
