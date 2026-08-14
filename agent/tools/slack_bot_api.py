@@ -22,8 +22,11 @@ def slack_api_call_as_bot(method: str, params: dict) -> str:
     bot_token = os.environ.get("SLACK_BOT_TOKEN")
     if not bot_token:
         return "Error: SLACK_BOT_TOKEN not configured"
-    if not params:
-        return f"Error: params is empty — pass a non-empty dict of parameters for {method} (e.g. channel and text for chat.postMessage). Do not call this tool with empty params."
+    if method == "chat.postMessage":
+        if not params.get("channel"):
+            return "Error: chat.postMessage requires a 'channel' (channel id or user id for a DM) param — use the chat_postMessage tool instead."
+        if not params.get("text"):
+            return "Error: chat.postMessage requires a 'text' param — use the chat_postMessage tool instead."
     
     url = f"https://slack.com/api/{method}"
     headers = {

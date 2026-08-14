@@ -1,7 +1,7 @@
 
 import pytest
 from pydantic_ai.models.openai import OpenAIChatModel
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import importlib
 
@@ -462,23 +462,38 @@ def test_chat_post_message_reports_slack_error():
     assert "missing_argument" in result
 
 
-def test_slack_api_call_rejects_empty_params(monkeypatch):
+def test_slack_api_call_rejects_chat_post_message_without_channel(monkeypatch):
     monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
-    from unittest.mock import patch as _patch
-
-    with _patch("agent.agent.requests.post") as post:
+    with patch("agent.agent.requests.post") as post:
         result = agent_mod.slack_api_call(_run_ctx(Mock()), method="chat.postMessage", params={})
-    assert "params is empty" in result
+    assert "requires a 'channel'" in result
     post.assert_not_called()
 
 
-def test_slack_api_call_as_bot_rejects_empty_params(monkeypatch):
+def test_slack_api_call_rejects_chat_post_message_without_text(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    with patch("agent.agent.requests.post") as post:
+        result = agent_mod.slack_api_call(
+            _run_ctx(Mock()), method="chat.postMessage", params={"channel": "C1"}
+        )
+    assert "requires a 'text'" in result
+    post.assert_not_called()
+
+
+def test_slack_api_call_allows_empty_params_for_other_methods(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        result = agent_mod.slack_api_call(_run_ctx(Mock()), method="auth.test", params={})
+    assert "Success" in result
+    post.assert_called_once()
+
+
+def test_slack_api_call_as_bot_rejects_chat_post_message_without_channel(monkeypatch):
     from agent.tools import slack_bot_api
 
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    from unittest.mock import patch as _patch
-
-    with _patch("agent.tools.slack_bot_api.requests.post") as post:
+    with patch("agent.tools.slack_bot_api.requests.post") as post:
         result = slack_bot_api.slack_api_call_as_bot("chat.postMessage", {})
-    assert "params is empty" in result
+    assert "requires a 'channel'" in result
     post.assert_not_called()
