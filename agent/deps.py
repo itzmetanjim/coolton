@@ -10,6 +10,8 @@ class AgentDeps:
     channel_id: str
     thread_ts: str
     message_ts: str
+    # Platform adapter is optional for backwards-compatible Slack callers.
+    platform: object | None = None
     user_token: str | None = None
     custom_instructions: str = ""
     plan_ts: str | None = None
