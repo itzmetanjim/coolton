@@ -1732,6 +1732,7 @@ def run_agent(text, deps, message_history=None, images=None):
     is_vision = _is_vision_capable(first_model)
 
     context_info = platform.build_context_prompt(deps, first_model, is_vision)
+    full_prompt = platform.system_prompt + context_info
     if custom_instructions:
         full_prompt += f"\n\n## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n"
 
