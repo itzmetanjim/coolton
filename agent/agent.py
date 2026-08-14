@@ -1266,6 +1266,8 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str
     user_token = os.environ.get("SLACK_USER_TOKEN")
     if not user_token:
         return "Error: SLACK_USER_TOKEN not configured"
+    if not params:
+        return f"Error: params is empty — pass a non-empty dict of parameters for {method} (e.g. channel and text for chat.postMessage). Do not call this tool with empty params."
     url = f"https://slack.com/api/{method}"
     headers = {"Authorization": f"Bearer {user_token}"}
     form = {
@@ -1337,6 +1339,34 @@ def send_message(ctx: RunContext[AgentDeps], text: str) -> str:
         return "Message sent."
     except Exception as e:
         return f"Failed to send message: {_redact(str(e), context='send_message')}"
+
+
+@agent.tool
+def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread_ts: str = "") -> str:
+    """Send a Slack message to any channel or user as the coolton bot.
+
+    Use this to DM a user (pass their user id as channel, e.g. `channel="U0B2VTYER33"`)
+    or to post to a channel. For replying in the CURRENT thread, use send_message instead.
+
+    Args:
+        channel: Slack channel id, or a user id (U...) to open a DM.
+        text: The message content (Markdown supported).
+        thread_ts: Optional thread timestamp to post into a thread (omit for a top-level DM).
+    """
+    if not channel:
+        return "Error: channel is required — pass the Slack channel id or user id."
+    if not text:
+        return "Error: text is required — provide the message content."
+    try:
+        kwargs = {"channel": channel, "text": _redact(text, context="chat_postMessage")}
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+        resp = ctx.deps.client.chat_postMessage(**kwargs)
+        if not resp.get("ok"):
+            return f"Failed to send message: {resp.get('error', 'unknown')}"
+        return "Message sent."
+    except Exception as e:
+        return f"Failed to send message: {_redact(str(e), context='chat_postMessage')}"
 
 
 @agent.tool
