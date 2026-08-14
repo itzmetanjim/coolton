@@ -1,6 +1,7 @@
 
 import pytest
 from pydantic_ai.models.openai import OpenAIChatModel
+from unittest.mock import Mock
 
 import importlib
 
@@ -412,3 +413,72 @@ def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
 def test_get_model_accepts_documented_provider_keys(monkeypatch, clean_env, env_key, expected):
     monkeypatch.setenv(env_key, "test-key")
     assert agent_mod.get_model() == expected
+
+
+# ---------------------------------------------------------------------------
+# chat_postMessage / slack_api_call empty-params guard
+# ---------------------------------------------------------------------------
+
+
+def _run_ctx(client):
+    from pydantic_ai import RunContext
+    from types import SimpleNamespace
+
+    deps = SimpleNamespace(client=client, channel_id="C1", thread_ts="1.2")
+    return RunContext(model=None, usage=None, prompt="", deps=deps)
+
+
+def test_chat_post_message_sends_as_bot():
+    client = Mock()
+    client.chat_postMessage.return_value = {"ok": True}
+    result = agent_mod.chat_postMessage(_run_ctx(client), channel="U0B2VTYER33", text="hello")
+    assert result == "Message sent."
+    client.chat_postMessage.assert_called_once_with(
+        channel="U0B2VTYER33", text="hello"
+    )
+
+
+def test_chat_post_message_includes_thread_ts_when_passed():
+    client = Mock()
+    client.chat_postMessage.return_value = {"ok": True}
+    result = agent_mod.chat_postMessage(
+        _run_ctx(client), channel="C1", text="hi", thread_ts="1.2"
+    )
+    assert result == "Message sent."
+    client.chat_postMessage.assert_called_once_with(channel="C1", text="hi", thread_ts="1.2")
+
+
+def test_chat_post_message_requires_channel_and_text():
+    client = Mock()
+    assert "channel is required" in agent_mod.chat_postMessage(_run_ctx(client), channel="", text="hi")
+    assert "text is required" in agent_mod.chat_postMessage(_run_ctx(client), channel="C1", text="")
+    client.chat_postMessage.assert_not_called()
+
+
+def test_chat_post_message_reports_slack_error():
+    client = Mock()
+    client.chat_postMessage.return_value = {"ok": False, "error": "missing_argument"}
+    result = agent_mod.chat_postMessage(_run_ctx(client), channel="C1", text="hi")
+    assert "missing_argument" in result
+
+
+def test_slack_api_call_rejects_empty_params(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    from unittest.mock import patch as _patch
+
+    with _patch("agent.agent.requests.post") as post:
+        result = agent_mod.slack_api_call(_run_ctx(Mock()), method="chat.postMessage", params={})
+    assert "params is empty" in result
+    post.assert_not_called()
+
+
+def test_slack_api_call_as_bot_rejects_empty_params(monkeypatch):
+    from agent.tools import slack_bot_api
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    from unittest.mock import patch as _patch
+
+    with _patch("agent.tools.slack_bot_api.requests.post") as post:
+        result = slack_bot_api.slack_api_call_as_bot("chat.postMessage", {})
+    assert "params is empty" in result
+    post.assert_not_called()
