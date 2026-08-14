@@ -1,3 +1,4 @@
+import html
 import os
 import re
 from logging import Logger
@@ -45,6 +46,13 @@ def handle_message(
     if bot_id and f"<@{bot_id}>" in text:
         return
 
+    # ## double-hash: never process or respond to a message starting with "##",
+    # not even commands like !stop. Checked before !stop so "## !stop" is
+    # ignored rather than halting runs.
+    if text.strip().startswith("##"):
+        logger.info(f"Ignoring message starting with '##': {text}")
+        return
+
     channel_id = context.channel_id
     thread_ts = event.get("thread_ts") or event["ts"]
     user_id = context.user_id
@@ -69,8 +77,11 @@ def handle_message(
     # Messages starting with "<>" are only answered when the bot is explicitly
     # @-mentioned. Without a mention, ignore them even in engaged threads or
     # DMs (messages that DO mention the bot already return above and are owned
-    # by handle_app_mentioned).
-    if text.strip().startswith("<>"):
+    # by handle_app_mentioned). Slack HTML-escapes literal angle brackets in
+    # message text, so a user-typed "<>" arrives as "&lt;&gt;" — unescape it
+    # before matching.
+    stripped = html.unescape(text.strip())
+    if stripped.startswith("<>"):
         logger.info(f"Ignoring '<>' message without explicit mention: {text[:80]}")
         return
 
@@ -94,9 +105,6 @@ def handle_message(
 
     try:
         text = event.get("text", "")
-        if text.strip().startswith("##"):
-            logger.info(f"Ignoring message starting with '##': {text}")
-            return
 
         # Get conversation history
         history = conversation_store.get_history(channel_id, thread_ts)
