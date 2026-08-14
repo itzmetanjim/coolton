@@ -1644,10 +1644,10 @@ def send_web_embed(
 
 def send_whiteboard_embed(
     channel_id: str, text: str = "whiteboard", title: str = "whiteboard",
-    whiteboard_id: int | None = None, user_token: str | None = None,
+    whiteboard_id: str | None = None, user_token: str | None = None,
 ) -> str:
     if whiteboard_id is None:
-        whiteboard_id = random.randint(100000, 999999)
+        whiteboard_id = f"{random.randint(0, 0xFFFFFF):06X}"
     url = f"https://whiteboard.felix.hackclub.app/{whiteboard_id}"
     thumbnail_url = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed"
     text_with_id = f"{text} #{whiteboard_id}"
@@ -1661,7 +1661,7 @@ def send_whiteboard_embed(
 @agent.tool
 def send_whiteboard_embed_tool(
     ctx: RunContext[AgentDeps], text: str = "whiteboard",
-    title: str = "whiteboard", whiteboard_id: int | None = None,
+    title: str = "whiteboard", whiteboard_id: str | None = None,
 ) -> str:
     """Send a Felix whiteboard (tldraw) embed to the current channel.
     
@@ -1670,7 +1670,7 @@ def send_whiteboard_embed_tool(
     Args:
         text: Fallback text (default: "whiteboard").
         title: Embed title (default: "whiteboard").
-        whiteboard_id: Optional specific ID (default: random).
+        whiteboard_id: Optional specific 6-digit uppercase hex ID like "3A9F01" (default: random).
     """
     return send_whiteboard_embed(channel_id=ctx.deps.channel_id, text=text, title=title, whiteboard_id=whiteboard_id)
 
