@@ -162,3 +162,59 @@ def test_status_failure_still_reports_error(mocks):
     # no deps were created yet, so no plan to mark as errored
     pb.set_plan_error.assert_not_called()
     mocks.say.assert_called_once()
+
+
+def test_streaming_failure_falls_back_to_chat_post_message(mocks):
+    import agent.plan_block as pb
+
+    mocks.say_stream.return_value.append.side_effect = Exception(
+        "SlackApiError: msg_too_long"
+    )
+    _run_turn(mocks)
+
+    # no "something went wrong" warning; the response was delivered instead
+    mocks.say.assert_not_called()
+    pb.complete_plan_message.assert_called_once()
+
+    posts = mocks.client.chat_postMessage.call_args_list
+    assert posts
+    texts = [c.kwargs["text"] for c in posts if "text" in c.kwargs]
+    assert texts == ["Here is the answer."]
+    assert any("blocks" in c.kwargs for c in posts)
+
+
+def test_streaming_stop_failure_falls_back_to_chat_post_message(mocks):
+    import agent.plan_block as pb
+
+    mocks.say_stream.return_value.stop.side_effect = Exception("stream down")
+    _run_turn(mocks)
+
+    mocks.say.assert_not_called()
+    pb.complete_plan_message.assert_called_once()
+    texts = [c.kwargs["text"] for c in mocks.client.chat_postMessage.call_args_list if "text" in c.kwargs]
+    assert texts == ["Here is the answer."]
+
+
+def test_chunk_text_splits_on_line_boundaries():
+    text = "\n".join(f"line {i} " * 30 for i in range(50))
+    chunks = turn._chunk_text(text, limit=1000)
+    assert len(chunks) > 1
+    assert all(len(c) <= 1000 for c in chunks)
+    assert "".join(chunks) == text
+
+
+def test_chunk_text_short_text_unchanged():
+    assert turn._chunk_text("hi there", limit=1000) == ["hi there"]
+
+
+def test_chunk_text_hard_splits_overlong_line():
+    line = "x" * 2500
+    chunks = turn._chunk_text(line, limit=1000)
+    assert chunks == ["x" * 1000, "x" * 1000, "x" * 500]
+
+
+def test_chunk_text_respects_default_limit():
+    long = "a" * (turn._MAX_MESSAGE_CHARS + 100)
+    chunks = turn._chunk_text(long)
+    assert all(len(c) <= turn._MAX_MESSAGE_CHARS for c in chunks)
+    assert "".join(chunks) == long
