@@ -4,6 +4,7 @@ from .app_home_opened import handle_app_home_opened
 from .app_mentioned import handle_app_mentioned
 from .assistant_thread_started import handle_assistant_thread_started
 from .message import handle_message
+from .policy_membership import handle_member_left_channel
 
 
 def register(app: App):
@@ -11,3 +12,4 @@ def register(app: App):
     app.event("app_mention")(handle_app_mentioned)
     app.event("assistant_thread_started")(handle_assistant_thread_started)
     app.event("message")(handle_message)
+    app.event("member_left_channel")(handle_member_left_channel)

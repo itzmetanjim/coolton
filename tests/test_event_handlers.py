@@ -18,6 +18,8 @@ def ctx(monkeypatch):
     context.user_token = "xoxp-user"
 
     monkeypatch.setattr("thread_context.thread_history.build_thread_context", Mock(return_value=["ctx"]))
+    monkeypatch.setattr("agent.policy_consent.has_consent", lambda user_id: True)
+    monkeypatch.setattr("agent.policy_consent.user_is_in_policy_channel", lambda client, user_id: False)
 
     return SimpleCtx(client, context, say, say_stream, logger)
 
