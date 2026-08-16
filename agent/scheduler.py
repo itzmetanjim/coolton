@@ -380,7 +380,16 @@ def start_scheduler(app):
             except Exception as e:
                 logger.error("Failed to send reminder %s: %s", reminder["id"], e)
 
+    def check_token_rotation():
+        try:
+            from agent.token_rotation import check_and_rotate
+
+            check_and_rotate()
+        except Exception:
+            logger.exception("Token rotation check failed")
+
     _scheduler.add_job(check_reminders, "interval", seconds=30, id="check_reminders")
+    _scheduler.add_job(check_token_rotation, "interval", seconds=15 * 60, id="check_token_rotation")
     _scheduler.start()
     _sync_cron_jobs()
     logger.info("Reminder scheduler started")

@@ -12,6 +12,7 @@ from agent import get_model
 from listeners import register_listeners
 from agent.scheduler import start_scheduler
 from agent.redact import set_notifier
+from agent.token_rotation import start_token_rotation
 
 load_dotenv(dotenv_path=".env", override=False)
 # slack_bolt auto-enables OAuth multi-team mode when these are in the
@@ -58,6 +59,7 @@ def _notify_token_leak(keys, context):
 
 set_notifier(_notify_token_leak)
 
+start_token_rotation()
 register_listeners(app)
 start_scheduler(app)
 
