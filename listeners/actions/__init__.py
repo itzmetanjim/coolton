@@ -15,6 +15,7 @@ from .instructions_actions import (
 )
 from .fallback_cache_actions import handle_fallback_cache_clear
 from .test_providers import handle_test_providers
+from .policy_actions import handle_policy_opt_in, handle_policy_opt_out
 
 
 def register(app: App):
@@ -28,3 +29,6 @@ def register(app: App):
     app.action("instructions_clear")(handle_instructions_clear)
     app.action("fallback_cache_clear")(handle_fallback_cache_clear)
     app.action("test_providers")(handle_test_providers)
+    app.action("policy_opt_in_join")(handle_policy_opt_in)
+    app.action("policy_opt_in_no_join")(handle_policy_opt_in)
+    app.action("policy_opt_out")(handle_policy_opt_out)

@@ -9,8 +9,11 @@ def build_app_home_view(
     image_endpoint_id: str | None = None,
     has_instructions: bool = False,
     reminders: list[dict] | None = None,
+    has_policy_consent: bool = False,
 ) -> dict:
     blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*Policy consent*\n" + ("You are opted in to the Coolton policy." if has_policy_consent else "You have not opted in to the Coolton policy yet.")}},
+        {"type": "actions", "elements": [{"type": "button", "action_id": "policy_opt_out", "text": {"type": "plain_text", "text": "opt out", "emoji": True}, "style": "danger", "confirm": {"title": {"type": "plain_text", "text": "opt out of Coolton?"}, "text": {"type": "mrkdwn", "text": "Coolton will ask for consent again before processing future requests."}, "confirm": {"type": "plain_text", "text": "opt out"}, "deny": {"type": "plain_text", "text": "cancel"}}}]},
         {
             "type": "header",
             "text": {"type": "plain_text", "text": "coolton"},

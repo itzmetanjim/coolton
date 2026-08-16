@@ -74,6 +74,22 @@ def handle_message(
             )
         return
 
+    from agent.policy_consent import (
+        build_opt_in_blocks, has_consent, record_consent, save_pending,
+        user_is_in_policy_channel,
+    )
+    if user_is_in_policy_channel(client, user_id):
+        record_consent(user_id, joined_policy_channel=True)
+    elif not has_consent(user_id):
+        pending_id = save_pending({
+            "user_id": user_id, "channel_id": channel_id, "thread_ts": thread_ts,
+            "message_ts": event["ts"], "text": text,
+            "user_token": context.user_token if isinstance(context.user_token, str) else None, "files": event.get("files"),
+        })
+        say(text="before Coolton can process this request, opt in to the policy:",
+            blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts)
+        return
+
     # Messages starting with "<>" are only answered when the bot is explicitly
     # @-mentioned. Without a mention, ignore them even in engaged threads or
     # DMs (messages that DO mention the bot already return above and are owned
