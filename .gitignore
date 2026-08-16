@@ -87,3 +87,7 @@ conversation_logs/
 
 # Local policy consent and pending requests
 policy_consents.json
+
+# Slack CLI (xoxe) token pair, rotated automatically by agent/token_rotation.py
+xoxe_tokens.json
+xoxe_tokens.json.tmp

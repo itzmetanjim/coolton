@@ -15,6 +15,7 @@ from slack_sdk.oauth.state_store import FileOAuthStateStore
 from agent import get_model
 from listeners import register_listeners
 from agent.scheduler import start_scheduler
+from agent.token_rotation import start_token_rotation
 
 load_dotenv(dotenv_path=".env", override=False)
 get_model()  # Fail fast if no AI provider key is configured
@@ -130,6 +131,7 @@ app = App(
 )
 
 register_listeners(app)
+start_token_rotation()
 start_scheduler(app)
 
 if __name__ == "__main__":
