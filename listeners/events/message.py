@@ -74,22 +74,6 @@ def handle_message(
             )
         return
 
-    from agent.policy_consent import (
-        build_opt_in_blocks, has_consent, record_consent, save_pending,
-        user_is_in_policy_channel,
-    )
-    if user_is_in_policy_channel(client, user_id):
-        record_consent(user_id, joined_policy_channel=True)
-    elif not has_consent(user_id):
-        pending_id = save_pending({
-            "user_id": user_id, "channel_id": channel_id, "thread_ts": thread_ts,
-            "message_ts": event["ts"], "text": text,
-            "user_token": context.user_token if isinstance(context.user_token, str) else None, "files": event.get("files"),
-        })
-        say(text="before Coolton can process this request, opt in to the policy:",
-            blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts)
-        return
-
     # Messages starting with "<>" are only answered when the bot is explicitly
     # @-mentioned. Without a mention, ignore them even in engaged threads or
     # DMs (messages that DO mention the bot already return above and are owned
@@ -117,6 +101,25 @@ def handle_message(
     # non-mentioned reply here means we aren't joined and should be ignored.
     if not is_thread_engaged(channel_id, thread_ts, is_dm):
         logger.info(f"Ignoring message in unjoined thread {thread_ts} ({channel_id})")
+        return
+
+    # The opt-in prompt only fires for messages the bot is actually meant to
+    # answer (DMs and engaged threads), so coolton never barges into a channel
+    # or thread it wasn't part of just to ask for consent.
+    from agent.policy_consent import (
+        build_opt_in_blocks, has_consent, record_consent, save_pending,
+        user_is_in_policy_channel,
+    )
+    if user_is_in_policy_channel(client, user_id):
+        record_consent(user_id, joined_policy_channel=True)
+    elif not has_consent(user_id):
+        pending_id = save_pending({
+            "user_id": user_id, "channel_id": channel_id, "thread_ts": thread_ts,
+            "message_ts": event["ts"], "text": text,
+            "user_token": context.user_token if isinstance(context.user_token, str) else None, "files": event.get("files"),
+        })
+        say(text="you need to opt in to the Coolton policy:",
+            blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts)
         return
 
     try:

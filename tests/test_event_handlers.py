@@ -283,6 +283,92 @@ def test_app_mentioned_uses_existing_history(ctx):
         assert run_turn.call_args.kwargs["history"] == ["old-history"]
 
 
+def test_app_mentioned_skips_bot_mentions(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
+        _mention(ctx, bot_id="B123")
+    run_turn.assert_not_called()
+    ctx.say.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Policy opt-in: only fires for messages coolton would actually answer
+# ---------------------------------------------------------------------------
+
+
+def _no_consent(monkeypatch):
+    monkeypatch.setattr("agent.policy_consent.has_consent", lambda user_id: False)
+    monkeypatch.setattr("agent.policy_consent.user_is_in_policy_channel", lambda client, user_id: False)
+
+
+def test_message_non_consenting_user_in_unengaged_thread_gets_no_opt_in(ctx, monkeypatch):
+    _no_consent(monkeypatch)
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_thread_engaged", return_value=False):
+        _msg(ctx, channel_type="channel", thread_ts="1.1")
+    ctx.say.assert_not_called()
+    run_turn.assert_not_called()
+
+
+def test_message_non_consenting_user_top_level_channel_gets_no_opt_in(ctx, monkeypatch):
+    _no_consent(monkeypatch)
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn:
+        _msg(ctx, channel_type="channel")
+    ctx.say.assert_not_called()
+    run_turn.assert_not_called()
+
+
+def test_message_non_consenting_user_in_dm_gets_opt_in(ctx, monkeypatch):
+    _no_consent(monkeypatch)
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("agent.policy_consent.save_pending", return_value="pending-1") as save_pending, \
+         patch("agent.policy_consent.build_opt_in_blocks", return_value=[]) as build_blocks:
+        _msg(ctx, channel_type="im")
+    run_turn.assert_not_called()
+    ctx.say.assert_called_once()
+    text = ctx.say.call_args.kwargs["text"]
+    assert "you need to opt in to the Coolton policy" in text
+    assert "please opt in" not in text
+    save_pending.assert_called_once()
+    build_blocks.assert_called_once_with("pending-1")
+
+
+def test_app_mentioned_non_consenting_user_gets_opt_in(ctx, monkeypatch):
+    _no_consent(monkeypatch)
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("agent.policy_consent.save_pending", return_value="pending-1") as save_pending, \
+         patch("agent.policy_consent.build_opt_in_blocks", return_value=[]) as build_blocks:
+        _mention(ctx, text="<@BOT1> hi")
+    run_turn.assert_not_called()
+    ctx.say.assert_called_once()
+    text = ctx.say.call_args.kwargs["text"]
+    assert "you need to opt in to the Coolton policy" in text
+    save_pending.assert_called_once()
+    build_blocks.assert_called_once_with("pending-1")
+
+
+def test_app_mentioned_stop_works_without_consent(ctx, monkeypatch):
+    _no_consent(monkeypatch)
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+        _mention(ctx, text="!stop")
+    request_stop.assert_called_once_with("C123", "111.111")
+    ctx.say.assert_called_once()
+    assert "stopping" in ctx.say.call_args.kwargs["text"]
+    run_turn.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Rule 1: Double-hash (##) convention - blocks everything including mentions
 # ---------------------------------------------------------------------------

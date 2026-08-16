@@ -83,7 +83,7 @@ def pop_pending(pending_id: str) -> dict | None:
 
 def build_opt_in_blocks(pending_id: str) -> list[dict]:
     return [
-        {"type": "section", "text": {"type": "mrkdwn", "text": "before using Coolton, please opt in to the Coolton policy. you can join the `#coolton` channel or opt in without joining it."}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "before using Coolton, you need to opt in to the Coolton policy. you can join the `#coolton` channel or opt in without joining it."}},
         {"type": "actions", "elements": [
             {"type": "button", "action_id": "policy_opt_in_join", "value": pending_id, "style": "primary", "text": {"type": "plain_text", "text": "opt in and join channel"}},
             {"type": "button", "action_id": "policy_opt_in_no_join", "value": pending_id, "text": {"type": "plain_text", "text": "opt in without joining channel"}},
