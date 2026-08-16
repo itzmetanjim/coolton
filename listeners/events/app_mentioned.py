@@ -29,12 +29,26 @@ def handle_app_mentioned(
         if channel_id == "C06QV2T1P4G":
             return
 
+        # Never reply to bot messages, not even @mentions from other bots.
+        if event.get("bot_id"):
+            return
+
         text = event.get("text", "")
         if text.strip().startswith("##"):
             logger.info(f"Ignoring message starting with '##': {text}")
             return
         thread_ts = event.get("thread_ts") or event["ts"]
         user_id = context.user_id
+
+        # !stop: immediately halt every coolton run in this thread.
+        if "!stop" in text:
+            request_stop(channel_id, thread_ts)
+            say(
+                text="⏹️ stopping all your running coolton instances…",
+                thread_ts=thread_ts,
+            )
+            return
+
         from agent.policy_consent import (
             build_opt_in_blocks, has_consent, record_consent, save_pending,
             user_is_in_policy_channel,
@@ -47,19 +61,9 @@ def handle_app_mentioned(
                 "message_ts": event["ts"], "text": text,
                 "user_token": context.user_token if isinstance(context.user_token, str) else None, "files": event.get("files"),
             })
-            say(text="before Coolton can process this request, opt in to the policy:",
+            say(text="you need to opt in to the Coolton policy:",
                 blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts)
             return
-
-        # !stop: immediately halt every coolton run in this thread.
-        if "!stop" in text:
-            request_stop(channel_id, thread_ts)
-            say(
-                text="⏹️ stopping all your running coolton instances…",
-                thread_ts=thread_ts,
-            )
-            return
-
 
         # Silently make sure cooltonUser is a member of this channel (not in DMs).
         if event.get("channel_type") != "im":
