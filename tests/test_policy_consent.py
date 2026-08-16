@@ -28,3 +28,24 @@ def test_policy_buttons_have_requested_labels():
     assert buttons[0]["style"] == "primary"
     assert buttons[1]["text"]["text"] == "opt in without joining channel"
     assert "style" not in buttons[1]
+
+
+def test_leaving_policy_channel_revokes_consent(monkeypatch):
+    from unittest.mock import Mock
+    from listeners.events.policy_membership import handle_member_left_channel
+
+    record = Mock()
+    monkeypatch.setattr("listeners.events.policy_membership.revoke_consent", record)
+    logger = Mock()
+    handle_member_left_channel(Mock(), {"channel": policy.POLICY_CHANNEL_ID, "user": "U1"}, logger)
+    record.assert_called_once_with("U1")
+
+
+def test_leaving_other_channel_does_not_revoke(monkeypatch):
+    from unittest.mock import Mock
+    from listeners.events.policy_membership import handle_member_left_channel
+
+    record = Mock()
+    monkeypatch.setattr("listeners.events.policy_membership.revoke_consent", record)
+    handle_member_left_channel(Mock(), {"channel": "COTHER", "user": "U1"}, Mock())
+    record.assert_not_called()
