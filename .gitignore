@@ -84,3 +84,6 @@ skills-lock.json
 
 # Redacted, complete Slack thread traces
 conversation_logs/
+
+# Local policy consent and pending requests
+policy_consents.json
