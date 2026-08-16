@@ -103,3 +103,30 @@ def test_response_messages_roundtrip(tmp_path):
     loaded = store.get_history("C1", "1.1")
     assert loaded is not None
     assert loaded[0].parts[0].content == "the answer"
+
+
+def test_conversation_trace_contains_thread_metadata_and_all_trace_parts(tmp_path):
+    from pydantic_ai.messages import ThinkingPart, ToolCallPart, ToolReturnPart
+    from thread_context.training_log import ConversationTraceStore
+
+    now = datetime.now(timezone.utc)
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content="fix it", timestamp=now)]),
+        ModelResponse(parts=[
+            ThinkingPart(content="inspect the failing test"),
+            ToolCallPart(tool_name="read_file", args={"path": "tests/test_app.py"}, tool_call_id="c1"),
+        ]),
+        ModelRequest(parts=[
+            ToolReturnPart(tool_name="read_file", content="assert False", tool_call_id="c1"),
+        ]),
+        ModelResponse(parts=[TextPart(content="fixed it")]),
+    ]
+    path = ConversationTraceStore(str(tmp_path / "logs")).write("C/one", "1.2", messages)
+    import json
+    document = json.loads(path.read_text())
+    assert document["channel_id"] == "C/one"
+    assert document["thread_ts"] == "1.2"
+    parts = [part for message in document["messages"] for part in message["parts"]]
+    assert {part["type"] for part in parts} == {"user", "thinking", "tool_call", "tool_result", "output"}
+    assert next(part for part in parts if part["type"] == "thinking")["content"] == "inspect the failing test"
+    assert next(part for part in parts if part["type"] == "tool_call")["tool_name"] == "read_file"
