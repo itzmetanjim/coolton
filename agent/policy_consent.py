@@ -81,6 +81,25 @@ def pop_pending(pending_id: str) -> dict | None:
         return payload
 
 
+def clear_pending_for_user(user_id: str) -> None:
+    """Drop every unanswered opt-in prompt for a user once they consent.
+
+    Stale prompts linger in Slack (one per pre-consent message), so clearing
+    them here stops a later click on an old button from replaying an old
+    message.
+    """
+    with _LOCK:
+        data = _load()
+        remaining = {
+            pid: payload
+            for pid, payload in data["pending"].items()
+            if payload.get("user_id") != user_id
+        }
+        if len(remaining) != len(data["pending"]):
+            data["pending"] = remaining
+            _save(data)
+
+
 def build_opt_in_blocks(pending_id: str) -> list[dict]:
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": "before using Coolton, you need to opt in to the Coolton policy. you can join the `#coolton` channel or opt in without joining it."}},
