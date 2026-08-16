@@ -49,3 +49,34 @@ def test_leaving_other_channel_does_not_revoke(monkeypatch):
     monkeypatch.setattr("listeners.events.policy_membership.revoke_consent", record)
     handle_member_left_channel(Mock(), {"channel": "COTHER", "user": "U1"}, Mock())
     record.assert_not_called()
+
+
+def test_joining_policy_channel_records_consent(monkeypatch):
+    from unittest.mock import Mock
+    from listeners.events.policy_membership import handle_member_joined_channel
+
+    record = Mock()
+    monkeypatch.setattr("listeners.events.policy_membership.record_consent", record)
+    logger = Mock()
+    handle_member_joined_channel(Mock(), {"channel": policy.POLICY_CHANNEL_ID, "user": "U1"}, logger)
+    record.assert_called_once_with("U1", joined_policy_channel=True)
+
+
+def test_joining_other_channel_does_not_record_consent(monkeypatch):
+    from unittest.mock import Mock
+    from listeners.events.policy_membership import handle_member_joined_channel
+
+    record = Mock()
+    monkeypatch.setattr("listeners.events.policy_membership.record_consent", record)
+    handle_member_joined_channel(Mock(), {"channel": "COTHER", "user": "U1"}, Mock())
+    record.assert_not_called()
+
+
+def test_clear_pending_for_user_only_removes_that_users_requests(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, "_STORE_PATH", tmp_path / "consents.json")
+    for user in ("U1", "U2"):
+        policy.save_pending({"user_id": user, "text": "hello"})
+    policy.clear_pending_for_user("U1")
+    pending = json.loads((tmp_path / "consents.json").read_text())["pending"]
+    assert pending
+    assert all(p["user_id"] == "U2" for p in pending.values())
