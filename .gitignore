@@ -81,3 +81,6 @@ aaa.py
 skills-lock.json
 
 # Keep skills tracked: .agents/skills/ is whitelisted above; curated skills/ is tracked.
+
+# Redacted, complete Slack thread traces
+conversation_logs/

@@ -12,7 +12,7 @@ from slack_sdk import WebClient
 
 from agent import AgentDeps, run_agent
 from agent.redact import redact as _redact
-from thread_context import conversation_store
+from thread_context import conversation_store, conversation_trace_store
 from listeners.views.feedback_builder import build_feedback_blocks
 
 _LOADING_MESSAGES = [
@@ -153,7 +153,14 @@ def run_agent_turn(
             complete_plan_message(deps)
 
         # Store conversation history
-        conversation_store.set_history(channel_id, thread_ts, result.all_messages())
+        all_messages = result.all_messages()
+        conversation_store.set_history(channel_id, thread_ts, all_messages)
+        try:
+            conversation_trace_store.write_from_slack(
+                client, channel_id, thread_ts, all_messages
+            )
+        except Exception:
+            logger.exception("Failed to persist conversation training log")
 
         # kevinton: silent background skill-capture agent (runs after every turn)
         if not deps.should_skip:
