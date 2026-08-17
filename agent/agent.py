@@ -1335,15 +1335,15 @@ def register_bot_tokens_tool(ctx: RunContext[AgentDeps], uuid: str, bot_token: s
 
 @agent.tool
 def wrangler_bot_deploy_tool(ctx: RunContext[AgentDeps], uuid: str, working_dir: str, additional_flags: str = "") -> str:
-    """Deploy a Slack bot Worker using wrangler. Injects stored tokens, runs deploy, then deletes the secrets file.
+    """Deploy a Slack bot Worker using wrangler inside the sandbox. Injects stored tokens, runs deploy, then deletes the secrets file.
     
     Args:
         uuid: The app_id from create_slack_bot.
-        working_dir: Directory containing the bot code.
+        working_dir: Directory containing the bot code inside the sandbox.
         additional_flags: Extra flags for wrangler deploy (e.g. "--minify").
     """
     from agent.tools.slack_bot_deploy import wrangler_bot_deploy
-    return wrangler_bot_deploy(uuid, working_dir, additional_flags)
+    return wrangler_bot_deploy(uuid, working_dir, ctx.deps.channel_id, ctx.deps.thread_ts, additional_flags)
 
 
 @agent.tool
