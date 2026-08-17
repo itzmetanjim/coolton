@@ -91,3 +91,7 @@ policy_consents.json
 # Slack CLI (xoxe) token pair, rotated automatically by agent/token_rotation.py
 xoxe_tokens.json
 xoxe_tokens.json.tmp
+
+# Secure Slack bot credential store (created by agent/tools/slack_bot_deploy.py)
+coolton_bots.json
+~/.coolton_bots.json
