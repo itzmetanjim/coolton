@@ -45,7 +45,7 @@ def search_slack_messages(
         )
         res_json = response.json()
         if not res_json.get("ok"):
-            return f"Slack API error: {res_json.get('error', 'unknown')}"
+            return f"Slack API error: {res_json}"
         messages = (res_json.get("messages") or {}).get("matches", [])
         if not messages:
             return "No Slack messages found."
@@ -139,7 +139,7 @@ def read_conversation_history(
         )
         res_json = response.json()
         if not res_json.get("ok"):
-            return f"Slack API error: {res_json.get('error', 'unknown')}"
+            return f"Slack API error: {res_json}"
         messages = res_json.get("messages", [])
         if not messages:
             return "No messages found."
