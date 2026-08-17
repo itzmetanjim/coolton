@@ -22,8 +22,6 @@ def slack_api_call_as_bot(method: str, params: dict) -> str:
     bot_token = os.environ.get("SLACK_BOT_TOKEN")
     if not bot_token:
         return "Error: SLACK_BOT_TOKEN not configured"
-    if method.startswith("apps.manifest."):
-        return f"Error: {method} requires a Slack App Configuration Token (xoxe), not a bot token. Use the create_slack_bot tool instead, or set SLACK_CONFIG_TOKEN."
     if method == "chat.postMessage":
         if not params.get("channel"):
             return "Error: chat.postMessage requires a 'channel' (channel id or user id for a DM) param — use the chat_postMessage tool instead."
