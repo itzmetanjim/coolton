@@ -1266,6 +1266,8 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str
     user_token = os.environ.get("SLACK_USER_TOKEN")
     if not user_token:
         return "Error: SLACK_USER_TOKEN not configured"
+    if method.startswith("apps.manifest."):
+        return f"Error: {method} requires a Slack App Configuration Token (xoxe), not a user token. Use the create_slack_bot tool instead."
     if method == "chat.postMessage":
         if not params.get("channel"):
             return "Error: chat.postMessage requires a 'channel' (channel id or user id for a DM) param — use the chat_postMessage tool instead."
@@ -1300,6 +1302,48 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, params: 
     """
     from agent.tools.slack_bot_api import slack_api_call_as_bot
     return slack_api_call_as_bot(method, params)
+
+
+@agent.tool
+def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: dict) -> str:
+    """Create a Slack app from a manifest. Returns app_id and OAuth install URL.
+    
+    Uses the xoxe config token. The manifest must include display_information.name.
+    After creating, visit the oauth_authorize_url to install the app, then use
+    register_bot_tokens to store the resulting bot/app tokens.
+    
+    Args:
+        manifest: Slack app manifest dict with display_information, features, etc.
+    """
+    from agent.tools.slack_bot_deploy import create_slack_bot
+    return create_slack_bot(manifest)
+
+
+@agent.tool
+def register_bot_tokens_tool(ctx: RunContext[AgentDeps], uuid: str, bot_token: str, app_token: str, signing_secret: str = "") -> str:
+    """Store bot/app tokens for a created Slack app. Only xoxb- bot tokens and xapp- app tokens accepted.
+    
+    Args:
+        uuid: The app_id returned by create_slack_bot.
+        bot_token: The xoxb- bot token from the installed app.
+        app_token: The xapp- app-level token.
+        signing_secret: The signing secret from the app credentials (optional).
+    """
+    from agent.tools.slack_bot_deploy import register_bot_tokens
+    return register_bot_tokens(uuid, bot_token, app_token, signing_secret)
+
+
+@agent.tool
+def wrangler_bot_deploy_tool(ctx: RunContext[AgentDeps], uuid: str, working_dir: str, additional_flags: str = "") -> str:
+    """Deploy a Slack bot Worker using wrangler. Injects stored tokens, runs deploy, then deletes the secrets file.
+    
+    Args:
+        uuid: The app_id from create_slack_bot.
+        working_dir: Directory containing the bot code.
+        additional_flags: Extra flags for wrangler deploy (e.g. "--minify").
+    """
+    from agent.tools.slack_bot_deploy import wrangler_bot_deploy
+    return wrangler_bot_deploy(uuid, working_dir, additional_flags)
 
 
 @agent.tool
