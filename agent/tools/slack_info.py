@@ -149,7 +149,7 @@ def get_user_info(user_id: str) -> str:
                     "user id (U...), an <@U...> mention, or an @username from the message "
                     "context; don't guess ids."
                 )
-            return f"Slack API error: {err}"
+            return f"Slack API error: {res_json}"
         user = res_json.get("user", {})
         profile = user.get("profile", {})
         is_bot = bool(user.get("is_bot") or user.get("is_app_user"))
@@ -220,7 +220,7 @@ def get_channel_info(channel_id: str) -> str:
                     "channel id (C.../D.../G...), an <#C...|name> mention, or a #channel name "
                     "from the message context; don't guess ids."
                 )
-            return f"Slack API error: {err}"
+            return f"Slack API error: {res_json}"
         channel = res_json.get("channel", {})
         channel_type = channel.get("id", "")[0] if channel.get("id") else ""
         if channel_type == "D":
@@ -309,7 +309,7 @@ def post_message_to_target(
         res_json = response.json()
         if res_json.get("ok"):
             return f"Message posted to {channel_id}"
-        return f"Slack API error: {res_json.get('error', 'unknown')}"
+        return f"Slack API error: {res_json}"
     except Exception as e:
         return f"Error posting message: {str(e)}"
 
@@ -337,7 +337,7 @@ def leave_slack_channel(channel_id: str) -> str:
         res_json = response.json()
         if res_json.get("ok"):
             return f"Left channel {channel_id}"
-        return f"Slack API error: {res_json.get('error', 'unknown')}"
+        return f"Slack API error: {res_json}"
     except Exception as e:
         return f"Error leaving channel: {str(e)}"
 
@@ -365,6 +365,6 @@ def remove_emoji_reaction(channel_id: str, timestamp: str, name: str) -> str:
         res_json = response.json()
         if res_json.get("ok"):
             return f"Removed :{name}: reaction"
-        return f"Slack API error: {res_json.get('error', 'unknown')}"
+        return f"Slack API error: {res_json}"
     except Exception as e:
         return f"Error removing reaction: {str(e)}"

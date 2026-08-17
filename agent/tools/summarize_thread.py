@@ -42,7 +42,7 @@ def _fetch_thread_messages(channel_id: str, thread_ts: str, token: str) -> list[
         resp = requests.get(url, headers=headers, params=params, timeout=10)
         data = resp.json()
         if not data.get("ok"):
-            raise Exception(f"Slack API error: {data.get('error', 'unknown')}")
+            raise Exception(f"Slack API error: {data}")
         all_messages.extend(data.get("messages", []))
         cursor = data.get("response_metadata", {}).get("next_cursor")
         if not cursor:

@@ -482,7 +482,7 @@ def download_slack_attachments(
             response = requests.get(url, headers=headers, params=params)
             res_json = response.json()
             if not res_json.get("ok"):
-                return f"Slack API error: {res_json.get('error', 'unknown')}"
+                return f"Slack API error: {res_json}"
             messages = res_json.get("messages", [])
             for message in messages:
                 for f in message.get("files") or []:
@@ -592,7 +592,7 @@ def upload_file_from_sandbox(
             post_kwargs["thread_ts"] = thread_ts
         post_resp = ctx.deps.client.chat_postMessage(**post_kwargs)
         if not post_resp.get("ok"):
-            return f"File hosted at {url}, but posting the link failed: {post_resp.get('error', 'unknown')}"
+            return f"File hosted at {url}, but posting the link failed: {post_resp}"
         return f"Uploaded {filename} and posted the link in the thread."
     except Exception as e:
         return f"Error uploading file: {str(e)}"
@@ -760,7 +760,7 @@ def _post_image_to_channel(channel_id: str, thread_ts: str, image_url: str, alt_
         res_json = response.json()
         if res_json.get("ok"):
             return None
-        return f"Error posting diagram: {res_json.get('error', 'unknown')}"
+        return f"Error posting diagram: {res_json}"
     except Exception as e:
         return f"Error posting diagram: {str(e)}"
 
@@ -1410,7 +1410,7 @@ def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread
             kwargs["thread_ts"] = thread_ts
         resp = ctx.deps.client.chat_postMessage(**kwargs)
         if not resp.get("ok"):
-            return f"Failed to send message: {resp.get('error', 'unknown')}"
+            return f"Failed to send message: {resp}"
         return "Message sent."
     except Exception as e:
         return f"Failed to send message: {_redact(str(e), context='chat_postMessage')}"

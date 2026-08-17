@@ -62,10 +62,10 @@ def create_slack_bot(manifest: dict) -> str:
         return "Error: manifest.display_information.name is required."
     validated = _api("apps.manifest.validate", {"manifest": manifest})
     if not validated.get("ok"):
-        return f"Slack API error: {validated.get('error', validated)}"
+        return f"Slack API error: {validated}"
     created = _api("apps.manifest.create", {"app_id": "", "manifest": manifest})
     if not created.get("ok"):
-        return f"Slack API error: {created.get('error', created)}"
+        return f"Slack API error: {created}"
     app_id = created.get("app_id") or created.get("app", {}).get("id")
     if not app_id:
         return "Slack API error: apps.manifest.create returned no app_id."

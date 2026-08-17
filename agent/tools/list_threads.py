@@ -32,7 +32,7 @@ def list_channel_threads(channel_id: str, limit: int = 10, user_token: str | Non
         )
         data = resp.json()
         if not data.get("ok"):
-            return f"Slack API error: {data.get('error', 'unknown')}"
+            return f"Slack API error: {data}"
 
         messages = data.get("messages", [])
         thread_parents = [m for m in messages if int(m.get("reply_count", 0)) > 0]
