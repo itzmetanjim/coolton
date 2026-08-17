@@ -102,8 +102,6 @@ def register_bot_tokens(uuid: str, bot_token: str, app_token: str, signing_secre
 def wrangler_bot_deploy(uuid: str, working_dir: str, additional_flags: str = "") -> str:
     """Inject stored secrets briefly, deploy with temporary Wrangler, then delete them."""
     directory = Path(working_dir).expanduser().resolve()
-    if not directory.is_dir():
-        return f"Error: Working directory does not exist: {working_dir}"
     record = _load().get(uuid)
     if not record or not record.get("bot_token") or not record.get("app_token"):
         return "Error: bot tokens are not registered for this UUID."
