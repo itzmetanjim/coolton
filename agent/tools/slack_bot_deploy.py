@@ -37,7 +37,13 @@ def _api(method: str, data: dict[str, Any]) -> dict[str, Any]:
     import requests
     token = os.environ.get("SLACK_CONFIG_TOKEN")
     if not token:
-        return {"ok": False, "error": "SLACK_CONFIG_TOKEN not configured."}
+        try:
+            from agent.token_rotation import get_access_token
+            token = get_access_token()
+        except Exception:
+            pass
+    if not token:
+        return {"ok": False, "error": "SLACK_CONFIG_TOKEN not configured and no xoxe token available."}
     try:
         response = requests.post(
             f"https://slack.com/api/{method}",
@@ -67,12 +73,14 @@ def create_slack_bot(manifest: dict) -> str:
     store = _load()
     store[app_id] = {"app_id": app_id, "credentials": creds}
     _save(store)
-    # Deliberately return only identifiers and the install URL; never tokens.
-    return json.dumps({
+    result = {
         "uuid": app_id,
         "app_id": app_id,
         "oauth_authorize_url": created.get("oauth_authorize_url", ""),
-    })
+    }
+    if creds.get("signing_secret"):
+        result["signing_secret"] = creds["signing_secret"]
+    return json.dumps(result)
 
 
 def register_bot_tokens(uuid: str, bot_token: str, app_token: str, signing_secret: str = "") -> str:
