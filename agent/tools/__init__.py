@@ -16,7 +16,8 @@ from .data_analysis import (
     install_opencode_in_sandbox,
     run_python_data_analysis,
 )
-from .slack_bot_api import slack_api_call_as_bot
+from .slack_api_call_as_bot import slack_api_call_as_bot
+from .slack_bot_deploy import create_slack_bot, register_bot_tokens, wrangler_bot_deploy
 from .slack_info import (
     get_user_info,
     get_channel_info,
@@ -48,6 +49,9 @@ __all__ = [
     "install_opencode_in_sandbox",
     "run_python_data_analysis",
     "slack_api_call_as_bot",
+    "create_slack_bot",
+    "register_bot_tokens",
+    "wrangler_bot_deploy",
     "get_user_info",
     "get_channel_info",
     "post_message_to_target",
