@@ -36,6 +36,47 @@ rate_limit_lock = threading.Lock()
 _last_request_time = 0.0
 RATE_LIMIT_INTERVAL = 15.0
 
+_user_info_cache: dict[str, tuple[str, str]] = {}
+
+
+def _get_user_display_info(user_id: str) -> tuple[str, str]:
+    """Fetch display_name and profile picture URL for a Slack user. Cached per turn."""
+    if user_id in _user_info_cache:
+        return _user_info_cache[user_id]
+    bot_token = os.environ.get("SLACK_BOT_TOKEN")
+    if not bot_token or not user_id:
+        return ("", "")
+    try:
+        resp = requests.get(
+            "https://slack.com/api/users.info",
+            params={"user": user_id},
+            headers={"Authorization": f"Bearer {bot_token}"},
+            timeout=5,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            user = data.get("user", {})
+            profile = user.get("profile", {})
+            name = profile.get("display_name") or profile.get("real_name") or user.get("name") or ""
+            pfp = profile.get("image_72") or profile.get("image_48") or ""
+            _user_info_cache[user_id] = (name, pfp)
+            return (name, pfp)
+    except Exception:
+        pass
+    return ("", "")
+
+
+def _inject_poster(params: dict, user_id: str) -> dict:
+    """Inject username and icon_url into chat.postMessage params so the message
+    appears as the user who prompted coolton, not as the bot."""
+    if user_id:
+        name, pfp = _get_user_display_info(user_id)
+        if name:
+            params["username"] = name
+        if pfp:
+            params["icon_url"] = pfp
+    return params
+
 def enforce_rate_limit():
     global _last_request_time
     now = time.time()
@@ -1273,6 +1314,7 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str
             return "Error: chat.postMessage requires a 'channel' (channel id or user id for a DM) param — use the chat_postMessage tool instead."
         if not params.get("text"):
             return "Error: chat.postMessage requires a 'text' param — use the chat_postMessage tool instead."
+        params = _inject_poster(dict(params), ctx.deps.user_id)
     url = f"https://slack.com/api/{method}"
     headers = {"Authorization": f"Bearer {user_token}"}
     form = {
@@ -1300,6 +1342,8 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, params: 
         method: Slack API method (e.g., 'chat.postMessage', 'chat.update', 'reactions.add').
         params: Dictionary of parameters for the method.
     """
+    if method == "chat.postMessage":
+        params = _inject_poster(dict(params), ctx.deps.user_id)
     from agent.tools.slack_bot_api import slack_api_call_as_bot
     return slack_api_call_as_bot(method, params)
 
@@ -1408,6 +1452,7 @@ def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread
         kwargs = {"channel": channel, "text": _redact(text, context="chat_postMessage")}
         if thread_ts:
             kwargs["thread_ts"] = thread_ts
+        kwargs = _inject_poster(kwargs, ctx.deps.user_id)
         resp = ctx.deps.client.chat_postMessage(**kwargs)
         if not resp.get("ok"):
             return f"Failed to send message: {resp}"
@@ -1766,7 +1811,7 @@ class _SkipResult:
 
 
 def run_agent(text, deps, message_history=None, images=None):
-    # Mark when this run started so a later !stop from the same user halts us.
+    _user_info_cache.clear()
     deps.run_started_at = time.time()
 
     # Attribute the incoming message to its sender so the model can tell users apart.
