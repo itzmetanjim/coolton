@@ -424,7 +424,7 @@ def _run_ctx(client):
     from pydantic_ai import RunContext
     from types import SimpleNamespace
 
-    deps = SimpleNamespace(client=client, channel_id="C1", thread_ts="1.2")
+    deps = SimpleNamespace(client=client, channel_id="C1", thread_ts="1.2", user_id="U_TEST")
     return RunContext(model=None, usage=None, prompt="", deps=deps)
 
 

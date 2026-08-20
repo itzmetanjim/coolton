@@ -20,6 +20,7 @@ from agent.tools import add_emoji_reaction
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
 from agent.redact import redact as _redact, strip_secret_keys as _strip_secret_keys
 from e2b import Sandbox
+from e2b.exceptions import FileNotFoundException
 from agent.sandbox_store import get_thread_sandbox_id
 from agent.sandbox_helpers import get_or_create_sandbox, _proxy_env
 from agent.github_proxy_client import PUBLIC_PROXY_HOST
@@ -68,7 +69,13 @@ def _get_user_display_info(user_id: str) -> tuple[str, str]:
 
 def _inject_poster(params: dict, user_id: str) -> dict:
     """Inject username and icon_url into chat.postMessage params so the message
-    appears as the user who prompted coolton, not as the bot."""
+    appears as the user who prompted coolton, not as the bot.
+
+    Always strips any pre-existing username/icon_url first (fail closed): if the
+    display-info lookup fails, params must end up with no override rather than
+    passing through whatever value was already there (e.g. model-supplied)."""
+    params.pop("username", None)
+    params.pop("icon_url", None)
     if user_id:
         name, pfp = _get_user_display_info(user_id)
         if name:
@@ -618,8 +625,9 @@ def upload_file_from_sandbox(
         return "Error: E2B_API_KEY not configured"
     try:
         sandbox, _ = get_or_create_sandbox(channel_id, thread_ts)
-        file_content = bytes(sandbox.files.read(filepath, format="bytes"))
-        if file_content is None:
+        try:
+            file_content = bytes(sandbox.files.read(filepath, format="bytes"))
+        except FileNotFoundException:
             return f"Error: File not found at {filepath}"
         filename = os.path.basename(filepath)
 
@@ -669,8 +677,9 @@ def analyze_image_tool(ctx: RunContext[AgentDeps], image_path: str, prompt: str 
     thread_ts = ctx.deps.thread_ts
     try:
         sandbox, _ = get_or_create_sandbox(channel_id, thread_ts)
-        image_data = bytes(sandbox.files.read(image_path, format="bytes"))
-        if image_data is None:
+        try:
+            image_data = bytes(sandbox.files.read(image_path, format="bytes"))
+        except FileNotFoundException:
             return f"Error: File not found at {image_path}"
         from agent.tools.vision import analyze_image
         filename = os.path.basename(image_path)
@@ -720,6 +729,8 @@ def see_image_from_sandbox(ctx: RunContext[AgentDeps], path: str) -> ToolReturn[
     try:
         sandbox, _ = get_or_create_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
         data = bytes(sandbox.files.read(path, format="bytes"))
+    except FileNotFoundException:
+        return ToolReturn(f"Error: no file found at {path}")
     except Exception as e:
         return ToolReturn(f"Error reading {path} from sandbox: {e}")
     if not data:
