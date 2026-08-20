@@ -1,4 +1,5 @@
 import html
+import logging
 import os
 import re
 from logging import Logger
@@ -11,9 +12,17 @@ from agent.stop_store import request_stop
 from thread_context import conversation_store
 from listeners.events.turn import run_agent_turn
 
+_module_logger = logging.getLogger(__name__)
+
 # Slack broadcast / user-group mentions: @channel, @here, @everyone, named
 # user groups (e.g. <!subteam^S123|name>).
 PING_GROUP_MENTION_RE = re.compile(r"<!(channel|here|everyone)>|<!subteam\^")
+
+if not os.environ.get("COOLTON_BOT_ID"):
+    _module_logger.warning(
+        "COOLTON_BOT_ID is not set: the guard against double-answering a mid-thread "
+        "@mention (handled once by app_mentioned, then again here) is disabled."
+    )
 
 
 def handle_message(
@@ -106,20 +115,12 @@ def handle_message(
     # The opt-in prompt only fires for messages the bot is actually meant to
     # answer (DMs and engaged threads), so coolton never barges into a channel
     # or thread it wasn't part of just to ask for consent.
-    from agent.policy_consent import (
-        build_opt_in_blocks, has_consent, record_consent, save_pending,
-        user_is_in_policy_channel,
-    )
-    if user_is_in_policy_channel(client, user_id):
-        record_consent(user_id, joined_policy_channel=True)
-    elif not has_consent(user_id):
-        pending_id = save_pending({
-            "user_id": user_id, "channel_id": channel_id, "thread_ts": thread_ts,
-            "message_ts": event["ts"], "text": text,
-            "user_token": context.user_token if isinstance(context.user_token, str) else None, "files": event.get("files"),
-        })
-        say(text="you need to opt in to the Coolton policy:",
-            blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts)
+    from agent.policy_consent import ensure_consent
+    if not ensure_consent(
+        client, say, user_id=user_id, channel_id=channel_id, thread_ts=thread_ts,
+        message_ts=event["ts"], text=text, user_token=context.user_token,
+        files=event.get("files"),
+    ):
         return
 
     try:
@@ -130,16 +131,6 @@ def handle_message(
 
         from agent.tools.vision import download_attached_images
         images = download_attached_images(client, event.get("files"))
-
-        from agent import AgentDeps
-        deps = AgentDeps(
-            client=client,
-            user_id=user_id,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            message_ts=event["ts"],
-            user_token=context.user_token,
-        )
 
         run_agent_turn(
             client=client,
@@ -157,14 +148,11 @@ def handle_message(
         )
 
     except Exception as e:
+        # Note: run_agent_turn handles its own plan-block error reporting with its
+        # real deps (see turn.py); an exception only lands here if it happened
+        # before/around that call, when no plan block was ever sent.
         logger.exception(f"Failed to handle message: {e}")
         from agent.redact import redact as _redact
-        from agent.plan_block import set_plan_error
-        try:
-            if 'deps' in locals():
-                set_plan_error(deps, _redact(str(e)))
-        except Exception:
-            pass
         say(
             text=f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})",
             thread_ts=event.get("thread_ts") or event.get("ts"),
