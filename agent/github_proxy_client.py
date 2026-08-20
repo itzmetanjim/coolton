@@ -9,10 +9,13 @@ its own short-lived token, authorized on sandbox start and revoked on sandbox st
 real GitHub PAT never leaves the host.
 """
 
+import logging
 import os
 import secrets
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 ADMIN_URL = os.environ.get("GH_PROXY_ADMIN_URL", "http://127.0.0.1:29055")
 ADMIN_TOKEN = os.environ.get("GH_PROXY_ADMIN_TOKEN", "") or os.environ.get("COOLTON_GH_TOKEN", "")
@@ -46,4 +49,4 @@ def revoke_sandbox_token(token: str) -> None:
             timeout=10,
         )
     except Exception as e:  # best-effort cleanup
-        print(f"[github_proxy_client] revoke failed: {e}")
+        logger.warning(f"revoke_sandbox_token failed: {e}")

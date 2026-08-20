@@ -66,3 +66,7 @@ async def add_emoji_reaction(
         return f"Reacted with :{emoji_name}:"
     except SlackApiError as e:
         return f"Could not add reaction: {e.response['error']}"
+    except Exception as e:
+        # A timeout/connection error has no .response — fall back to str(e)
+        # instead of propagating uncaught, matching every sibling tool.
+        return f"Could not add reaction: {e}"
