@@ -16,23 +16,23 @@ This skill enables coolton to spin up entirely new Slack bots from scratch:
    This returns a UUID that tracks the bot internally.
 3. **Write the Worker code** (TypeScript) handling the bot's logic.
 4. **Register tokens** with the UUID (internally or via OAuth callback).
-5. **Deploy with `wrangler_bot_deploy`** — it retrieves the bot's tokens from the UUID,
+5. **Deploy with `wrangler_bot_deploy_tool`** — it retrieves the bot's tokens from the UUID,
    writes them to a temporary `.env_slack`, runs `npx wrangler@latest deploy --temporary --secrets-file .env_slack`,
    then deletes the file immediately. Tokens are never exposed.
 
 ## Required Environment
 
 - `SLACK_CONFIG_TOKEN` — a Slack App Configuration Token (generate at
-  https://api.slack.com/apps under "Your App Configuration Tokens"). Used by `create_slack_bot`.
+  https://api.slack.com/apps under "Your App Configuration Tokens"). Used by `create_slack_bot_tool`.
 - `wrangler` — assumed available via `npx wrangler@latest` in the sandbox.
 
 ## Tools (exact names as exposed to the agent)
 
-- `create_slack_bot(manifest: dict)` — Creates the Slack app. Returns UUID, app_id,
+- `create_slack_bot_tool(manifest: dict)` — Creates the Slack app. Returns UUID, app_id,
   credentials, and an OAuth authorize URL. Stores everything in an internal JSON store.
-- `register_bot_tokens(uuid, bot_token, app_token)` — Associates tokens with the UUID.
+- `register_bot_tokens_tool(uuid, bot_token, app_token)` — Associates tokens with the UUID.
   Call this after the app is installed or via an internal OAuth callback handler.
-- `wrangler_bot_deploy(uuid, working_dir, additional_flags)` — Deploys the Worker.
+- `wrangler_bot_deploy_tool(uuid, working_dir, additional_flags)` — Deploys the Worker.
   Reads tokens from the internal store by UUID, never exposes them.
 
 ## Complete Workflow Example: `/calculate` Slash Command Bot
@@ -76,14 +76,14 @@ and update it after deploy, or use `apps.manifest.update` later.
 
 ### 2. Create the app
 
-Call `create_slack_bot` with the manifest. You will receive:
+Call `create_slack_bot_tool` with the manifest. You will receive:
 - `uuid` — save this for the deploy step.
 - `oauth_authorize_url` — the workspace admin or an internal callback must visit this to
   install the app and generate the bot token (xoxb-).
 
 ```python
 # Example call (agent does this internally):
-result = create_slack_bot(manifest=my_manifest)
+result = create_slack_bot_tool(manifest=my_manifest)
 # Returns JSON with uuid, app_id, oauth_authorize_url, etc.
 ```
 
@@ -193,17 +193,17 @@ Run `npm install` in the sandbox to install dependencies.
 After the app is installed (either via the OAuth URL or an internal process), the bot
 and app tokens must be associated with the UUID.
 
-Call `register_bot_tokens(uuid=<uuid>, bot_token="xoxb-...", app_token="xapp-...")`.
+Call `register_bot_tokens_tool(uuid=<uuid>, bot_token="xoxb-...", app_token="xapp-...")`.
 
 If your workspace has an internal OAuth callback handler that automatically stores tokens,
-this step may already be complete when `create_slack_bot` returns.
+this step may already be complete when `create_slack_bot_tool` returns.
 
 **Note:** Only bot tokens (`xoxb-`) and app-level tokens (`xapp-`) are allowed. User tokens
 (`xoxp-`) are never injected into the deployed Worker.
 
 ### 5. Deploy
 
-Call `wrangler_bot_deploy(uuid=<uuid>, working_dir="/home/user/bots/calculator-bot")`.
+Call `wrangler_bot_deploy_tool(uuid=<uuid>, working_dir="/home/user/bots/calculator-bot")`.
 
 This:
 1. Reads tokens from the internal store.
@@ -214,7 +214,7 @@ This:
 
 ```python
 # Example call (agent does this internally):
-output = wrangler_bot_deploy(
+output = wrangler_bot_deploy_tool(
     uuid="...",
     working_dir="/home/user/bots/calculator-bot",
     additional_flags=""  # e.g. "--minify"
@@ -237,8 +237,8 @@ Slack's app settings (or via `apps.manifest.update`) so Slack knows where to POS
 
 ## Common Pitfalls
 
-- If `create_slack_bot` returns an OAuth URL but no tokens, you must install the app before
-  `wrangler_bot_deploy` will succeed. It will error if tokens are missing.
+- If `create_slack_bot_tool` returns an OAuth URL but no tokens, you must install the app before
+  `wrangler_bot_deploy_tool` will succeed. It will error if tokens are missing.
 - `--temporary` creates a throwaway Cloudflare account valid for ~60 minutes. Always give the
   user the **claim URL** printed by wrangler so they can keep the deployment.
 - The manifest `url` in slash commands must be HTTPS and reachable from Slack's servers.
