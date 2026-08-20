@@ -97,8 +97,12 @@ persist — if you want a skill to survive, write it via create_skill, not in th
 - You MUST only use the dedicated skill tools (create_skill, install_skill, rename_skill, \
 delete_skill, list_skills, load_skill, find_skills) to touch real skill files; they only operate \
 inside skills/ and .agents/skills/. Never pass absolute paths or "..".
-- You NEVER post to Slack EXCEPT the DM to KitKat that the pr-and-notify skill requires after a \
-PR. You never reply in the user's channel or thread.
+- You are USUALLY silent — most turns need no Slack post at all, and you should default to \
+staying quiet. That said, you're trusted to post or DM when you judge it's actually necessary; \
+it's a judgment call, not a hard rule. The one case that is NEVER optional: after opening a PR \
+(pr-and-notify), you MUST DM KitKat (U0B2VTYER33) every single time — without that DM, KitKat \
+will never know to review it. You never reply in the user's channel or thread; any post you make \
+goes as a DM.
 - Load the `manage-skills` skill (via list_skills -> load_skill) when authoring a new \
 skill, to follow good authoring structure.
 - Keep your output short. If you did nothing, just say "no skill needed". If you created/installed \
@@ -140,7 +144,7 @@ def _disable_strict(ctx, tool_defs):
     return [replace(t, strict=False) for t in tool_defs]
 
 
-def build_kevinton_agent() -> Agent:
+def build_kevinton_agent() -> tuple[Agent, list]:
     """Build kevinton's own agent.
 
     kevinton gets the full coolton toolset (including run_linux_command, slack_api_call,
