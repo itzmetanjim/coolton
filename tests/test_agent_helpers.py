@@ -216,7 +216,10 @@ def test_apply_provider_env_mapping(monkeypatch, clean_env):
     agent_mod._apply_provider_env("mistral", "k5")
     assert __import__("os").environ["MISTRAL_API_KEY"] == "k5"
 
-    agent_mod._apply_provider_env("groq_qwen27b", "k6")
+    # "groq_1" is the shape providers.json actually generates for the 2nd of
+    # several groq models (see _make_provider_name) — exact-match on the base
+    # id after stripping the trailing "_<index>".
+    agent_mod._apply_provider_env("groq_1", "k6")
     assert __import__("os").environ["GROQ_API_KEY"] == "k6"
 
     agent_mod._apply_provider_env("cerebras", "k7")
@@ -425,6 +428,60 @@ def _run_ctx(client):
 
     deps = SimpleNamespace(client=client, channel_id="C1", thread_ts="1.2", user_id="U_TEST")
     return RunContext(model=None, usage=None, prompt="", deps=deps)
+
+
+# ---------------------------------------------------------------------------
+# _inject_poster — must fail CLOSED: a failed/absent identity lookup must
+# strip any pre-existing username/icon_url rather than pass a spoofed value
+# through untouched.
+# ---------------------------------------------------------------------------
+
+
+def test_inject_poster_strips_spoofed_identity_on_lookup_failure(monkeypatch):
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    monkeypatch.setattr(agent_mod, "_user_info_cache", {})
+    params = {"channel": "C1", "text": "hi", "username": "Evil Spoof", "icon_url": "http://evil/x.png"}
+    result = agent_mod._inject_poster(params, "U_TEST")
+    assert "username" not in result
+    assert "icon_url" not in result
+
+
+def test_inject_poster_strips_spoofed_identity_when_no_user_id(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(agent_mod, "_user_info_cache", {})
+    params = {"channel": "C1", "text": "hi", "username": "Evil Spoof"}
+    result = agent_mod._inject_poster(params, "")
+    assert "username" not in result
+
+
+def test_inject_poster_sets_real_identity_on_success(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(agent_mod, "_user_info_cache", {})
+
+    def fake_get(url, **kwargs):
+        return Mock(json=lambda: {
+            "ok": True,
+            "user": {"profile": {"display_name": "Real Name", "image_72": "http://real/pfp.png"}},
+        })
+
+    monkeypatch.setattr(agent_mod.requests, "get", fake_get)
+    params = {"channel": "C1", "text": "hi", "username": "Evil Spoof", "icon_url": "http://evil/x.png"}
+    result = agent_mod._inject_poster(params, "U_TEST")
+    assert result["username"] == "Real Name"
+    assert result["icon_url"] == "http://real/pfp.png"
+
+
+def test_inject_poster_strips_spoofed_identity_on_api_exception(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(agent_mod, "_user_info_cache", {})
+
+    def raising_get(url, **kwargs):
+        raise RuntimeError("network error")
+
+    monkeypatch.setattr(agent_mod.requests, "get", raising_get)
+    params = {"channel": "C1", "text": "hi", "username": "Evil Spoof"}
+    result = agent_mod._inject_poster(params, "U_TEST")
+    assert "username" not in result
 
 
 def test_chat_post_message_sends_as_bot():
