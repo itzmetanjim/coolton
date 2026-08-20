@@ -1,6 +1,8 @@
 import os
 import shlex
 
+from e2b.exceptions import FileNotFoundException
+
 from agent.sandbox_helpers import get_or_create_sandbox
 
 
@@ -27,13 +29,13 @@ def read_sandbox_file(channel_id: str, thread_ts: str, path: str) -> str:
         return err
     try:
         content = sandbox.files.read(path)
-        if content is None:
-            return f"Error: File not found at {path}"
-        if isinstance(content, bytes):
-            return content.decode("utf-8", errors="replace")
-        return content
+    except FileNotFoundException:
+        return f"Error: File not found at {path}"
     except Exception as e:
         return f"Error reading file: {str(e)}"
+    if isinstance(content, bytes):
+        return content.decode("utf-8", errors="replace")
+    return content
 
 
 def write_sandbox_file(channel_id: str, thread_ts: str, path: str, content: str) -> str:

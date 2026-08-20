@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import logging
+import tempfile
 import threading
 import uuid
 import ipaddress
@@ -16,6 +17,7 @@ BYOK_STORE_FILE = "byok_store.json"
 BYOK_KEY_FILE = "byok_key.bin"
 BYOK_ENV_KEY = "BYOK_ENCRYPTION_KEY"
 store_lock = threading.Lock()
+_key_lock = threading.Lock()
 
 
 def validate_endpoint_url(base_url: str) -> str:
@@ -77,15 +79,23 @@ def _get_fernet() -> Fernet:
             )
         return Fernet(key_bytes)
 
-    if os.path.exists(BYOK_KEY_FILE):
-        with open(BYOK_KEY_FILE, "rb") as f:
-            return Fernet(f.read().strip())
+    with _key_lock:
+        if os.path.exists(BYOK_KEY_FILE):
+            with open(BYOK_KEY_FILE, "rb") as f:
+                return Fernet(f.read().strip())
 
-    key = Fernet.generate_key()
-    with open(BYOK_KEY_FILE, "wb") as f:
-        f.write(key)
-    logger.info("Generated new BYOK encryption key at %s", BYOK_KEY_FILE)
-    return Fernet(key)
+        key = Fernet.generate_key()
+        fd, name = tempfile.mkstemp(prefix="byok-key-", dir=os.path.dirname(os.path.abspath(BYOK_KEY_FILE)) or ".")
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(key)
+            os.replace(name, BYOK_KEY_FILE)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
+        logger.info("Generated new BYOK encryption key at %s", BYOK_KEY_FILE)
+        return Fernet(key)
 
 
 def _load_store() -> dict:
