@@ -9,11 +9,12 @@ logger = logging.getLogger(__name__)
 
 PROVIDER_DISPLAY = {
     "byok": "BYOK",
+    "hcai_zai": "HCAI GLM-5.2 (free)",
+    "orfb_zai": "OpenRouter Fallback GLM-5.2 (free)",
     "anthropic": "Anthropic",
     "openai": "OpenAI",
     "jams_luna": "Jam's GPT-5.6 Luna",
     "hcai_luna": "HCAI GPT-5.6 Luna",
-    "jams": "Jam's Kimi K2.6",
     "jams_minimax": "Jam's MiniMax M2.7",
     "hcai": "HCAI Kimi K2.6",
     "hcai_minimax": "HCAI MiniMax M2.7",
@@ -38,20 +39,21 @@ def _build_provider_order(user_id: str) -> list[tuple[str, dict]]:
     if user_endpoint:
         order.append(("byok", {"model": user_endpoint["model"], "base_url": user_endpoint["base_url"], "api_key": user_endpoint["api_key"]}))
 
+    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
+    if HCAI_API_KEY:
+        order.append(("hcai_zai", {"model": "z-ai/glm-5.2:free", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
+    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
+        order.append(("orfb_zai", {"model": "openrouter:z-ai/glm-5.2:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
     if os.environ.get("ANTHROPIC_API_KEY"):
         order.append(("anthropic", {"model": "anthropic:claude-sonnet-4-6", "base_url": None, "api_key": os.environ["ANTHROPIC_API_KEY"]}))
     if os.environ.get("OPENAI_API_KEY"):
         order.append(("openai", {"model": "openai:gpt-4.1-mini", "base_url": None, "api_key": os.environ["OPENAI_API_KEY"]}))
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
     JAMS_API_KEY = os.environ.get("JAMS_API_KEY")
-    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
     if JAMS_API_KEY:
         order.append(("jams_luna", {"model": "openrouter:openai/gpt-5.6-luna", "base_url": None, "api_key": JAMS_API_KEY}))
     if HCAI_API_KEY:
         order.append(("hcai_luna", {"model": "openai/gpt-5.6-luna", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if JAMS_API_KEY:
-        order.append(("jams", {"model": "openrouter:moonshotai/kimi-k2.6", "base_url": None, "api_key": JAMS_API_KEY}))
-    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
     if HCAI_API_KEY:
         order.append(("hcai", {"model": "moonshotai/kimi-k2.6", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
     if GROQ_API_KEY:
@@ -84,7 +86,7 @@ def _set_env(provider_name: str, api_key: str):
     mapping = {
         "anthropic": ("ANTHROPIC_API_KEY",),
         "openai": ("OPENAI_API_KEY",),
-        "jams": ("OPENROUTER_API_KEY",),
+        "orfb_zai": ("OPENROUTER_API_KEY",),
         "jams_luna": ("OPENROUTER_API_KEY",),
         "openrouter_fb": ("OPENROUTER_API_KEY",),
         "cerebras": ("CEREBRAS_API_KEY",),
@@ -97,9 +99,7 @@ def _set_env(provider_name: str, api_key: str):
             os.environ[var] = api_key
     elif provider_name == "byok":
         pass
-    elif provider_name == "hcai":
-        pass
-    elif provider_name == "hcai_luna":
+    elif provider_name in ("hcai", "hcai_luna", "hcai_zai", "hcai_minimax"):
         pass
     elif provider_name.startswith("groq_"):
         os.environ["GROQ_API_KEY"] = api_key
