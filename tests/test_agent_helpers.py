@@ -211,7 +211,7 @@ def test_apply_provider_env_mapping(monkeypatch, clean_env):
     assert __import__("os").environ["OPENAI_API_KEY"] == "k2"
 
     agent_mod._apply_provider_env("jams", "k3")
-    assert __import__("os").environ["OPENROUTER_API_KEY"] == "k3"
+    assert __import__("os").environ["JAMS_API_KEY"] == "k3"
 
     agent_mod._apply_provider_env("gemini_gemma", "k4")
     assert __import__("os").environ["GOOGLE_API_KEY"] == "k4"
@@ -231,7 +231,7 @@ def test_apply_provider_env_skips_byok_hcai(monkeypatch, clean_env):
     agent_mod._apply_provider_env("hcai", "k")
     agent_mod._apply_provider_env("hcai_luna", "k")
     os = __import__("os")
-    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "JAMS_API_KEY"):
         assert key not in os.environ
 
 
@@ -259,10 +259,10 @@ def test_provider_order_groq_adds_groq_entries(monkeypatch, clean_env):
     monkeypatch.setenv("GROQ_API_KEY", "k")
     order = agent_mod._build_provider_order(None)
     names = [name for name, _ in order]
-    assert "groq_qwen27b" in names
-    assert "groq_oss120b" in names
-    assert "groq_qwen32b" in names
-    assert "groq_oss20b" in names
+    assert "groq_0" in names
+    assert "groq_1" in names
+    assert "groq_2" in names
+    assert "groq_3" in names
 
 
 def test_provider_order_jams_and_hcai_interleave(monkeypatch, clean_env):
@@ -270,14 +270,14 @@ def test_provider_order_jams_and_hcai_interleave(monkeypatch, clean_env):
     monkeypatch.setenv("HCAI_API_KEY", "h")
     order = agent_mod._build_provider_order(None)
     names = [name for name, _ in order]
-    assert names[0] == "jams_luna"
-    assert "hcai_luna" in names
-    assert "jams" in names
-    assert "hcai" in names
-    assert "jams_minimax" in names
-    assert "hcai_minimax" in names
+    assert names[0] == "hcai_0"
+    assert "hcai_1" in names
+    assert "hcai_2" in names
+    assert "hcai_3" in names
+    assert "jams_0" in names
+    assert "jams_1" in names
     # HCAI entries carry the explicit base_url
-    hcai = dict(order)["hcai"]
+    hcai = dict(order)["hcai_2"]
     assert hcai["base_url"] == "https://ai.hackclub.com/proxy/v1"
 
 
@@ -304,7 +304,7 @@ def test_runtime_model_hcai_returns_model_object(monkeypatch, clean_env):
     monkeypatch.setenv("HCAI_API_KEY", "h")
     model = agent_mod.get_runtime_model()
     assert isinstance(model, OpenAIChatModel)
-    assert model.model_name == "openai/gpt-5.6-luna"
+    assert model.model_name == "z-ai/glm-5.2:free"
 
 
 def test_runtime_model_byok_returns_model_object(monkeypatch, clean_env):
@@ -402,17 +402,22 @@ def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     ("env_key", "expected"),
     [
-        ("OPENROUTER_API_KEY", "openrouter:openai/gpt-4.1-mini"),
-        ("OPENROUTER_API_KEY_FALLBACK", "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"),
-        ("GOOGLE_API_KEY", "google:gemini-3.1-flash-lite"),
-        ("GROQ_API_KEY", "groq:qwen/qwen3-32b"),
+        ("ANTHROPIC_API_KEY", "anthropic:claude-sonnet-4-6"),
+        ("OPENAI_API_KEY", "openai:gpt-4.1-mini"),
+        ("OPENROUTER_API_KEY_FALLBACK", "openrouter:z-ai/glm-5.2:free"),
+        ("GOOGLE_API_KEY", "google:gemma-4-31b-it"),
+        ("GROQ_API_KEY", "groq:qwen/qwen3.6-27b"),
         ("MISTRAL_API_KEY", "mistral:mistral-large-2512"),
         ("CEREBRAS_API_KEY", "cerebras:zai-glm-4.7"),
     ],
 )
 def test_get_model_accepts_documented_provider_keys(monkeypatch, clean_env, env_key, expected):
     monkeypatch.setenv(env_key, "test-key")
-    assert agent_mod.get_model() == expected
+    result = agent_mod.get_model()
+    if isinstance(result, OpenAIChatModel):
+        assert result.model_name == expected
+    else:
+        assert result == expected
 
 
 # ---------------------------------------------------------------------------
