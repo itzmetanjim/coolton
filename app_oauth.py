@@ -20,7 +20,7 @@ from agent.token_rotation import start_token_rotation
 load_dotenv(dotenv_path=".env", override=False)
 get_model()  # Fail fast if no AI provider key is configured
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=os.environ.get("COOLTON_LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
