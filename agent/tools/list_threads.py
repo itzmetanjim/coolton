@@ -5,8 +5,9 @@ import requests
 def list_channel_threads(channel_id: str, limit: int = 10, user_token: str | None = None) -> str:
     """List recent threads in a Slack channel.
 
-    Fetches the most recent messages and identifies those that are
-    thread parents (have replies). Returns thread info with reply counts.
+    Fetches recent messages (a window scaled to `limit`, since thread parents are
+    sparse among all messages) and identifies those that are thread parents (have
+    replies). Returns thread info with reply counts.
 
     Args:
         channel_id: Slack channel ID to list threads from.
@@ -20,6 +21,11 @@ def list_channel_threads(channel_id: str, limit: int = 10, user_token: str | Non
     if not token:
         return "Error: SLACK_USER_TOKEN not configured."
 
+    limit = max(1, min(limit, 100))
+    # Thread parents are a minority of messages, so search a window several times
+    # wider than `limit` — clamped to Slack's per-request max of 200.
+    fetch_limit = min(max(limit * 5, 50), 200)
+
     try:
         url = "https://slack.com/api/conversations.history"
         headers = {"Authorization": f"Bearer {token}"}
@@ -27,7 +33,7 @@ def list_channel_threads(channel_id: str, limit: int = 10, user_token: str | Non
         resp = requests.get(
             url,
             headers=headers,
-            params={"channel": channel_id, "limit": 50},
+            params={"channel": channel_id, "limit": fetch_limit},
             timeout=10,
         )
         data = resp.json()

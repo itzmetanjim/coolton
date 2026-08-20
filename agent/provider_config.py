@@ -11,6 +11,7 @@ Reads providers.json from the repo root and exposes helpers for:
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -145,15 +146,18 @@ def apply_provider_env(provider_name: str, api_key: str) -> None:
     if not api_key or provider_name == "byok":
         return
 
-    # Find the provider config by name, including aliases
+    # Find the provider config by name, including aliases. Generated names look
+    # like "<provider_id>_<index>" (see _make_provider_name) — strip the trailing
+    # index for an exact match rather than prefix-matching, which could pick the
+    # wrong provider if one id happens to prefix another (dict order is unordered).
     pmap = _provider_map()
-    pconf = None
-    if provider_name in pmap:
-        pconf = pmap[provider_name]
-    else:
-        for pid, pc in pmap.items():
-            aliases = pc.get("aliases", [])
-            if provider_name.startswith(pid) or provider_name in aliases:
+    pconf = pmap.get(provider_name)
+    if pconf is None:
+        base = re.sub(r"_\d+$", "", provider_name)
+        pconf = pmap.get(base)
+    if pconf is None:
+        for pc in pmap.values():
+            if provider_name in (pc.get("aliases") or []):
                 pconf = pc
                 break
     if not pconf:

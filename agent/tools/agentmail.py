@@ -33,6 +33,12 @@ def _err(e: Exception) -> str:
     return f"AgentMail error: {getattr(e, 'message', None) or str(e)}"
 
 
+def _sender(m) -> str:
+    """AgentMail message objects expose the sender as `from_` (SDK renames the
+    reserved `from` field); fall back to `from` in case a plain dict slips through."""
+    return getattr(m, "from_", None) or getattr(m, "from", "?")
+
+
 def create_inbox_tool() -> str:
     """Create a new AgentMail inbox for coolton (gives coolton its own @agentmail.to address).
 
@@ -96,7 +102,7 @@ def list_messages_tool(inbox_id: str = DEFAULT_INBOX, limit: int = 20) -> str:
         lines = []
         for m in msgs:
             mid = getattr(m, "message_id", None) or getattr(m, "id", None)
-            sender = getattr(m, "from_", None) or getattr(m, "from", "?")
+            sender = _sender(m)
             subject = getattr(m, "subject", "(no subject)")
             read = getattr(m, "read", "?")
             lines.append(
@@ -150,7 +156,7 @@ def read_message_tool(inbox_id: str = DEFAULT_INBOX, message_id: str = "") -> st
                 for m in msgs:
                     mid = getattr(m, "message_id", None) or getattr(m, "id", None)
                     if mid == message_id:
-                        sender = getattr(m, "from_", None) or getattr(m, "from", "?")
+                        sender = _sender(m)
                         subject = getattr(m, "subject", "(no subject)")
                         preview = getattr(m, "preview", "") or ""
                         return (

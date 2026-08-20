@@ -64,8 +64,9 @@ def _format_messages(messages: list[dict]) -> str:
 def _call_summary_model(conversation_text: str, channel_id: str = "", thread_ts: str = "") -> str:
     """Summarize via the summarizer subagent (reuses the main provider fallback chain).
 
-    Falls back to the old direct Anthropic/OpenAI calls if the subagent path is
-    unavailable.
+    Falls back to a single direct model call — still going through the centralized
+    providers.json fallback chain (agent.provider_config), never a hardcoded
+    provider/model — if the subagent path is unavailable.
     """
     try:
         from agent.deps import AgentDeps
@@ -92,33 +93,18 @@ def _call_summary_model(conversation_text: str, channel_id: str = "", thread_ts:
     except Exception:
         pass
 
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    openai_key = os.environ.get("OPENAI_API_KEY")
-
     prompt = f"Summarize the following Slack conversation concisely, highlighting key decisions, questions, and action items:\n\n{conversation_text[:15000]}"
+    try:
+        from pydantic_ai.direct import model_request_sync
+        from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-    if anthropic_key:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 2048, "messages": [{"role": "user", "content": prompt}]},
-            headers={"x-api-key": anthropic_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            timeout=30,
+        from agent.provider_config import get_model_from_config
+
+        response = model_request_sync(
+            get_model_from_config(),
+            [ModelRequest(parts=[UserPromptPart(content=prompt)])],
         )
-        data = resp.json()
-        if "content" in data:
-            return "".join(b["text"] for b in data["content"] if b.get("type") == "text")
-        return f"Error: {data.get('error', {}).get('message', 'unknown')}"
-
-    if openai_key:
-        resp = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            json={"model": "gpt-4.1-mini", "max_tokens": 2048, "messages": [{"role": "user", "content": prompt}]},
-            headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
-            timeout=30,
-        )
-        data = resp.json()
-        if "choices" in data:
-            return data["choices"][0]["message"]["content"]
-        return f"Error: {data.get('error', {}).get('message', 'unknown')}"
-
-    return "Error: No AI provider configured for summarization."
+        text = "".join(p.content for p in response.parts if hasattr(p, "content"))
+        return text or "Error: model returned no text."
+    except Exception as e:
+        return f"Error: No AI provider available for summarization ({e})."

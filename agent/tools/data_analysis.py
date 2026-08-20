@@ -102,10 +102,8 @@ def analyze_csv_in_sandbox(channel_id: str, thread_ts: str, csv_path: str, query
 
         # First check the CSV structure
         check_result = sandbox.commands.run(f"head -5 {shell_path}")
-        if check_result.stdout:
-            check_result.stdout
-        else:
-            return f"Error: Could not read {csv_path}"
+        if check_result.exit_code != 0 or not check_result.stdout:
+            return f"Error: Could not read {csv_path}: {check_result.stderr or check_result.stdout}"
         
         # If no query provided, do basic analysis
         if not query:
@@ -178,11 +176,16 @@ def run_sql_on_csv(channel_id: str, thread_ts: str, csv_path: str, sql_query: st
     if err:
         return err
     try:
+        # csv_path is user-supplied: escape single quotes for the SQL string literal
+        # it's embedded into, then json.dumps the whole SQL statement so it's also a
+        # valid (escaped) Python string literal in the generated script.
+        sql_escaped_path = csv_path.replace("'", "''")
+        create_table_sql = f"CREATE TABLE data AS SELECT * FROM read_csv_auto('{sql_escaped_path}')"
         script = (
             "import duckdb\n"
             "import sys\n\n"
             "conn = duckdb.connect()\n"
-            f"conn.execute(\"CREATE TABLE data AS SELECT * FROM read_csv_auto('{csv_path}')\")\n"
+            f"conn.execute({json.dumps(create_table_sql)})\n"
             f"result = conn.execute({json.dumps(sql_query)}).fetchall()\n"
             "columns = [desc[0] for desc in conn.description]\n"
             "print(' | '.join(columns))\n"
