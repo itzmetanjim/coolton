@@ -49,20 +49,12 @@ def handle_app_mentioned(
             )
             return
 
-        from agent.policy_consent import (
-            build_opt_in_blocks, has_consent, record_consent, save_pending,
-            user_is_in_policy_channel,
-        )
-        if user_is_in_policy_channel(client, user_id):
-            record_consent(user_id, joined_policy_channel=True)
-        elif not has_consent(user_id):
-            pending_id = save_pending({
-                "user_id": user_id, "channel_id": channel_id, "thread_ts": thread_ts,
-                "message_ts": event["ts"], "text": text,
-                "user_token": context.user_token if isinstance(context.user_token, str) else None, "files": event.get("files"),
-            })
-            say(text="you need to opt in to the Coolton policy:",
-                blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts)
+        from agent.policy_consent import ensure_consent
+        if not ensure_consent(
+            client, say, user_id=user_id, channel_id=channel_id, thread_ts=thread_ts,
+            message_ts=event["ts"], text=text, user_token=context.user_token,
+            files=event.get("files"),
+        ):
             return
 
         # Silently make sure cooltonUser is a member of this channel (not in DMs).
@@ -101,16 +93,6 @@ def handle_app_mentioned(
         from agent.tools.vision import download_attached_images
         images = download_attached_images(client, event.get("files"))
 
-        from agent import AgentDeps
-        deps = AgentDeps(
-            client=client,
-            user_id=user_id,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            message_ts=event["ts"],
-            user_token=context.user_token,
-        )
-
         run_agent_turn(
             client=client,
             say_stream=say_stream,
@@ -126,14 +108,11 @@ def handle_app_mentioned(
             images=images,
         )
     except Exception as e:
+        # Note: run_agent_turn handles its own plan-block error reporting with its
+        # real deps (see turn.py); an exception only lands here if it happened
+        # before/around that call, when no plan block was ever sent.
         logger.exception(f"Failed to handle app mention: {e}")
         from agent.redact import redact as _redact
-        from agent.plan_block import set_plan_error
-        try:
-            if 'deps' in locals():
-                set_plan_error(deps, _redact(str(e)))
-        except Exception:
-            pass
         say(
             text=f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})",
             thread_ts=event.get("thread_ts") or event["ts"],
