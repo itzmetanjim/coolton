@@ -1,112 +1,24 @@
 import logging
-import os
 import time
 
 from slack_bolt import Ack, BoltContext
 from slack_sdk import WebClient
 
-logger = logging.getLogger(__name__)
+from agent import provider_config
 
-PROVIDER_DISPLAY = {
-    "byok": "BYOK",
-    "hcai_zai": "HCAI GLM-5.2 (free)",
-    "orfb_zai": "OpenRouter Fallback GLM-5.2 (free)",
-    "anthropic": "Anthropic",
-    "openai": "OpenAI",
-    "jams_luna": "Jam's GPT-5.6 Luna",
-    "hcai_luna": "HCAI GPT-5.6 Luna",
-    "jams_minimax": "Jam's MiniMax M2.7",
-    "hcai": "HCAI Kimi K2.6",
-    "hcai_minimax": "HCAI MiniMax M2.7",
-    "openrouter_fb": "OpenRouter Fallback",
-    "mistral": "Mistral Large 2512",
-    "gemini": "Gemini 3.1 Flash-Lite",
-    "groq_oss120b": "Groq GPT-OSS-120B",
-    "groq_oss20b": "Groq GPT-OSS-20B",
-    "gemini_gemma": "Gemma 4 31B",
-    "groq_qwen27b": "Groq Qwen 3.6 27B",
-    "groq_qwen32b": "Groq Qwen 3 32B",
-    "cerebras": "Cerebras",
-}
+logger = logging.getLogger(__name__)
 
 
 def _build_provider_order(user_id: str) -> list[tuple[str, dict]]:
-    from agent.agent import get_user_text_endpoint
-
-    order = []
-
-    user_endpoint = get_user_text_endpoint(user_id)
-    if user_endpoint:
-        order.append(("byok", {"model": user_endpoint["model"], "base_url": user_endpoint["base_url"], "api_key": user_endpoint["api_key"]}))
-
-    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
-    if HCAI_API_KEY:
-        order.append(("hcai_zai", {"model": "z-ai/glm-5.2:free", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
-        order.append(("orfb_zai", {"model": "openrouter:z-ai/glm-5.2:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        order.append(("anthropic", {"model": "anthropic:claude-sonnet-4-6", "base_url": None, "api_key": os.environ["ANTHROPIC_API_KEY"]}))
-    if os.environ.get("OPENAI_API_KEY"):
-        order.append(("openai", {"model": "openai:gpt-4.1-mini", "base_url": None, "api_key": os.environ["OPENAI_API_KEY"]}))
-    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-    JAMS_API_KEY = os.environ.get("JAMS_API_KEY")
-    if JAMS_API_KEY:
-        order.append(("jams_luna", {"model": "openrouter:openai/gpt-5.6-luna", "base_url": None, "api_key": JAMS_API_KEY}))
-    if HCAI_API_KEY:
-        order.append(("hcai_luna", {"model": "openai/gpt-5.6-luna", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if HCAI_API_KEY:
-        order.append(("hcai", {"model": "moonshotai/kimi-k2.6", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if GROQ_API_KEY:
-        order.append(("groq_qwen27b", {"model": "groq:qwen/qwen3.6-27b", "base_url": None, "api_key": GROQ_API_KEY}))
-    if os.environ.get("JAMS_API_KEY"):
-        order.append(("jams_minimax", {"model": "openrouter:minimax/minimax-m2.7", "base_url": None, "api_key": os.environ["JAMS_API_KEY"]}))
-    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
-    if HCAI_API_KEY:
-        order.append(("hcai_minimax", {"model": "minimax/minimax-m2.7", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
-        order.append(("openrouter_fb", {"model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
-    if os.environ.get("GOOGLE_API_KEY"):
-        order.append(("gemini_gemma", {"model": "google:gemma-4-31b-it", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
-    if GROQ_API_KEY:
-        order.append(("groq_oss120b", {"model": "groq:openai/gpt-oss-120b", "base_url": None, "api_key": GROQ_API_KEY}))
-    if os.environ.get("GOOGLE_API_KEY"):
-        order.append(("gemini", {"model": "google:gemini-3.1-flash-lite", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
-    if GROQ_API_KEY:
-        order.append(("groq_qwen32b", {"model": "groq:qwen/qwen3-32b", "base_url": None, "api_key": GROQ_API_KEY}))
-        order.append(("groq_oss20b", {"model": "groq:openai/gpt-oss-20b", "base_url": None, "api_key": GROQ_API_KEY}))
-    if os.environ.get("MISTRAL_API_KEY"):
-        order.append(("mistral", {"model": "mistral:mistral-large-2512", "base_url": None, "api_key": os.environ["MISTRAL_API_KEY"]}))
-    if os.environ.get("CEREBRAS_API_KEY"):
-        order.append(("cerebras", {"model": "cerebras:zai-glm-4.7", "base_url": None, "api_key": os.environ["CEREBRAS_API_KEY"]}))
-
-    return order
+    return provider_config.build_provider_order(user_id)
 
 
 def _set_env(provider_name: str, api_key: str):
-    mapping = {
-        "anthropic": ("ANTHROPIC_API_KEY",),
-        "openai": ("OPENAI_API_KEY",),
-        "orfb_zai": ("OPENROUTER_API_KEY",),
-        "jams_luna": ("OPENROUTER_API_KEY",),
-        "openrouter_fb": ("OPENROUTER_API_KEY",),
-        "cerebras": ("CEREBRAS_API_KEY",),
-        "mistral": ("MISTRAL_API_KEY",),
-        "gemini": ("GOOGLE_API_KEY",),
-        "gemini_gemma": ("GOOGLE_API_KEY",),
-    }
-    if provider_name in mapping:
-        for var in mapping[provider_name]:
-            os.environ[var] = api_key
-    elif provider_name == "byok":
-        pass
-    elif provider_name in ("hcai", "hcai_luna", "hcai_zai", "hcai_minimax"):
-        pass
-    elif provider_name.startswith("groq_"):
-        os.environ["GROQ_API_KEY"] = api_key
+    provider_config.apply_provider_env(provider_name, api_key)
 
 
 def _test_single(provider_name: str, config: dict) -> tuple[bool, str, float, str]:
-    display = PROVIDER_DISPLAY.get(provider_name, provider_name)
+    display = config.get("display", provider_name)
     start = time.time()
 
     try:

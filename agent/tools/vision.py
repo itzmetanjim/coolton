@@ -1,5 +1,4 @@
 import base64
-import os
 import requests
 
 IMAGE_MIME_PREFIX = "image/"
@@ -63,37 +62,13 @@ def analyze_image(image_data: bytes, filename: str, prompt: str = "Describe this
     return "Error: All vision providers failed:\n" + "\n".join(errors)
 
 
-_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-_HCAI_BASE = "https://ai.hackclub.com/proxy/v1"
-
-
 def _vision_provider_chain() -> list[tuple[str, str, str, str]]:
     """(provider_label, base_url, api_key, model) pairs in fallback order.
 
-    gpt-5.6-luna first (JAMS then HCAI), then the free gemma models via
-    OpenRouter fallback, then the free gemmas on JAMS/HCAI, then the paid
-    gemmas on JAMS/HCAI. JAMS is OpenRouter with a different API key.
+    Delegates to provider_config which reads from providers.json.
     """
-    chain = []
-    jams = os.environ.get("JAMS_API_KEY")
-    hcai = os.environ.get("HCAI_API_KEY")
-    orfb = os.environ.get("OPENROUTER_API_KEY_FALLBACK")
-
-    if jams:
-        chain.append(("jams", _OPENROUTER_BASE, jams, "openai/gpt-5.6-luna"))
-    if hcai:
-        chain.append(("hcai", _HCAI_BASE, hcai, "openai/gpt-5.6-luna"))
-    if orfb:
-        chain.append(("openrouter_fb", _OPENROUTER_BASE, orfb, "google/gemma-4-31b-it:free"))
-        chain.append(("openrouter_fb", _OPENROUTER_BASE, orfb, "google/gemma-4-26b-a4b-it:free"))
-    for model in ("google/gemma-4-31b-it", "google/gemma-4-26b-a4b-it"):
-        for variant in (":free", ""):
-            m = model + variant
-            if jams:
-                chain.append(("jams", _OPENROUTER_BASE, jams, m))
-            if hcai:
-                chain.append(("hcai", _HCAI_BASE, hcai, m))
-    return chain
+    from agent.provider_config import build_vision_chain
+    return build_vision_chain()
 
 
 def _analyze_openai_compatible(data_uri: str, prompt: str, base_url: str, api_key: str, model: str) -> str:

@@ -1,0 +1,43 @@
+{
+  "providers": [
+    {"id": "hcai", "api_url": "https://ai.hackclub.com/proxy/v1", "api_key_env_var_name": "HCAI_API_KEY", "displayname": "Hack Club AI"},
+    {"id": "anthropic", "api_url": null, "api_key_env_var_name": "ANTHROPIC_API_KEY", "displayname": "Anthropic"},
+    {"id": "openai", "api_url": null, "api_key_env_var_name": "OPENAI_API_KEY", "displayname": "OpenAI"},
+    {"id": "jams", "api_url": null, "api_key_env_var_name": "JAMS_API_KEY", "displayname": "Jam's OpenRouter"},
+    {"id": "groq", "api_url": null, "api_key_env_var_name": "GROQ_API_KEY", "displayname": "Groq"},
+    {"id": "openrouter_fb", "api_url": null, "api_key_env_var_name": "OPENROUTER_API_KEY_FALLBACK", "displayname": "OpenRouter Fallback"},
+    {"id": "google", "api_url": null, "api_key_env_var_name": "GOOGLE_API_KEY", "displayname": "Google", "aliases": ["gemini", "gemini_gemma"]},
+    {"id": "mistral", "api_url": null, "api_key_env_var_name": "MISTRAL_API_KEY", "displayname": "Mistral"},
+    {"id": "cerebras", "api_url": null, "api_key_env_var_name": "CEREBRAS_API_KEY", "displayname": "Cerebras"}
+  ],
+  "models": [
+    {"provider": "hcai", "model": "z-ai/glm-5.2:free", "display": "HCAI GLM-5.2 (free)"},
+    {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.2:free", "display": "OpenRouter Fallback GLM-5.2 (free)"},
+    {"provider": "anthropic", "model": "anthropic:claude-sonnet-4-6"},
+    {"provider": "openai", "model": "openai:gpt-4.1-mini"},
+    {"provider": "jams", "model": "openrouter:openai/gpt-5.6-luna", "display": "Jam's GPT-5.6 Luna"},
+    {"provider": "hcai", "model": "openai/gpt-5.6-luna", "display": "HCAI GPT-5.6 Luna"},
+    {"provider": "hcai", "model": "moonshotai/kimi-k2.6", "display": "HCAI Kimi K2.6"},
+    {"provider": "groq", "model": "groq:qwen/qwen3.6-27b", "display": "Groq Qwen 3.6 27B"},
+    {"provider": "jams", "model": "openrouter:minimax/minimax-m2.7", "display": "Jam's MiniMax M2.7"},
+    {"provider": "hcai", "model": "minimax/minimax-m2.7", "display": "HCAI MiniMax M2.7"},
+    {"provider": "openrouter_fb", "model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "display": "OpenRouter Fallback Nemotron"},
+    {"provider": "google", "model": "google:gemma-4-31b-it", "display": "Gemma 4 31B"},
+    {"provider": "groq", "model": "groq:openai/gpt-oss-120b", "display": "Groq GPT-OSS-120B"},
+    {"provider": "google", "model": "google:gemini-3.1-flash-lite", "display": "Gemini 3.1 Flash-Lite"},
+    {"provider": "groq", "model": "groq:qwen/qwen3-32b", "display": "Groq Qwen 3 32B"},
+    {"provider": "groq", "model": "groq:openai/gpt-oss-20b", "display": "Groq GPT-OSS-20B"},
+    {"provider": "mistral", "model": "mistral:mistral-large-2512", "display": "Mistral Large 2512"},
+    {"provider": "cerebras", "model": "cerebras:zai-glm-4.7", "display": "Cerebras"}
+  ],
+  "vision_models": [
+    {"provider": "jams", "model": "openai/gpt-5.6-luna", "display": "Jam's GPT-5.6 Luna"},
+    {"provider": "hcai", "model": "openai/gpt-5.6-luna", "display": "HCAI GPT-5.6 Luna"},
+    {"provider": "openrouter_fb", "model": "google/gemma-4-31b-it:free"},
+    {"provider": "openrouter_fb", "model": "google/gemma-4-26b-a4b-it:free"},
+    {"provider": "jams", "model": "google/gemma-4-31b-it:free"},
+    {"provider": "hcai", "model": "google/gemma-4-31b-it:free"},
+    {"provider": "jams", "model": "google/gemma-4-26b-a4b-it:free"},
+    {"provider": "hcai", "model": "google/gemma-4-26b-a4b-it:free"}
+  ]
+}

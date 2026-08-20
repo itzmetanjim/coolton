@@ -18,6 +18,7 @@ from agent.platforms.slack import SlackPlatform
 from agent.stop_store import HaltRun
 from agent.tools import add_emoji_reaction
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
+from agent import provider_config
 from agent.redact import redact as _redact, strip_secret_keys as _strip_secret_keys
 from e2b import Sandbox
 from e2b.exceptions import FileNotFoundException
@@ -105,61 +106,16 @@ def get_model() -> str:
     global _cached_model
     if _cached_model is not None:
         return _cached_model
-
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        _cached_model = "anthropic:claude-sonnet-4-6"
-    elif os.environ.get("OPENAI_API_KEY"):
-        _cached_model = "openai:gpt-4.1-mini"
-    elif os.environ.get("JAMS_API_KEY"):
-        _cached_model = "openrouter:moonshotai/kimi-k2.6"
-    elif os.environ.get("HCAI_API_KEY"):
-        _cached_model = "openai:moonshotai/kimi-k2.6"
-    elif os.environ.get("OPENROUTER_API_KEY"):
-        _cached_model = "openrouter:openai/gpt-4.1-mini"
-    elif os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
-        _cached_model = "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"
-    elif os.environ.get("GOOGLE_API_KEY"):
-        _cached_model = "google:gemini-3.1-flash-lite"
-    elif os.environ.get("GROQ_API_KEY"):
-        _cached_model = "groq:qwen/qwen3-32b"
-    elif os.environ.get("MISTRAL_API_KEY"):
-        _cached_model = "mistral:mistral-large-2512"
-    elif os.environ.get("CEREBRAS_API_KEY"):
-        _cached_model = "cerebras:zai-glm-4.7"
-    else:
-        raise RuntimeError(
-            "No AI provider configured. Set at least one supported provider key: "
-            "ANTHROPIC_API_KEY, OPENAI_API_KEY, JAMS_API_KEY, HCAI_API_KEY, "
-            "OPENROUTER_API_KEY, OPENROUTER_API_KEY_FALLBACK, GOOGLE_API_KEY, "
-            "GROQ_API_KEY, MISTRAL_API_KEY, or CEREBRAS_API_KEY."
-        )
+    _cached_model = provider_config.get_model_from_config()
     return _cached_model
 
 
 def _apply_provider_env(provider_name: str, api_key: str) -> None:
     """Set the provider API key env var pydantic-ai needs to instantiate a model.
 
-    Mirrors the env setup used inside run_agent so other agents (e.g. kevinton)
-    select the same provider and have its key available.
+    Delegates to provider_config.apply_provider_env which reads from providers.json.
     """
-    if provider_name in ("byok", "hcai", "hcai_minimax", "hcai_luna", "hcai_zai"):
-        return  # BYOK / HCAI use an explicit base_url + api_key at model creation
-    if not api_key:
-        return
-    if provider_name == "anthropic":
-        os.environ["ANTHROPIC_API_KEY"] = api_key
-    elif provider_name == "openai":
-        os.environ["OPENAI_API_KEY"] = api_key
-    elif provider_name in ("orfb_zai", "openrouter_fb", "jams_luna"):
-        os.environ["OPENROUTER_API_KEY"] = api_key
-    elif provider_name in ("gemini", "gemini_gemma"):
-        os.environ["GOOGLE_API_KEY"] = api_key
-    elif provider_name == "mistral":
-        os.environ["MISTRAL_API_KEY"] = api_key
-    elif provider_name.startswith("groq_"):
-        os.environ["GROQ_API_KEY"] = api_key
-    elif provider_name == "cerebras":
-        os.environ["CEREBRAS_API_KEY"] = api_key
+    provider_config.apply_provider_env(provider_name, api_key)
 
 
 def get_runtime_model(deps_user_id: str | None = None) -> str:
@@ -171,19 +127,19 @@ def get_runtime_model(deps_user_id: str | None = None) -> str:
     configured.
     """
     provider_order = _build_provider_order(deps_user_id)
-    for provider_name, provider_config in provider_order:
-        api_key = provider_config.get("api_key")
+    for provider_name, prov_config in provider_order:
+        api_key = prov_config.get("api_key")
         if not api_key and provider_name != "byok":
             continue
-        model_name = provider_config["model"]
-        if provider_config.get("base_url"):
+        model_name = prov_config["model"]
+        if prov_config.get("base_url"):
             from pydantic_ai.models.openai import OpenAIChatModel
             from pydantic_ai.providers.openai import OpenAIProvider
             return OpenAIChatModel(
                 model_name,
                 provider=OpenAIProvider(
-                    base_url=provider_config["base_url"],
-                    api_key=provider_config["api_key"],
+                    base_url=prov_config["base_url"],
+                    api_key=prov_config["api_key"],
                 ),
             )
         _apply_provider_env(provider_name, api_key or "")
@@ -256,51 +212,8 @@ def _resolve_provider_order(deps_user_id: str | None = None) -> list:
 
 
 def _build_provider_order(deps_user_id: str | None = None) -> list:
-    """Build the provider fallback order (same as run_agent)."""
-    provider_order = []
-    user_endpoint = get_user_text_endpoint(deps_user_id)
-    if user_endpoint:
-        provider_order.append(("byok", user_endpoint))
-    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
-    if HCAI_API_KEY:
-        provider_order.append(("hcai_zai", {"model": "z-ai/glm-5.2:free", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
-        provider_order.append(("orfb_zai", {"model": "openrouter:z-ai/glm-5.2:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        provider_order.append(("anthropic", {"model": "anthropic:claude-sonnet-4-6", "base_url": None, "api_key": os.environ["ANTHROPIC_API_KEY"]}))
-    if os.environ.get("OPENAI_API_KEY"):
-        provider_order.append(("openai", {"model": "openai:gpt-4.1-mini", "base_url": None, "api_key": os.environ["OPENAI_API_KEY"]}))
-    JAMS_API_KEY = os.environ.get("JAMS_API_KEY")
-    if JAMS_API_KEY:
-        provider_order.append(("jams_luna", {"model": "openrouter:openai/gpt-5.6-luna", "base_url": None, "api_key": JAMS_API_KEY}))
-    if HCAI_API_KEY:
-        provider_order.append(("hcai_luna", {"model": "openai/gpt-5.6-luna", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if HCAI_API_KEY:
-        provider_order.append(("hcai", {"model": "moonshotai/kimi-k2.6", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-    if GROQ_API_KEY:
-        provider_order.append(("groq_qwen27b", {"model": "groq:qwen/qwen3.6-27b", "base_url": None, "api_key": GROQ_API_KEY}))
-    if os.environ.get("JAMS_API_KEY"):
-        provider_order.append(("jams_minimax", {"model": "openrouter:minimax/minimax-m2.7", "base_url": None, "api_key": os.environ["JAMS_API_KEY"]}))
-    HCAI_API_KEY = os.environ.get("HCAI_API_KEY")
-    if HCAI_API_KEY:
-        provider_order.append(("hcai_minimax", {"model": "minimax/minimax-m2.7", "base_url": "https://ai.hackclub.com/proxy/v1", "api_key": HCAI_API_KEY}))
-    if os.environ.get("OPENROUTER_API_KEY_FALLBACK"):
-        provider_order.append(("openrouter_fb", {"model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "base_url": None, "api_key": os.environ["OPENROUTER_API_KEY_FALLBACK"]}))
-    if os.environ.get("GOOGLE_API_KEY"):
-        provider_order.append(("gemini_gemma", {"model": "google:gemma-4-31b-it", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
-    if GROQ_API_KEY:
-        provider_order.append(("groq_oss120b", {"model": "groq:openai/gpt-oss-120b", "base_url": None, "api_key": GROQ_API_KEY}))
-    if os.environ.get("GOOGLE_API_KEY"):
-        provider_order.append(("gemini", {"model": "google:gemini-3.1-flash-lite", "base_url": None, "api_key": os.environ["GOOGLE_API_KEY"]}))
-    if GROQ_API_KEY:
-        provider_order.append(("groq_qwen32b", {"model": "groq:qwen/qwen3-32b", "base_url": None, "api_key": GROQ_API_KEY}))
-        provider_order.append(("groq_oss20b", {"model": "groq:openai/gpt-oss-20b", "base_url": None, "api_key": GROQ_API_KEY}))
-    if os.environ.get("MISTRAL_API_KEY"):
-        provider_order.append(("mistral", {"model": "mistral:mistral-large-2512", "base_url": None, "api_key": os.environ["MISTRAL_API_KEY"]}))
-    if os.environ.get("CEREBRAS_API_KEY"):
-        provider_order.append(("cerebras", {"model": "cerebras:zai-glm-4.7", "base_url": None, "api_key": os.environ["CEREBRAS_API_KEY"]}))
-    return provider_order
+    """Build the provider fallback order from providers.json."""
+    return provider_config.build_provider_order(deps_user_id)
 
 
 def get_user_text_endpoint(user_id: str | None) -> dict | None:
@@ -1970,40 +1883,27 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
 
     all_errors = []
 
-    for provider_name, provider_config in provider_order:
+    for provider_name, prov_config in provider_order:
         for attempt in range(max_retries):
             try:
-                model_name = provider_config["model"]
+                model_name = prov_config["model"]
 
                 # Create model object if custom base_url (BYOK, HCAI)
                 model_obj = None
-                if provider_config.get("base_url"):
+                if prov_config.get("base_url"):
                     from pydantic_ai.models.openai import OpenAIChatModel
                     from pydantic_ai.providers.openai import OpenAIProvider
                     model_obj = OpenAIChatModel(
-                        provider_config["model"],
+                        prov_config["model"],
                         provider=OpenAIProvider(
-                            base_url=provider_config["base_url"],
-                            api_key=provider_config["api_key"],
+                            base_url=prov_config["base_url"],
+                            api_key=prov_config["api_key"],
                         ),
                     )
 
                 # Set env vars for this provider
-                if provider_name not in ("byok", "hcai", "hcai_minimax", "hcai_luna", "hcai_zai") and provider_config.get("api_key"):
-                    if provider_name == "anthropic":
-                        os.environ["ANTHROPIC_API_KEY"] = provider_config["api_key"]
-                    elif provider_name == "openai":
-                        os.environ["OPENAI_API_KEY"] = provider_config["api_key"]
-                    elif provider_name in ("orfb_zai", "openrouter_fb", "jams_luna"):
-                        os.environ["OPENROUTER_API_KEY"] = provider_config["api_key"]
-                    elif provider_name in ("gemini", "gemini_gemma"):
-                        os.environ["GOOGLE_API_KEY"] = provider_config["api_key"]
-                    elif provider_name == "mistral":
-                        os.environ["MISTRAL_API_KEY"] = provider_config["api_key"]
-                    elif provider_name.startswith("groq_"):
-                        os.environ["GROQ_API_KEY"] = provider_config["api_key"]
-                    elif provider_name == "cerebras":
-                        os.environ["CEREBRAS_API_KEY"] = provider_config["api_key"]
+                if prov_config.get("api_key") and provider_name != "byok":
+                    provider_config.apply_provider_env(provider_name, prov_config["api_key"])
 
                 # Rate limit for Cerebras
                 if "cerebras" in model_name.lower():
