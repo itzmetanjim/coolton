@@ -210,9 +210,6 @@ def test_apply_provider_env_mapping(monkeypatch, clean_env):
     agent_mod._apply_provider_env("openai", "k2")
     assert __import__("os").environ["OPENAI_API_KEY"] == "k2"
 
-    agent_mod._apply_provider_env("jams", "k3")
-    assert __import__("os").environ["JAMS_API_KEY"] == "k3"
-
     agent_mod._apply_provider_env("gemini_gemma", "k4")
     assert __import__("os").environ["GOOGLE_API_KEY"] == "k4"
 
@@ -231,7 +228,7 @@ def test_apply_provider_env_skips_byok_hcai(monkeypatch, clean_env):
     agent_mod._apply_provider_env("hcai", "k")
     agent_mod._apply_provider_env("hcai_luna", "k")
     os = __import__("os")
-    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "JAMS_API_KEY"):
+    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
         assert key not in os.environ
 
 
@@ -265,8 +262,7 @@ def test_provider_order_groq_adds_groq_entries(monkeypatch, clean_env):
     assert "groq_3" in names
 
 
-def test_provider_order_jams_and_hcai_interleave(monkeypatch, clean_env):
-    monkeypatch.setenv("JAMS_API_KEY", "j")
+def test_provider_order_hcai_models(monkeypatch, clean_env):
     monkeypatch.setenv("HCAI_API_KEY", "h")
     order = agent_mod._build_provider_order(None)
     names = [name for name, _ in order]
@@ -274,8 +270,6 @@ def test_provider_order_jams_and_hcai_interleave(monkeypatch, clean_env):
     assert "hcai_1" in names
     assert "hcai_2" in names
     assert "hcai_3" in names
-    assert "jams_0" in names
-    assert "jams_1" in names
     # HCAI entries carry the explicit base_url
     hcai = dict(order)["hcai_2"]
     assert hcai["base_url"] == "https://ai.hackclub.com/proxy/v1"
