@@ -21,7 +21,10 @@ os.environ.pop("SLACK_CLIENT_ID", None)
 os.environ.pop("SLACK_CLIENT_SECRET", None)
 get_model()  # Fail fast if no AI provider key is configured
 
-logging.basicConfig(level=logging.DEBUG)
+# DEBUG floods logs with slack_bolt/urllib3/requests/apscheduler internals AND
+# bypasses redact.py's secret scrubbing (that only wraps agent tool I/O, not raw
+# library debug output) — default to INFO, opt into DEBUG explicitly.
+logging.basicConfig(level=os.environ.get("COOLTON_LOG_LEVEL", "INFO").upper())
 
 app = App(
     token=os.environ.get("SLACK_BOT_TOKEN"),
@@ -33,14 +36,16 @@ app = App(
 
 TOKEN_LEAK_ALERT_USER = "U0B2VTYER33"
 _token_leak_alert_last = 0.0
+_token_leak_alert_lock = threading.Lock()
 
 
 def _notify_token_leak(keys, context):
     global _token_leak_alert_last
     now = time.time()
-    if now - _token_leak_alert_last < 60:
-        return
-    _token_leak_alert_last = now
+    with _token_leak_alert_lock:
+        if now - _token_leak_alert_last < 60:
+            return
+        _token_leak_alert_last = now
 
     def _send():
         try:
