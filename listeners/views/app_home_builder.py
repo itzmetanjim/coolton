@@ -161,7 +161,7 @@ def build_app_home_view(
     blocks.append({"type": "divider"})
     blocks.append({
         "type": "section",
-        "text": {"type": "mrkdwn", "text": "*AI Fallback Cache*\nIf a provider fails, the bot remembers which one worked and skips ahead to it for 30 minutes."},
+        "text": {"type": "mrkdwn", "text": "*AI Fallback Cache*\nEvery 30 minutes coolton re-tests every provider in the background and updates which one to use first, so it never has to wait or retry to find a working one. Clearing wipes that and re-probes immediately."},
     })
     blocks.append({
         "type": "actions",

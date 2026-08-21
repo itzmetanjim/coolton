@@ -6,8 +6,21 @@ import threading
 logger = logging.getLogger(__name__)
 
 FALLBACK_CACHE_FILE = "fallback_cache.json"
-WORKING_TTL_SECONDS = 1800
-DEAD_TTL_SECONDS = 1800
+
+# agent.scheduler runs refresh_fallback_cache() (agent/provider_probe.py) every
+# REFRESH_INTERVAL_SECONDS, proactively re-testing every provider and rewriting
+# working/dead in one pass — see refresh_from_results(). Under normal operation
+# an entry's timestamp is therefore never more than one refresh cycle old.
+# WORKING_TTL_SECONDS/DEAD_TTL_SECONDS are a safety net, not the primary
+# expiry mechanism: they're wider than the refresh interval so a refresh
+# cycle that's still running (up to ~a minute for a full provider list) never
+# makes the previous cycle's still-valid data look expired mid-refresh. If
+# the background job stops running entirely (e.g. APScheduler not started),
+# entries still eventually age out here rather than being trusted forever.
+REFRESH_INTERVAL_SECONDS = 1800
+_TTL_GRACE_SECONDS = 300
+WORKING_TTL_SECONDS = REFRESH_INTERVAL_SECONDS + _TTL_GRACE_SECONDS
+DEAD_TTL_SECONDS = REFRESH_INTERVAL_SECONDS + _TTL_GRACE_SECONDS
 
 _cache_lock = threading.Lock()
 
@@ -74,6 +87,40 @@ def mark_dead(provider_name: str, reason: str):
             cache.pop("working", None)
         _save_cache(cache)
     logger.warning(f"Fallback cache: marked {provider_name} dead ({reason[:120]})")
+
+
+def refresh_from_results(results: list[tuple[str, bool]]) -> None:
+    """Atomically rewrite working/dead from a full-chain background probe.
+
+    `results` is (provider_name, ok) pairs in fallback-priority order, as
+    produced by agent.provider_probe.refresh_fallback_cache. The first ok=True
+    entry becomes the cached `working` provider; every ok=False entry gets a
+    fresh `dead` mark. A provider not present in `results` (e.g. BYOK, or one
+    with no key configured) is left untouched — this function only updates
+    entries it actually just tested.
+    """
+    now = time.time()
+    with _cache_lock:
+        cache = _load_cache()
+        working_provider = next((name for name, ok in results if ok), None)
+        if working_provider:
+            cache["working"] = {"provider": working_provider, "timestamp": now}
+        else:
+            cache.pop("working", None)
+
+        dead = cache.setdefault("dead", {})
+        for name, ok in results:
+            if ok:
+                dead.pop(name, None)
+            else:
+                dead[name] = {"since": now, "reason": "background refresh probe failed"}
+
+        cache["last_refreshed_at"] = now
+        _save_cache(cache)
+    logger.info(
+        f"Fallback cache: background refresh complete ({len(results)} provider(s) tested, "
+        f"working={working_provider})"
+    )
 
 
 def clear_cache():
