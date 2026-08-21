@@ -10,11 +10,11 @@
     {"id": "cerebras", "api_url": null, "api_key_env_var_name": "CEREBRAS_API_KEY", "displayname": "Cerebras"}
   ],
   "models": [
+    {"provider": "hcai", "model": "openai/gpt-5.6-luna", "display": "HCAI GPT-5.6 Luna"},
     {"provider": "hcai", "model": "z-ai/glm-5.2:free", "display": "HCAI GLM-5.2 (free)"},
     {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.2:free", "display": "OpenRouter Fallback GLM-5.2 (free)"},
     {"provider": "anthropic", "model": "anthropic:claude-sonnet-4-6"},
     {"provider": "openai", "model": "openai:gpt-4.1-mini"},
-    {"provider": "hcai", "model": "openai/gpt-5.6-luna", "display": "HCAI GPT-5.6 Luna"},
     {"provider": "hcai", "model": "moonshotai/kimi-k2.6", "display": "HCAI Kimi K2.6"},
     {"provider": "groq", "model": "groq:qwen/qwen3.6-27b", "display": "Groq Qwen 3.6 27B"},
     {"provider": "hcai", "model": "minimax/minimax-m2.7", "display": "HCAI MiniMax M2.7"},
