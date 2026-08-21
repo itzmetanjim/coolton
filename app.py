@@ -4,17 +4,26 @@ import threading
 import time
 
 from dotenv import load_dotenv
-from slack_bolt import App
-from slack_bolt.adapter.socket_mode import SocketModeHandler
-from slack_sdk import WebClient
 
-from agent import get_model
-from listeners import register_listeners
-from agent.scheduler import start_scheduler
-from agent.redact import set_notifier
-from agent.token_rotation import start_token_rotation
-
+# Must run before any `agent`-package import: agent.platforms.slack builds its
+# SYSTEM_PROMPT as a module-level f-string that reads COOLTON_BOT_ID/
+# COOLTON_USER_ID from os.environ ONCE at import time (see build_context_prompt
+# for the per-turn equivalent, which re-reads correctly every time). Loading
+# .env after that import would permanently bake in empty ids for the process's
+# whole lifetime — the model would then see two contradictory values for its
+# own identity in the same prompt, every turn.
 load_dotenv(dotenv_path=".env", override=False)
+
+from slack_bolt import App  # noqa: E402
+from slack_bolt.adapter.socket_mode import SocketModeHandler  # noqa: E402
+from slack_sdk import WebClient  # noqa: E402
+
+from agent import get_model  # noqa: E402
+from listeners import register_listeners  # noqa: E402
+from agent.scheduler import start_scheduler  # noqa: E402
+from agent.redact import set_notifier  # noqa: E402
+from agent.token_rotation import start_token_rotation  # noqa: E402
+
 # slack_bolt auto-enables OAuth multi-team mode when these are in the
 # environment; they are used only by the separate oauth-server service.
 os.environ.pop("SLACK_CLIENT_ID", None)
