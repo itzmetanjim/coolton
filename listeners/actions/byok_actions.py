@@ -6,6 +6,18 @@ from slack_sdk import WebClient
 logger = logging.getLogger(__name__)
 
 
+def _notify_modal_failure(client: WebClient, user_id: str | None) -> None:
+    """Best-effort ephemeral so a failed views_open doesn't look like the button
+    click just silently did nothing (trigger_ids expire ~3s, transient API
+    errors happen — the user needs to know to retry rather than wonder)."""
+    if not user_id:
+        return
+    try:
+        client.chat_postEphemeral(channel=user_id, user=user_id, text="Couldn't open that — please try again.")
+    except Exception:
+        pass
+
+
 def handle_byok_add(ack: Ack, body: dict, client: WebClient, context: BoltContext):
     ack()
     try:
@@ -13,6 +25,7 @@ def handle_byok_add(ack: Ack, body: dict, client: WebClient, context: BoltContex
         client.views_open(trigger_id=body["trigger_id"], view=build_add_endpoint_modal())
     except Exception as e:
         logger.exception("Failed to open Add Endpoint modal: %s", e)
+        _notify_modal_failure(client, context.user_id)
 
 
 def handle_byok_delete(ack: Ack, body: dict, client: WebClient, context: BoltContext):
@@ -43,6 +56,7 @@ def handle_byok_edit(ack: Ack, body: dict, client: WebClient, context: BoltConte
         client.views_open(trigger_id=body["trigger_id"], view=build_edit_endpoint_modal(ep))
     except Exception as e:
         logger.exception("Failed to open Edit Endpoint modal: %s", e)
+        _notify_modal_failure(client, context.user_id)
 
 
 def handle_byok_select_text(ack: Ack, body: dict, client: WebClient, context: BoltContext):

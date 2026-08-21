@@ -38,42 +38,59 @@ def handle_policy_opt_in(ack, body: dict, client: WebClient, logger: Logger):
     if not pending or pending.get("user_id") != body.get("user", {}).get("id"):
         return
 
-    join = action.get("action_id") == "policy_opt_in_join"
-    if join:
+    try:
+        join = action.get("action_id") == "policy_opt_in_join"
+        if join:
+            try:
+                client.conversations_invite(channel=POLICY_CHANNEL_ID, users=pending["user_id"])
+            except Exception as exc:
+                logger.warning("could not invite user to policy channel: %s", exc)
+        record_consent(pending["user_id"], joined_policy_channel=join)
+        # Stale prompts for the same user (one per pre-consent message) can no
+        # longer replay anything useful, so drop them to keep future clicks no-ops.
+        clear_pending_for_user(pending["user_id"])
+
+        # A mention on the thread's starter message auto-joins the thread so we
+        # respond to every subsequent message (mirroring handle_app_mentioned).
+        if pending["thread_ts"] == pending["message_ts"]:
+            join_thread(pending["channel_id"], pending["thread_ts"])
+
+        from agent.tools.vision import download_attached_images
+        images = download_attached_images(client, pending.get("files"))
+        run_agent_turn(
+            client=client,
+            say_stream=_ActionStream(client, pending["channel_id"], pending["thread_ts"]),
+            say=lambda **kwargs: client.chat_postMessage(channel=pending["channel_id"], **kwargs),
+            logger=logger,
+            channel_id=pending["channel_id"], thread_ts=pending["thread_ts"],
+            message_ts=pending["message_ts"], user_id=pending["user_id"],
+            user_token=pending.get("user_token"), text=pending["text"],
+            history=_history_for_pending(client, pending), images=images,
+        )
+    except Exception:
+        # pending was already popped above, so the user's original message is
+        # gone either way — without this, a failure here left them with zero
+        # response and no idea anything went wrong.
+        logger.exception("Failed to handle policy opt-in for %s", pending.get("user_id"))
         try:
-            client.conversations_invite(channel=POLICY_CHANNEL_ID, users=pending["user_id"])
-        except Exception as exc:
-            logger.warning("could not invite user to policy channel: %s", exc)
-    record_consent(pending["user_id"], joined_policy_channel=join)
-    # Stale prompts for the same user (one per pre-consent message) can no
-    # longer replay anything useful, so drop them to keep future clicks no-ops.
-    clear_pending_for_user(pending["user_id"])
-
-    # A mention on the thread's starter message auto-joins the thread so we
-    # respond to every subsequent message (mirroring handle_app_mentioned).
-    if pending["thread_ts"] == pending["message_ts"]:
-        join_thread(pending["channel_id"], pending["thread_ts"])
-
-    from agent.tools.vision import download_attached_images
-    images = download_attached_images(client, pending.get("files"))
-    run_agent_turn(
-        client=client,
-        say_stream=_ActionStream(client, pending["channel_id"], pending["thread_ts"]),
-        say=lambda **kwargs: client.chat_postMessage(channel=pending["channel_id"], **kwargs),
-        logger=logger,
-        channel_id=pending["channel_id"], thread_ts=pending["thread_ts"],
-        message_ts=pending["message_ts"], user_id=pending["user_id"],
-        user_token=pending.get("user_token"), text=pending["text"],
-        history=_history_for_pending(client, pending), images=images,
-    )
+            client.chat_postMessage(
+                channel=pending["channel_id"],
+                thread_ts=pending.get("thread_ts"),
+                text=":warning: Something went wrong finishing your opt-in — please try your message again.",
+            )
+        except Exception:
+            pass
 
 
 def handle_policy_opt_out(ack, body: dict, client: WebClient, logger: Logger):
     ack()
     user_id = body.get("user", {}).get("id")
-    revoke_consent(user_id)
-    from listeners.views.app_home_builder import build_app_home_view
-    client.views_publish(user_id=user_id, view=build_app_home_view(has_policy_consent=False))
+    try:
+        revoke_consent(user_id)
+        from listeners.views.app_home_builder import build_app_home_view
+        client.views_publish(user_id=user_id, view=build_app_home_view(has_policy_consent=False))
+    except Exception:
+        logger.exception("Failed to handle policy opt-out for %s", user_id)
 
 
 def _history_for_pending(client: WebClient, pending: dict):

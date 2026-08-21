@@ -5,6 +5,7 @@ from slack_bolt import Ack, BoltContext
 from slack_sdk import WebClient
 
 from agent import provider_config
+from agent.redact import redact
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,11 @@ def _test_single(provider_name: str, config: dict) -> tuple[bool, str, float, st
         return True, display, elapsed, result.output
     except Exception as e:
         elapsed = time.time() - start
-        return False, display, elapsed, str(e)
+        # This is the one place testing provider credentials directly — an SDK/HTTP
+        # error can echo the key back (a malformed base_url, an auth-header dump),
+        # and this gets posted straight to the user's Slack DM, so redact it like
+        # every other secret-adjacent path in the codebase does.
+        return False, display, elapsed, redact(str(e), context="test_providers")
 
 
 def handle_test_providers(ack: Ack, body: dict, client: WebClient, context: BoltContext):
