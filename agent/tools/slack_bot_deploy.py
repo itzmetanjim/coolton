@@ -61,7 +61,9 @@ def create_slack_bot(manifest: dict) -> str:
     validated = _api("apps.manifest.validate", {"manifest": manifest})
     if not validated.get("ok"):
         return f"Slack API error: {validated}"
-    created = _api("apps.manifest.create", {"app_id": "", "manifest": manifest})
+    # apps.manifest.create does not accept app_id (that's only for
+    # apps.manifest.update, once the app already exists).
+    created = _api("apps.manifest.create", {"manifest": manifest})
     if not created.get("ok"):
         return f"Slack API error: {created}"
     app_id = created.get("app_id") or created.get("app", {}).get("id")
@@ -81,16 +83,50 @@ def create_slack_bot(manifest: dict) -> str:
     return json.dumps(result)
 
 
-def register_bot_tokens(uuid: str, bot_token: str, app_token: str, signing_secret: str = "") -> str:
-    """Store bot/app credentials for a created app; reject user tokens."""
-    if not uuid or not bot_token.startswith("xoxb-") or not app_token.startswith("xapp-"):
-        return "Error: only xoxb- bot tokens and xapp- app tokens are accepted."
+def update_slack_bot_manifest(uuid: str, manifest: dict) -> str:
+    """Update an already-created Slack app's manifest (apps.manifest.update).
+
+    Use this once the Worker is actually deployed and its real URL is known, to point
+    slash_commands[].url / settings.event_subscriptions.request_url at it — Slack
+    verifies those request URLs live (a challenge/response handshake for event
+    subscriptions), so they can't be set correctly until the Worker is already up.
+    The manifest passed here REPLACES the app's entire configuration, so include every
+    field (scopes, bot_user, etc.), not just the URL you're changing.
+    """
+    if not isinstance(manifest, dict) or not manifest.get("display_information", {}).get("name"):
+        return "Error: manifest.display_information.name is required."
+    store = _load()
+    if uuid not in store:
+        return f"Error: unknown bot UUID: {uuid}"
+    validated = _api("apps.manifest.validate", {"manifest": manifest, "app_id": uuid})
+    if not validated.get("ok"):
+        return f"Slack API error: {validated}"
+    updated = _api("apps.manifest.update", {"app_id": uuid, "manifest": manifest})
+    if not updated.get("ok"):
+        return f"Slack API error: {updated}"
+    return f"Manifest updated for app {uuid}."
+
+
+def register_bot_tokens(uuid: str, bot_token: str, app_token: str = "", signing_secret: str = "") -> str:
+    """Store bot/app credentials for a created app; reject user tokens.
+
+    app_token (xapp-) is only meaningful for Socket Mode apps — it's generated
+    manually in the app's Basic Information page, separate from the OAuth install
+    flow, and most HTTP-mode Workers (the pattern this tool targets) never have
+    one. Only bot_token is required; app_token is validated/stored if provided.
+    """
+    if not uuid or not bot_token.startswith("xoxb-"):
+        return "Error: only xoxb- bot tokens are accepted for bot_token."
+    if app_token and not app_token.startswith("xapp-"):
+        return "Error: app_token must start with xapp- (omit it entirely if this bot doesn't use Socket Mode)."
     if signing_secret and signing_secret.startswith("xoxp-"):
         return "Error: invalid signing secret."
     store = _load()
     if uuid not in store:
         return f"Error: unknown bot UUID: {uuid}"
-    store[uuid].update({"bot_token": bot_token, "app_token": app_token})
+    store[uuid]["bot_token"] = bot_token
+    if app_token:
+        store[uuid]["app_token"] = app_token
     if signing_secret:
         store[uuid]["signing_secret"] = signing_secret
     _save(store)
@@ -105,19 +141,22 @@ def wrangler_bot_deploy(uuid: str, working_dir: str, channel_id: str, thread_ts:
     from agent.sandbox_helpers import get_or_create_sandbox
 
     record = _load().get(uuid)
-    if not record or not record.get("bot_token") or not record.get("app_token"):
-        return "Error: bot tokens are not registered for this UUID."
+    if not record or not record.get("bot_token"):
+        return "Error: a bot token is not registered for this UUID. Call register_bot_tokens first."
 
     try:
         sandbox, _ = get_or_create_sandbox(channel_id, thread_ts)
     except Exception as e:
         return f"Error connecting to sandbox: {e}"
 
-    env_content = "\n".join([
+    env_lines = [
         f"SLACK_BOT_TOKEN={record['bot_token']}",
-        f"SLACK_APP_TOKEN={record['app_token']}",
         f"SLACK_SIGNING_SECRET={record.get('signing_secret', record.get('credentials', {}).get('signing_secret', ''))}",
-    ]) + "\n"
+    ]
+    # app_token (xapp-) is Socket-Mode-only; only write it if this bot actually has one.
+    if record.get("app_token"):
+        env_lines.append(f"SLACK_APP_TOKEN={record['app_token']}")
+    env_content = "\n".join(env_lines) + "\n"
     env_path = f"{working_dir.rstrip('/')}/.env_slack"
 
     try:
