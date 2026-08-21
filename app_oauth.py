@@ -5,19 +5,25 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 from dotenv import load_dotenv
-from slack_bolt import App
-from slack_bolt.authorization.authorize_result import AuthorizeResult
-from slack_bolt.oauth.oauth_settings import OAuthSettings
-from slack_sdk import WebClient
-from slack_sdk.oauth.installation_store import FileInstallationStore
-from slack_sdk.oauth.state_store import FileOAuthStateStore
 
-from agent import get_model
-from listeners import register_listeners
-from agent.scheduler import start_scheduler
-from agent.token_rotation import start_token_rotation
-
+# Must run before any `agent`-package import — see app.py for why: the Slack
+# platform adapter bakes COOLTON_BOT_ID/COOLTON_USER_ID into its SYSTEM_PROMPT
+# once at import time, so .env has to be loaded first or those ids are
+# permanently empty for the process's lifetime.
 load_dotenv(dotenv_path=".env", override=False)
+
+from slack_bolt import App  # noqa: E402
+from slack_bolt.authorization.authorize_result import AuthorizeResult  # noqa: E402
+from slack_bolt.oauth.oauth_settings import OAuthSettings  # noqa: E402
+from slack_sdk import WebClient  # noqa: E402
+from slack_sdk.oauth.installation_store import FileInstallationStore  # noqa: E402
+from slack_sdk.oauth.state_store import FileOAuthStateStore  # noqa: E402
+
+from agent import get_model  # noqa: E402
+from listeners import register_listeners  # noqa: E402
+from agent.scheduler import start_scheduler  # noqa: E402
+from agent.token_rotation import start_token_rotation  # noqa: E402
+
 get_model()  # Fail fast if no AI provider key is configured
 
 logging.basicConfig(level=os.environ.get("COOLTON_LOG_LEVEL", "INFO").upper())
