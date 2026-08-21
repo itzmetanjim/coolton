@@ -301,7 +301,12 @@ def test_runtime_model_hcai_returns_model_object(monkeypatch, clean_env):
     monkeypatch.setenv("HCAI_API_KEY", "h")
     model = agent_mod.get_runtime_model()
     assert isinstance(model, OpenAIChatModel)
-    assert model.model_name == "z-ai/glm-5.2:free"
+    # Asserts against the first hcai entry in providers.json's fallback order,
+    # not a specific model — update this if that ordering is intentionally
+    # changed again.
+    from agent.provider_config import _get_models
+    first_hcai_model = next(m["model"] for m in _get_models() if m["provider"] == "hcai")
+    assert model.model_name == first_hcai_model
 
 
 def test_runtime_model_byok_returns_model_object(monkeypatch, clean_env):
