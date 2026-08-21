@@ -1907,7 +1907,8 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
     all_errors = []
 
     for provider_name, prov_config in provider_order:
-        for attempt in range(max_retries):
+        provider_max_retries = prov_config.get("max_retries", max_retries)
+        for attempt in range(provider_max_retries):
             try:
                 model_name = prov_config["model"]
 
@@ -1953,13 +1954,13 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                         mark_dead(provider_name, err)
                     logger.warning(f"{provider_name} failed with a hard error (marked dead): {err}")
                     break  # Don't retry auth/config errors; skip this provider
-                if is_retryable_error(e) and attempt < max_retries - 1:
+                if is_retryable_error(e) and attempt < provider_max_retries - 1:
                     delay = base_delay * (2 ** attempt)
                     logger.warning(f"{provider_name} attempt {attempt + 1} failed with retryable error: {err}. Retrying in {delay}s...")
                     time.sleep(delay)
                     continue
                 else:
-                    logger.warning(f"{provider_name} failed (attempt {attempt + 1}/{max_retries}): {err}")
+                    logger.warning(f"{provider_name} failed (attempt {attempt + 1}/{provider_max_retries}): {err}")
                     break  # Try next provider
 
         # All retries exhausted for this provider, try next provider

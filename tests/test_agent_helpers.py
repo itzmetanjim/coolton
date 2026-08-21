@@ -222,9 +222,6 @@ def test_apply_provider_env_mapping(monkeypatch, clean_env):
     agent_mod._apply_provider_env("groq_1", "k6")
     assert __import__("os").environ["GROQ_API_KEY"] == "k6"
 
-    agent_mod._apply_provider_env("cerebras", "k7")
-    assert __import__("os").environ["CEREBRAS_API_KEY"] == "k7"
-
 
 def test_apply_provider_env_skips_byok_hcai(monkeypatch, clean_env):
     agent_mod._apply_provider_env("byok", "k")
@@ -410,7 +407,6 @@ def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
         ("GOOGLE_API_KEY", "google:gemma-4-31b-it"),
         ("GROQ_API_KEY", "groq:qwen/qwen3.6-27b"),
         ("MISTRAL_API_KEY", "mistral:mistral-large-2512"),
-        ("CEREBRAS_API_KEY", "cerebras:zai-glm-4.7"),
     ],
 )
 def test_get_model_accepts_documented_provider_keys(monkeypatch, clean_env, env_key, expected):

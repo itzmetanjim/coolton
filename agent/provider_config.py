@@ -108,6 +108,8 @@ def build_provider_order(user_id: str | None = None) -> list[tuple[str, dict]]:
             "api_key": api_key or "",
             "display": get_provider_display(model_entry, pmap),
         }
+        if pconf.get("max_retries"):
+            config["max_retries"] = pconf["max_retries"]
         provider_order.append((name, config))
 
     return provider_order
@@ -166,7 +168,7 @@ def apply_provider_env(provider_name: str, api_key: str) -> None:
     if pconf.get("api_url"):
         return  # HCAI-style: uses base_url + api_key, not env var
 
-    env_var = pconf.get("api_key_env_var_name")
+    env_var = pconf.get("pydantic_ai_env_var") or pconf.get("api_key_env_var_name")
     if env_var:
         os.environ[env_var] = api_key
 
