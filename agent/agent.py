@@ -1291,13 +1291,17 @@ def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: dict) -> str:
 
 
 @agent.tool
-def register_bot_tokens_tool(ctx: RunContext[AgentDeps], uuid: str, bot_token: str, app_token: str, signing_secret: str = "") -> str:
-    """Store bot/app tokens for a created Slack app. Only xoxb- bot tokens and xapp- app tokens accepted.
-    
+def register_bot_tokens_tool(ctx: RunContext[AgentDeps], uuid: str, bot_token: str, app_token: str = "", signing_secret: str = "") -> str:
+    """Store bot tokens for a created Slack app. Only xoxb- bot tokens (and, if given, xapp- app
+    tokens) are accepted.
+
     Args:
         uuid: The app_id returned by create_slack_bot.
-        bot_token: The xoxb- bot token from the installed app.
-        app_token: The xapp- app-level token.
+        bot_token: The xoxb- bot token from the installed app. Required.
+        app_token: The xapp- app-level token. Only needed for Socket Mode apps — it's
+            generated manually on the app's Basic Information page, not via OAuth
+            install, so most HTTP-mode Workers (deployed via wrangler_bot_deploy_tool)
+            never have one. Omit it entirely for those.
         signing_secret: The signing secret from the app credentials (optional).
     """
     from agent.tools.slack_bot_deploy import register_bot_tokens
@@ -1307,7 +1311,7 @@ def register_bot_tokens_tool(ctx: RunContext[AgentDeps], uuid: str, bot_token: s
 @agent.tool
 def wrangler_bot_deploy_tool(ctx: RunContext[AgentDeps], uuid: str, working_dir: str, additional_flags: str = "") -> str:
     """Deploy a Slack bot Worker using wrangler inside the sandbox. Injects stored tokens, runs deploy, then deletes the secrets file.
-    
+
     Args:
         uuid: The app_id from create_slack_bot.
         working_dir: Directory containing the bot code inside the sandbox.
@@ -1315,6 +1319,25 @@ def wrangler_bot_deploy_tool(ctx: RunContext[AgentDeps], uuid: str, working_dir:
     """
     from agent.tools.slack_bot_deploy import wrangler_bot_deploy
     return wrangler_bot_deploy(uuid, working_dir, ctx.deps.channel_id, ctx.deps.thread_ts, additional_flags)
+
+
+@agent.tool
+def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manifest: dict) -> str:
+    """Update an already-created Slack app's manifest (apps.manifest.update).
+
+    Use this once the Worker is deployed and its real URL is known, to point
+    slash_commands[].url / settings.event_subscriptions.request_url at it — Slack only
+    accepts an event-subscription request URL once it's live and answers the
+    verification challenge, so it can't be set correctly until after deploy. The
+    manifest passed here REPLACES the app's entire configuration: include every field
+    (scopes, bot_user, display_information, etc.), not just the URL you're changing.
+
+    Args:
+        uuid: The app_id from create_slack_bot.
+        manifest: The FULL, updated Slack app manifest dict.
+    """
+    from agent.tools.slack_bot_deploy import update_slack_bot_manifest
+    return update_slack_bot_manifest(uuid, manifest)
 
 
 @agent.tool

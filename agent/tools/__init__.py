@@ -17,7 +17,7 @@ from .data_analysis import (
     run_python_data_analysis,
 )
 from .slack_bot_api import slack_api_call_as_bot
-from .slack_bot_deploy import create_slack_bot, register_bot_tokens, wrangler_bot_deploy
+from .slack_bot_deploy import create_slack_bot, register_bot_tokens, update_slack_bot_manifest, wrangler_bot_deploy
 from .slack_info import (
     get_user_info,
     get_channel_info,
@@ -51,6 +51,7 @@ __all__ = [
     "slack_api_call_as_bot",
     "create_slack_bot",
     "register_bot_tokens",
+    "update_slack_bot_manifest",
     "wrangler_bot_deploy",
     "get_user_info",
     "get_channel_info",
