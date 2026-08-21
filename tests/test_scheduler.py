@@ -170,6 +170,33 @@ def test_resume_actually_reregisters_the_apscheduler_job(tmp_files, monkeypatch)
     assert call_kwargs.get("id") == f"scheduled_task:{task_id}"
 
 
+def test_start_scheduler_registers_fallback_cache_refresh_job(monkeypatch, tmp_files):
+    """The redesigned fallback cache relies on a periodic background refresh —
+    verify start_scheduler actually registers it, at the documented interval,
+    with an immediate first run (next_run_time) so the cache is warm from
+    process start rather than empty for the first REFRESH_INTERVAL_SECONDS."""
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+
+    fake_scheduler = Mock()
+    monkeypatch.setattr(
+        "apscheduler.schedulers.background.BackgroundScheduler", lambda: fake_scheduler
+    )
+    monkeypatch.setattr(scheduler, "_sync_cron_jobs", lambda: None)
+
+    scheduler.start_scheduler(app=Mock())
+
+    from agent.fallback_cache import REFRESH_INTERVAL_SECONDS
+
+    refresh_calls = [
+        c for c in fake_scheduler.add_job.call_args_list
+        if c.kwargs.get("id") == "refresh_fallback_cache"
+    ]
+    assert len(refresh_calls) == 1
+    call = refresh_calls[0]
+    assert call.kwargs.get("seconds") == REFRESH_INTERVAL_SECONDS
+    assert call.kwargs.get("next_run_time") is not None
+
+
 def test_cannot_pause_other_users_task(tmp_files):
     scheduler.create_scheduled_task(OWNER, "C1", "1.1", "mine", "0 9 * * *")
     task_id = scheduler._load_tasks()["tasks"][0]["id"]

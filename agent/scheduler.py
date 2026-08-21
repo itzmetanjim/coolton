@@ -412,8 +412,25 @@ def start_scheduler(app):
         except Exception:
             logger.exception("Token rotation check failed")
 
+    def refresh_fallback_cache_job():
+        try:
+            from agent.provider_probe import refresh_fallback_cache
+
+            refresh_fallback_cache()
+        except Exception:
+            logger.exception("Fallback cache background refresh failed")
+
     _scheduler.add_job(check_reminders, "interval", seconds=30, id="check_reminders")
     _scheduler.add_job(check_token_rotation, "interval", seconds=15 * 60, id="check_token_rotation")
+    # Runs once immediately (next_run_time=now) so the cache is warm from
+    # process start, then every REFRESH_INTERVAL_SECONDS after that — see
+    # agent/fallback_cache.py and agent/provider_probe.py for why.
+    from datetime import datetime as _datetime
+    from agent.fallback_cache import REFRESH_INTERVAL_SECONDS
+    _scheduler.add_job(
+        refresh_fallback_cache_job, "interval", seconds=REFRESH_INTERVAL_SECONDS,
+        id="refresh_fallback_cache", next_run_time=_datetime.now(),
+    )
     _scheduler.start()
     _sync_cron_jobs()
     logger.info("Reminder scheduler started")
