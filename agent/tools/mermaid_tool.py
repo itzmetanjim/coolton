@@ -1,5 +1,7 @@
 import base64
 import zlib
+from urllib.parse import quote
+
 import requests
 
 
@@ -51,7 +53,7 @@ def _render_with_kroki(diagram_code: str, theme: str) -> str:
         encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
         url = f"{KROKI_URL}/mermaid/png/{encoded}"
         if theme != "default":
-            url += f"?theme={theme}"
+            url += f"?theme={quote(theme, safe='')}"
         if _verify_get(url):
             return url
     except Exception:
@@ -64,7 +66,7 @@ def _render_with_mermaid_ink(diagram_code: str, theme: str) -> str:
     try:
         compressed = zlib.compress(diagram_code.encode())
         encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
-        url = f"{MERMAID_INK_URL}/img/{encoded}?theme={theme}"
+        url = f"{MERMAID_INK_URL}/img/{encoded}?theme={quote(theme, safe='')}"
         if _verify_get(url):
             return url
     except Exception:

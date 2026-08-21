@@ -15,6 +15,7 @@ def search_web(query: str, num_results: int = 8) -> str:
     api_key = os.environ.get(EXA_API_KEY_ENV)
     if not api_key:
         return "Error: EXA_API_KEY is not configured in the server's .env file."
+    num_results = max(1, min(int(num_results), 20))
 
     try:
         response = requests.post(
