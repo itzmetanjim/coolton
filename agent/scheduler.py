@@ -32,6 +32,20 @@ def _save_reminders(data: dict):
     os.replace(temp, REMINDERS_FILE)
 
 
+REMINDER_RETENTION_SECONDS = 7 * 86400
+
+
+def _prune_sent_reminders(data: dict) -> None:
+    """Drop reminders sent more than a week ago so reminders.json doesn't grow
+    forever — every reminder ever created otherwise stays in the file (and gets
+    re-scanned every 30s by check_reminders) indefinitely."""
+    now = time.time()
+    data["reminders"] = [
+        r for r in data["reminders"]
+        if not r["sent"] or now - r["due_at"] < REMINDER_RETENTION_SECONDS
+    ]
+
+
 def schedule_reminder(user_id: str, channel_id: str, text: str, delay_seconds: int) -> str:
     reminder_id = str(uuid.uuid4())[:8]
     due_at = time.time() + delay_seconds
@@ -45,6 +59,7 @@ def schedule_reminder(user_id: str, channel_id: str, text: str, delay_seconds: i
             "due_at": due_at,
             "sent": False,
         })
+        _prune_sent_reminders(data)
         _save_reminders(data)
     return reminder_id
 
@@ -64,6 +79,7 @@ def _mark_sent(reminder_id: str):
             if r["id"] == reminder_id:
                 r["sent"] = True
                 break
+        _prune_sent_reminders(data)
         _save_reminders(data)
 
 
@@ -121,7 +137,7 @@ def _validate_cron(cron: str, timezone: str) -> tuple[bool, str, float | None]:
         mins = int(MIN_SCHEDULE_INTERVAL_SECONDS / 60)
         return False, (
             f"Refusing '{cron}': it fires more often than every {mins} minutes. "
-            f"Use a wider step (e.g. '0 */{mins} * * * *') or a less frequent schedule."
+            f"Use a wider step (e.g. '*/{mins} * * * *') or a less frequent schedule."
         ), None
     return True, "", t1
 
@@ -277,7 +293,7 @@ def list_scheduled_tasks(user_id: str, view_all: bool = False) -> str:
     return "\n".join(lines)
 
 
-def _get_owned_task(user_id: str, task_id: str) -> tuple[str | None, str]:
+def _get_owned_task(user_id: str, task_id: str) -> tuple[dict | None, str]:
     """Fetch a task by id, enforcing that the caller owns it (or is admin)."""
     with scheduled_tasks_lock:
         data = _load_tasks()
@@ -314,12 +330,20 @@ def resume_scheduled_task(user_id: str, task_id: str) -> str:
         return err
     with scheduled_tasks_lock:
         data = _load_tasks()
+        updated_task = None
         for t in data["tasks"]:
             if t["id"] == task_id:
                 t["paused"] = False
+                updated_task = t
                 break
         _save_tasks(data)
-    _add_cron_job(task)
+    # Use the just-updated (paused=False) task, not the stale copy from
+    # _get_owned_task's earlier _load_tasks() snapshot — passing the stale one
+    # (still paused=True) makes _add_cron_job silently no-op, so the task
+    # reports "resumed" but never actually gets re-registered with APScheduler
+    # until the next full restart-time _sync_cron_jobs().
+    if updated_task:
+        _add_cron_job(updated_task)
     return f"Resumed scheduled task {task_id}."
 
 

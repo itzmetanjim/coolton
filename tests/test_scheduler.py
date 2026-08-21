@@ -1,3 +1,5 @@
+from unittest.mock import Mock
+
 import pytest
 
 from agent import scheduler
@@ -145,6 +147,27 @@ def test_pause_resume_delete(tmp_files):
 
     assert scheduler.delete_scheduled_task(OWNER, task_id) == f"Deleted scheduled task {task_id}."
     assert scheduler._load_tasks()["tasks"] == []
+
+
+def test_resume_actually_reregisters_the_apscheduler_job(tmp_files, monkeypatch):
+    """resume_scheduled_task must re-add the job with APScheduler, not just flip
+    the paused flag on disk — the resumed task otherwise stays dormant until
+    the next full restart, while `resume_scheduled_task_tool` reports success."""
+    scheduler.create_scheduled_task(OWNER, "C1", "1.1", "mine", "0 9 * * *")
+    task_id = scheduler._load_tasks()["tasks"][0]["id"]
+
+    fake_scheduler = Mock()
+    fake_scheduler.get_jobs.return_value = []
+    monkeypatch.setattr(scheduler, "_scheduler", fake_scheduler)
+
+    scheduler.pause_scheduled_task(OWNER, task_id)
+    fake_scheduler.add_job.reset_mock()
+
+    scheduler.resume_scheduled_task(OWNER, task_id)
+
+    fake_scheduler.add_job.assert_called_once()
+    call_kwargs = fake_scheduler.add_job.call_args.kwargs
+    assert call_kwargs.get("id") == f"scheduled_task:{task_id}"
 
 
 def test_cannot_pause_other_users_task(tmp_files):
