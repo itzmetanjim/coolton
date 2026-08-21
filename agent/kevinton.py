@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 
 from pydantic_ai import Agent
@@ -144,7 +145,7 @@ def _disable_strict(ctx, tool_defs):
     return [replace(t, strict=False) for t in tool_defs]
 
 
-def build_kevinton_agent() -> tuple[Agent, list]:
+def build_kevinton_agent() -> tuple[Agent[AgentDeps, str], list]:
     """Build kevinton's own agent.
 
     kevinton gets the full coolton toolset (including run_linux_command, slack_api_call,
@@ -215,6 +216,12 @@ def _kevinton_model(deps: AgentDeps) -> str:
     return get_runtime_model(deps.user_id)
 
 
+def kevinton_enabled() -> bool:
+    """KEVINTON_ENABLED gates kevinton entirely; defaults to enabled so existing
+    deployments are unaffected unless they explicitly opt out."""
+    return os.environ.get("KEVINTON_ENABLED", "true").strip().lower() not in ("false", "0", "no", "off")
+
+
 def spawn_kevinton(
     user_text: str,
     all_messages,
@@ -222,7 +229,13 @@ def spawn_kevinton(
     thread_ts: str,
     deps: AgentDeps,
 ) -> None:
-    """Fire-and-forget: run kevinton in a daemon thread so the user never waits."""
+    """Fire-and-forget: run kevinton in a daemon thread so the user never waits.
+
+    No-op if KEVINTON_ENABLED is set to a falsy value.
+    """
+    if not kevinton_enabled():
+        logger.debug("kevinton: skipped (KEVINTON_ENABLED is disabled)")
+        return
     t = threading.Thread(
         target=run_kevinton,
         args=(user_text, all_messages, channel_id, thread_ts, deps),
