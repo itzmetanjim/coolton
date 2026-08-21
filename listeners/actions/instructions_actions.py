@@ -46,8 +46,8 @@ def set_user_instructions(user_id: str, instructions: str):
 
 def handle_instructions_open(ack: Ack, body: dict, client: WebClient, context: BoltContext):
     ack()
+    user_id = context.user_id
     try:
-        user_id = context.user_id
         current = get_user_instructions(user_id)
         modal = build_instructions_modal(current)
         client.views_open(
@@ -56,6 +56,11 @@ def handle_instructions_open(ack: Ack, body: dict, client: WebClient, context: B
         )
     except Exception as e:
         logger.exception("Failed to open instructions modal: %s", e)
+        if user_id:
+            try:
+                client.chat_postEphemeral(channel=user_id, user=user_id, text="Couldn't open that — please try again.")
+            except Exception:
+                pass
 
 
 def handle_instructions_clear(ack: Ack, body: dict, client: WebClient, context: BoltContext):
