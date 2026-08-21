@@ -70,6 +70,10 @@ def assert_readable_channel(channel_id: str, current_channel_id: str = "") -> st
 
     Reading the current channel is always allowed. Otherwise the channel must be a
     workspace-visible (public) channel. Returns an error string, or None if allowed.
+
+    Fails CLOSED: if the visibility of `channel_id` can't be verified (the API call
+    errors, times out, or itself returns ok:false — e.g. a private channel the bot
+    can't even see), this denies rather than silently falling through to allow.
     """
     if not channel_id or not current_channel_id:
         return None
@@ -82,7 +86,10 @@ def assert_readable_channel(channel_id: str, current_channel_id: str = "") -> st
             headers={"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN', '')}"},
             timeout=10,
         )
-        ch = (response.json() or {}).get("channel", {})
+        data = response.json() or {}
+        if not data.get("ok"):
+            return f"Could not verify channel {channel_id} is safe to read ({data.get('error', 'unknown error')}); refusing."
+        ch = data.get("channel", {})
         kind = (ch.get("id") or ch.get("type") or "")[:1]
         is_private = (
             ch.get("is_private")
@@ -92,9 +99,9 @@ def assert_readable_channel(channel_id: str, current_channel_id: str = "") -> st
         )
         if is_private:
             return "Reading DMs, private channels, or external conversations is not allowed."
-    except Exception:
-        pass
-    return None
+        return None
+    except Exception as e:
+        return f"Could not verify channel {channel_id} is safe to read ({e}); refusing."
 
 
 def read_conversation_history(

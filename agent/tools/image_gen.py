@@ -1,18 +1,18 @@
 import os
-import re
 import time
 import requests
 from agent.byok_store import get_image_endpoint_id, get_endpoint_decrypted
 
 
-# Known aspect ratios -> OpenAI-compatible size strings. Unknown ratios are
-# passed through to providers that accept an `aspect_ratio` field instead.
+# Known aspect ratios -> OpenAI-compatible size strings. Unknown ratios (this
+# deliberately excludes 4:3/3:4 — 1536x1024/1024x1536 are 3:2/2:3, not 4:3/3:4,
+# and there's no correct fixed pixel size to offer across arbitrary BYOK
+# providers) are passed through to providers that accept an `aspect_ratio`
+# field instead.
 ASPECT_TO_SIZE = {
     "1:1": "1024x1024",
     "16:9": "1792x1024",
     "9:16": "1024x1792",
-    "4:3": "1536x1024",
-    "3:4": "1024x1536",
     "3:2": "1536x1024",
     "2:3": "1024x1536",
 }
@@ -26,11 +26,6 @@ def _resolve_size(size: str, aspect_ratio: str | None) -> str:
             return mapped
         return size
     return size
-
-
-def _sanitize(name: str) -> str:
-    cleaned = re.sub(r"[^\w.-]+", "_", name)
-    return cleaned if cleaned not in ("", ".", "..") else "image"
 
 
 def generate_image_with_byok(user_id: str, prompt: str, n: int = 1, size: str = "1024x1024", aspect_ratio: str | None = None) -> str:
