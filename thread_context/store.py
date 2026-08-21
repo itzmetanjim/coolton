@@ -1,5 +1,6 @@
 import os
 import json
+import tempfile
 import time
 import logging
 import threading
@@ -29,7 +30,16 @@ class ConversationStore:
         self._ttl_seconds = ttl_seconds
         self._max_conversations = max_conversations
         self._lock = threading.Lock()
-        
+
+        # Snapshots are serialized and written to disk OUTSIDE self._lock (see
+        # set_history), so concurrent writers can complete out of order. This
+        # sequence number + lock (much smaller critical section than the full
+        # serialize+write) ensures a stale/older snapshot can never clobber a
+        # newer one that already landed on disk.
+        self._write_order_lock = threading.Lock()
+        self._write_seq = 0
+        self._written_seq = 0
+
         # In-memory store: keyed by (channel_id, thread_ts)
         self._store: dict[tuple[str, str], dict] = {}
         
@@ -42,18 +52,25 @@ class ConversationStore:
         Returns None if no history exists or if the history has expired.
         """
         key = (channel_id, thread_ts)
+        snapshot = None
+        seq = None
         with self._lock:
             entry = self._store.get(key)
             if entry is None:
                 return None
-            
+
             # Check if expired
             if time.time() - entry["timestamp"] > self._ttl_seconds:
                 del self._store[key]
-                self._save_to_disk()
-                return None
-                
-            return entry["messages"]
+                snapshot = dict(self._store)
+                self._write_seq += 1
+                seq = self._write_seq
+            else:
+                return entry["messages"]
+
+        # Persisting the expiry is done outside the lock (see set_history for why).
+        self._write_snapshot(snapshot, seq)
+        return None
 
     def set_history(
         self, channel_id: str, thread_ts: str, messages: list[ModelMessage]
@@ -66,7 +83,18 @@ class ConversationStore:
                 "timestamp": time.time(),
             }
             self._cleanup()
-            self._save_to_disk()
+            snapshot = dict(self._store)
+            self._write_seq += 1
+            seq = self._write_seq
+        # Serializing (dump_python + file write) is O(total conversations) —
+        # up to max_conversations. Slack Bolt dispatches concurrent events
+        # across channels on separate worker threads, so doing this while
+        # holding self._lock would block every other channel's get/set_history
+        # behind one busy/large conversation's full-store disk write. Take a
+        # point-in-time copy under the lock (cheap) and serialize/write outside
+        # it instead — see _write_snapshot for the resulting write-ordering
+        # tradeoff.
+        self._write_snapshot(snapshot, seq)
 
     def _cleanup(self) -> None:
         """Remove expired entries and enforce max conversation limit.
@@ -133,33 +161,50 @@ class ConversationStore:
             except Exception as e:
                 logger.error(f"Error loading conversations from disk: {e}")
 
-    def _save_to_disk(self) -> None:
-        """Serialize and save the current in-memory store to disk.
+    def _write_snapshot(self, snapshot: dict, seq: int) -> None:
+        """Serialize and atomically write a point-in-time copy of the store.
 
-        NOTE: Must be called inside the lock.
+        Deliberately called OUTSIDE self._lock (see set_history/get_history) so
+        a full-store JSON dump never blocks other channels' in-memory reads or
+        writes. Concurrent calls may therefore finish out of order; `seq`
+        (assigned under self._lock at snapshot time) lets a stale write detect
+        that a newer one already landed and skip clobbering it, under
+        self._write_order_lock — a much smaller critical section than the
+        serialize+write this replaces.
         """
         try:
             serialized_data = {}
-            for (channel_id, thread_ts), entry in self._store.items():
+            for (channel_id, thread_ts), entry in snapshot.items():
                 # Convert Pydantic AI's rich ModelMessage objects into plain JSON-serializable types
                 serialized_messages = ModelMessagesTypeAdapter.dump_python(
-                    entry["messages"], 
+                    entry["messages"],
                     mode="json"
                 )
-                
+
                 # Flatten the tuple key to a JSON-compatible string
                 key_str = f"{channel_id}:{thread_ts}"
                 serialized_data[key_str] = {
                     "messages": serialized_messages,
                     "timestamp": entry["timestamp"]
                 }
-            
-            # Atomic write (Write to temp file first, then replace)
-            # This protects your file database from corruption if the server crashes mid-write
-            temp_file = f"{self._file_path}.tmp"
-            with open(temp_file, "w") as f:
-                json.dump(serialized_data, f, indent=2)
-            os.replace(temp_file, self._file_path)
-            
+
+            # Atomic write (write to a unique temp file first, then replace).
+            # A unique name (not a fixed `.tmp` suffix) is required because
+            # writers are no longer mutually exclusive here.
+            directory = os.path.dirname(os.path.abspath(self._file_path)) or "."
+            fd, temp_file = tempfile.mkstemp(prefix=".conversations-", suffix=".tmp", dir=directory)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(serialized_data, f, indent=2)
+                with self._write_order_lock:
+                    if seq >= self._written_seq:
+                        os.replace(temp_file, self._file_path)
+                        self._written_seq = seq
+                    else:
+                        os.unlink(temp_file)
+            finally:
+                if os.path.exists(temp_file):
+                    os.unlink(temp_file)
+
         except Exception as e:
             logger.error(f"Failed to save conversations to disk: {e}")

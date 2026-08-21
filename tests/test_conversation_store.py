@@ -1,3 +1,5 @@
+import json
+import threading
 from datetime import datetime, timezone
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
@@ -103,6 +105,54 @@ def test_response_messages_roundtrip(tmp_path):
     loaded = store.get_history("C1", "1.1")
     assert loaded is not None
     assert loaded[0].parts[0].content == "the answer"
+
+
+def test_concurrent_set_history_across_channels_all_persist(tmp_path):
+    """set_history serializes/writes to disk outside the store's main lock so
+    one channel's write can't block another's — concurrent writers for
+    DIFFERENT conversations must all still land in the final on-disk file."""
+    path = str(tmp_path / "conversations.json")
+    store = ConversationStore(file_path=path)
+    n = 20
+
+    def write(i):
+        store.set_history(f"C{i}", f"{i}.{i}", _history(f"msg-{i}"))
+
+    threads = [threading.Thread(target=write, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    for i in range(n):
+        loaded = store.get_history(f"C{i}", f"{i}.{i}")
+        assert loaded is not None, f"conversation {i} missing from in-memory store"
+        assert loaded[0].parts[0].content == f"msg-{i}"
+
+    on_disk = json.loads(tmp_path.joinpath("conversations.json").read_text())
+    assert len(on_disk) == n, "on-disk file must contain every conversation, not just the last write"
+
+
+def test_stale_write_does_not_clobber_newer_write_on_disk(tmp_path):
+    """_write_snapshot must skip an out-of-order (stale) write rather than
+    overwrite a newer snapshot that already landed — this is what makes it
+    safe to serialize/write outside the store's main lock."""
+    path = str(tmp_path / "conversations.json")
+    store = ConversationStore(file_path=path)
+
+    newer = {("C1", "1.1"): {"messages": _history("newer"), "timestamp": 2.0}}
+    older = {("C1", "1.1"): {"messages": _history("older"), "timestamp": 1.0}}
+
+    # Write the "newer" snapshot (seq=2) first, then a "stale" one (seq=1)
+    # arriving late — as could happen if two threads' disk writes complete
+    # out of order.
+    store._write_snapshot(newer, seq=2)
+    store._write_snapshot(older, seq=1)
+
+    on_disk = json.loads(tmp_path.joinpath("conversations.json").read_text())
+    entry = on_disk["C1:1.1"]
+    texts = [part["content"] for msg in entry["messages"] for part in msg["parts"]]
+    assert texts == ["newer"], "a stale write must not clobber a newer one already on disk"
 
 
 def test_conversation_trace_contains_thread_metadata_and_all_trace_parts(tmp_path):
