@@ -127,6 +127,23 @@ def test_finalize_plan_message_adds_responding_and_model():
     assert responding["status"] == "in_progress"
 
 
+def test_finalize_plan_message_shows_model_first():
+    """The model choice reads as a header, not a trailing detail — it should
+    lead the task list even though it's decided last (after every tool step)."""
+    deps = _deps(
+        plan_ts="100.100",
+        model_used="anthropic / claude",
+        plan_tasks={
+            "task_thinking": {"task_id": "task_thinking", "title": "Thinking", "status": "in_progress"},
+            "task_tool1": {"task_id": "task_tool1", "title": "search_web", "status": "complete"},
+        },
+    )
+    finalize_plan_message(deps)
+    ordered_titles = [t["title"] for t in deps.plan_tasks.values()]
+    assert ordered_titles[0] == "Model: anthropic / claude"
+    assert ordered_titles[1:] == ["Thinking", "search_web", "Responding"]
+
+
 def test_complete_plan_message_completes_responding():
     deps = _deps(plan_ts="100.100", plan_tasks={"task_1": {"task_id": "task_1", "title": "Doing", "status": "in_progress"}})
     complete_plan_message(deps)
