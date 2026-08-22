@@ -160,3 +160,11 @@ def test_mcp_servers_section_lists_servers_with_delete_buttons():
     assert "mcp_server_delete_mcp_abc" in buttons
     texts = [b["text"]["text"] for b in view["blocks"] if b["type"] == "section"]
     assert any("My Notion" in t and "https://mcp.example.com/mcp" in t for t in texts)
+
+
+def test_commit_hash_footer_present():
+    view = build_app_home_view()
+    context_blocks = [b for b in view["blocks"] if b["type"] == "context"]
+    assert len(context_blocks) == 1
+    footer_text = context_blocks[0]["elements"][0]["text"]
+    assert "Running commit" in footer_text
