@@ -221,4 +221,13 @@ def build_app_home_view(
             ],
         })
 
+    # Footer: which commit is actually running
+    from agent.version import COMMIT_SHORT_HASH, COMMIT_URL
+    blocks.append({"type": "divider"})
+    commit_text = f"<{COMMIT_URL}|`{COMMIT_SHORT_HASH}`>" if COMMIT_URL else f"`{COMMIT_SHORT_HASH}`"
+    blocks.append({
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": f"Running commit {commit_text}"}],
+    })
+
     return {"type": "home", "blocks": blocks}
