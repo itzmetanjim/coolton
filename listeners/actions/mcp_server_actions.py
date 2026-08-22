@@ -1,4 +1,5 @@
 import logging
+import time
 
 from slack_bolt import Ack, BoltContext
 from slack_sdk import WebClient
@@ -11,6 +12,15 @@ logger = logging.getLogger(__name__)
 def handle_mcp_server_add(ack: Ack, body: dict, client: WebClient, context: BoltContext):
     ack()
     try:
+        # Diagnostic: trigger_ids expire ~3s after the click. If this handler is
+        # already old by the time it starts, the delay is upstream (event dispatch),
+        # not in anything below — narrows down repeated "expired_trigger_id" reports.
+        action_ts = (body.get("actions") or [{}])[0].get("action_ts")
+        if action_ts:
+            age = time.time() - float(action_ts)
+            if age > 1.5:
+                logger.warning("mcp_server_add: handler started %.2fs after the click (trigger_id expires ~3s)", age)
+
         from listeners.views.mcp_server_views import build_add_mcp_server_modal
         client.views_open(trigger_id=body["trigger_id"], view=build_add_mcp_server_modal())
     except Exception as e:
