@@ -66,5 +66,5 @@ def test_upload_bytes_missing_url_raises(monkeypatch):
     resp.json.return_value = {"error": "no url"}
     monkeypatch.setattr("agent.web64_client.requests.post", lambda *a, **k: resp)
 
-    with pytest.raises(RuntimeError, match="web64 upload failed"):
+    with pytest.raises(RuntimeError, match="web helper upload failed"):
         upload_bytes(b"x", "a.txt")
