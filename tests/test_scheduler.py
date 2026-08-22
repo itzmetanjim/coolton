@@ -197,6 +197,33 @@ def test_start_scheduler_registers_fallback_cache_refresh_job(monkeypatch, tmp_f
     assert call.kwargs.get("next_run_time") is not None
 
 
+def test_start_scheduler_registers_mcp_health_refresh_job(monkeypatch, tmp_files):
+    """MCP-down alerting (agent/mcp_health.py) depends on this job actually being
+    registered — verify start_scheduler wires it up at the documented interval,
+    with an immediate first run so a dead MCP connection is caught from process
+    start rather than after the first REFRESH_INTERVAL_SECONDS."""
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+
+    fake_scheduler = Mock()
+    monkeypatch.setattr(
+        "apscheduler.schedulers.background.BackgroundScheduler", lambda: fake_scheduler
+    )
+    monkeypatch.setattr(scheduler, "_sync_cron_jobs", lambda: None)
+
+    scheduler.start_scheduler(app=Mock())
+
+    from agent.mcp_health import REFRESH_INTERVAL_SECONDS
+
+    mcp_calls = [
+        c for c in fake_scheduler.add_job.call_args_list
+        if c.kwargs.get("id") == "refresh_mcp_health"
+    ]
+    assert len(mcp_calls) == 1
+    call = mcp_calls[0]
+    assert call.kwargs.get("seconds") == REFRESH_INTERVAL_SECONDS
+    assert call.kwargs.get("next_run_time") is not None
+
+
 def test_cannot_pause_other_users_task(tmp_files):
     scheduler.create_scheduled_task(OWNER, "C1", "1.1", "mine", "0 9 * * *")
     task_id = scheduler._load_tasks()["tasks"][0]["id"]
