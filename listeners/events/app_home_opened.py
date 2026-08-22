@@ -25,6 +25,9 @@ def handle_app_home_opened(client: WebClient, context: BoltContext, logger: Logg
                 redirect_uri = os.environ.get("SLACK_REDIRECT_URI", "")
                 install_url = urljoin(redirect_uri, "/slack/install")
 
+        from agent.mcp_server_store import get_user_servers
+        mcp_servers = get_user_servers(user_id)
+
         endpoints = get_user_endpoints(user_id)
         text_ep = get_text_endpoint_id(user_id)
         image_ep = get_image_endpoint_id(user_id)
@@ -46,6 +49,7 @@ def handle_app_home_opened(client: WebClient, context: BoltContext, logger: Logg
             has_instructions=has_instructions,
             reminders=user_reminders,
             has_policy_consent=has_consent(user_id),
+            mcp_servers=mcp_servers,
         )
         client.views_publish(user_id=user_id, view=view)
     except Exception as e:

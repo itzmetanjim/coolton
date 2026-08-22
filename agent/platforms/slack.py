@@ -397,6 +397,13 @@ When connected, these tools are available automatically — just call them:
 - Use the channel_id from your dependencies for operations in the current channel unless user specifies otherwise
 - Most tools run as cooltonUser ({os.environ.get("COOLTON_USER_ID")}). If a tool fails with "not_in_channel", try `invite_coolton_user_to_channel`.
 
+## USER-REGISTERED MCP SERVERS
+The person messaging you may have connected their own MCP servers from App Home
+(e.g. Notion, Linear). If so, that server's tools are loaded automatically for
+this turn alongside everything else — just call them like any other tool, no
+special handling needed. If a tool you'd expect isn't available, they haven't
+connected it; point them to App Home > "Add MCP Server".
+
 ## SLACK API CALL (slack_api_call)
 Use `slack_api_call` when you need to do something in Slack that has no built-in tool or MCP capability.
 - Runs as cooltonUser (SLACK_USER_TOKEN)
@@ -528,6 +535,8 @@ class SlackPlatform(PlatformAdapter):
 """
 
     def toolsets(self, deps: Any) -> list[Any]:
+        toolsets: list[Any] = []
+
         token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
         if not token:
             logger.info("Slack MCP Server disabled (no user_token)")
@@ -537,20 +546,48 @@ class SlackPlatform(PlatformAdapter):
                 "most of coolton's Slack tools are unavailable this turn.",
                 dedupe_key="mcp_no_token", min_interval_seconds=1800,
             )
+        else:
+            logger.info("Slack MCP Server enabled (user_token present)")
+            try:
+                transport = StreamableHttpTransport(
+                    "https://mcp.slack.com/mcp",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                toolsets.append(MCPToolset(transport))
+            except Exception as e:
+                logger.exception("Failed to create MCP server")
+                from agent.admin_alerts import notify_admin
+                notify_admin(
+                    f"🔴 Slack MCP Server toolset failed to construct: {e} — "
+                    "most of coolton's Slack tools are unavailable this turn.",
+                    dedupe_key="mcp_construct_error", min_interval_seconds=1800,
+                )
+
+        toolsets.extend(self._user_mcp_toolsets(getattr(deps, "user_id", None)))
+        return toolsets
+
+    def _user_mcp_toolsets(self, user_id: str | None) -> list[Any]:
+        """Any MCP servers this user registered from App Home (see
+        agent/mcp_server_store.py). One broken server is dropped, not fatal —
+        it never blocks the Slack MCP toolset or another user's servers."""
+        if not user_id:
             return []
-        logger.info("Slack MCP Server enabled (user_token present)")
         try:
-            transport = StreamableHttpTransport(
-                "https://mcp.slack.com/mcp",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            return [MCPToolset(transport)]
-        except Exception as e:
-            logger.exception("Failed to create MCP server")
-            from agent.admin_alerts import notify_admin
-            notify_admin(
-                f"🔴 Slack MCP Server toolset failed to construct: {e} — "
-                "most of coolton's Slack tools are unavailable this turn.",
-                dedupe_key="mcp_construct_error", min_interval_seconds=1800,
-            )
+            from agent.mcp_server_store import get_server_decrypted, get_user_servers
+            servers = get_user_servers(user_id)
+        except Exception:
+            logger.exception("Failed to load user MCP servers for %s", user_id)
             return []
+
+        result: list[Any] = []
+        for meta in servers:
+            server = get_server_decrypted(user_id, meta["id"])
+            if not server:
+                continue
+            try:
+                headers = {"Authorization": f"Bearer {server['token']}"} if server.get("token") else {}
+                transport = StreamableHttpTransport(server["url"], headers=headers)
+                result.append(MCPToolset(transport, id=f"user_mcp_{server['id']}"))
+            except Exception:
+                logger.exception("Failed to build user MCP toolset %s (%s) for %s", server["id"], server["name"], user_id)
+        return result

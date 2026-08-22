@@ -71,6 +71,8 @@ reminders.json
 scheduled_tasks.json
 thread_sandboxes.json
 byok_key.bin
+mcp_server_store.json
+mcp_server_key.bin
 
 # Local Slack CLI project metadata (team IDs, local paths)
 .slack/
