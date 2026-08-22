@@ -420,6 +420,14 @@ def start_scheduler(app):
         except Exception:
             logger.exception("Fallback cache background refresh failed")
 
+    def refresh_mcp_health_job():
+        try:
+            from agent.mcp_health import refresh_mcp_health
+
+            refresh_mcp_health()
+        except Exception:
+            logger.exception("MCP health background check failed")
+
     _scheduler.add_job(check_reminders, "interval", seconds=30, id="check_reminders")
     _scheduler.add_job(check_token_rotation, "interval", seconds=15 * 60, id="check_token_rotation")
     # Runs once immediately (next_run_time=now) so the cache is warm from
@@ -430,6 +438,11 @@ def start_scheduler(app):
     _scheduler.add_job(
         refresh_fallback_cache_job, "interval", seconds=REFRESH_INTERVAL_SECONDS,
         id="refresh_fallback_cache", next_run_time=_datetime.now(),
+    )
+    from agent.mcp_health import REFRESH_INTERVAL_SECONDS as MCP_HEALTH_INTERVAL_SECONDS
+    _scheduler.add_job(
+        refresh_mcp_health_job, "interval", seconds=MCP_HEALTH_INTERVAL_SECONDS,
+        id="refresh_mcp_health", next_run_time=_datetime.now(),
     )
     _scheduler.start()
     _sync_cron_jobs()

@@ -65,6 +65,7 @@ manifest.json
 # Runtime state (regenerated at runtime; contains private Slack IDs)
 conversations.json
 fallback_cache.json
+mcp_health.json
 leave_thread_store.json
 reminders.json
 scheduled_tasks.json
