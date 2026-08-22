@@ -2,8 +2,8 @@ import os
 
 import requests
 
-WEB64_UPLOAD_URL = "https://tanjim.org:2390/upload"
-WEB64_TOKEN_FILE = os.environ.get("WEB64_TOKEN_FILE", "/home/tanjim/web64_token")
+WEB64_UPLOAD_URL = os.environ.get("WEB_HELPER_UPLOAD_URL", "https://tanjim.org:2390/upload")
+WEB64_TOKEN_FILE = os.environ.get("WEB_HELPER_TOKEN_FILE", os.environ.get("WEB64_TOKEN_FILE", "/home/tanjim/web64_token"))
 
 
 def _api_key() -> str:
@@ -12,7 +12,7 @@ def _api_key() -> str:
 
 
 def upload_bytes(content: bytes, filename: str, mime: str = "") -> str:
-    """Host raw bytes on the web64 server (tanjim.org:2390) and return its URL.
+    """Host raw bytes on the coolton web helper and return its URL.
 
     The server stores the file under a hash+timestamp path; this requires the
     shared token at WEB64_TOKEN_FILE, so only coolton can upload.
@@ -30,5 +30,5 @@ def upload_bytes(content: bytes, filename: str, mime: str = "") -> str:
     resp.raise_for_status()
     data = resp.json()
     if not data.get("url"):
-        raise RuntimeError(f"web64 upload failed: {data}")
+        raise RuntimeError(f"web helper upload failed: {data}")
     return data["url"]
