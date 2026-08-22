@@ -531,6 +531,12 @@ class SlackPlatform(PlatformAdapter):
         token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
         if not token:
             logger.info("Slack MCP Server disabled (no user_token)")
+            from agent.admin_alerts import notify_admin
+            notify_admin(
+                "🔴 Slack MCP Server has no token configured (SLACK_USER_TOKEN unset) — "
+                "most of coolton's Slack tools are unavailable this turn.",
+                dedupe_key="mcp_no_token", min_interval_seconds=1800,
+            )
             return []
         logger.info("Slack MCP Server enabled (user_token present)")
         try:
@@ -539,6 +545,12 @@ class SlackPlatform(PlatformAdapter):
                 headers={"Authorization": f"Bearer {token}"},
             )
             return [MCPToolset(transport)]
-        except Exception:
+        except Exception as e:
             logger.exception("Failed to create MCP server")
+            from agent.admin_alerts import notify_admin
+            notify_admin(
+                f"🔴 Slack MCP Server toolset failed to construct: {e} — "
+                "most of coolton's Slack tools are unavailable this turn.",
+                dedupe_key="mcp_construct_error", min_interval_seconds=1800,
+            )
             return []
