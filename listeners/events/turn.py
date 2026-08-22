@@ -152,9 +152,17 @@ def run_agent_turn(
                 )
             complete_plan_message(deps)
 
-        # Store conversation history
+        # Store conversation history, compacting it first if the thread has run long
+        # enough that carrying the full raw history would waste context on every
+        # future turn (see agent/history_compaction.py).
         all_messages = result.all_messages()
-        conversation_store.set_history(channel_id, thread_ts, all_messages)
+        try:
+            from agent.history_compaction import maybe_compact_history
+            stored_messages = maybe_compact_history(all_messages, deps)
+        except Exception:
+            logger.exception("History compaction failed; storing full history")
+            stored_messages = all_messages
+        conversation_store.set_history(channel_id, thread_ts, stored_messages)
         try:
             conversation_trace_store.write_from_slack(
                 client, channel_id, thread_ts, all_messages
