@@ -10,6 +10,7 @@ def build_app_home_view(
     has_instructions: bool = False,
     reminders: list[dict] | None = None,
     has_policy_consent: bool = False,
+    mcp_servers: list[dict] | None = None,
 ) -> dict:
     blocks = [
         {"type": "section", "text": {"type": "mrkdwn", "text": "*Policy consent*\n" + ("You are opted in to the Coolton policy." if has_policy_consent else "You have not opted in to the Coolton policy yet.")}},
@@ -186,6 +187,38 @@ def build_app_home_view(
         blocks.append({
             "type": "section",
             "text": {"type": "mrkdwn", "text": "🔴 *Slack MCP Server is disconnected.*"},
+        })
+
+    # Custom (user-registered) MCP servers
+    blocks.append({"type": "divider"})
+    mcp_servers = mcp_servers or []
+    server_count = len(mcp_servers)
+    servers_status = "not configured" if server_count == 0 else f"{server_count} server{'s' if server_count != 1 else ''} connected"
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": f"*Your MCP Servers*\n{servers_status}. Connect your own MCP servers (Notion, Linear, etc) — coolton loads their tools on every message."},
+    })
+    blocks.append({
+        "type": "actions",
+        "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "Add MCP Server", "emoji": True}, "action_id": "mcp_server_add"},
+        ],
+    })
+    for server in mcp_servers:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*{server['name']}*\n`{server['url']}`"},
+        })
+        blocks.append({
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Remove", "emoji": True},
+                    "action_id": f"mcp_server_delete_{server['id']}",
+                    "style": "danger",
+                },
+            ],
         })
 
     return {"type": "home", "blocks": blocks}
