@@ -143,3 +143,20 @@ def test_fallback_cache_actions_present():
     buttons = _button_ids(view)
     assert "fallback_cache_clear" in buttons
     assert "test_providers" in buttons
+
+
+def test_mcp_servers_section_empty():
+    view = build_app_home_view()
+    buttons = _button_ids(view)
+    assert "mcp_server_add" in buttons
+    texts = [b["text"]["text"] for b in view["blocks"] if b["type"] == "section"]
+    assert any("not configured" in t and "MCP Servers" in t for t in texts)
+
+
+def test_mcp_servers_section_lists_servers_with_delete_buttons():
+    servers = [{"id": "mcp_abc", "name": "My Notion", "url": "https://mcp.example.com/mcp"}]
+    view = build_app_home_view(mcp_servers=servers)
+    buttons = _button_ids(view)
+    assert "mcp_server_delete_mcp_abc" in buttons
+    texts = [b["text"]["text"] for b in view["blocks"] if b["type"] == "section"]
+    assert any("My Notion" in t and "https://mcp.example.com/mcp" in t for t in texts)

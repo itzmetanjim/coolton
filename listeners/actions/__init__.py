@@ -16,6 +16,7 @@ from .instructions_actions import (
 from .fallback_cache_actions import handle_fallback_cache_clear
 from .test_providers import handle_test_providers
 from .policy_actions import handle_policy_opt_in, handle_policy_opt_out
+from .mcp_server_actions import handle_mcp_server_add, mcp_server_delete_pattern
 
 
 def register(app: App):
@@ -32,3 +33,5 @@ def register(app: App):
     app.action("policy_opt_in_join")(handle_policy_opt_in)
     app.action("policy_opt_in_no_join")(handle_policy_opt_in)
     app.action("policy_opt_out")(handle_policy_opt_out)
+    app.action("mcp_server_add")(handle_mcp_server_add)
+    app.action(re.compile(r"^mcp_server_delete_(.+)$"))(mcp_server_delete_pattern)
