@@ -142,11 +142,14 @@ def finalize_plan_message(deps, result_text: str | None = None) -> None:
             task["status"] = "complete"
     if deps.model_used:
         model_id = _make_task_id()
-        deps.plan_tasks[model_id] = {
+        model_task = {
             "task_id": model_id,
             "title": f"Model: {deps.model_used}",
             "status": "complete",
         }
+        # Shown first, not appended at the end where it was decided (after every
+        # tool step) — the model choice reads as a header, not a trailing detail.
+        deps.plan_tasks = {model_id: model_task, **deps.plan_tasks}
     respond_id = _make_task_id()
     deps.plan_tasks[respond_id] = {
         "task_id": respond_id,
