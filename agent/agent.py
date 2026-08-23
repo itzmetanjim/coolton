@@ -178,21 +178,26 @@ def _is_vision_capable(model_name: str) -> bool:
     return any(marker in m for marker in _VISION_MODEL_MARKERS)
 
 
-def _resolve_provider_order(deps_user_id: str | None = None) -> list:
+def _resolve_provider_order(deps_user_id: str | None = None, tag: str | None = None) -> list:
     """The provider fallback order the run loop will actually try, cache-adjusted.
 
     Applies the global fallback cache (skip dead providers, prefer the
     last-known-good provider first) the same way _run_with_provider_chain does,
     so the vision gate in run_agent agrees with the model that runs.
+
+    `tag`, when given, restricts the order to only tagged models (see
+    agent.provider_config.extract_tag_directive) and skips the fallback
+    cache's own reordering — a forced tag should not get silently overridden
+    by "last known working provider."
     """
     from agent.fallback_cache import get_dead_providers, get_working_provider
 
-    provider_order = _build_provider_order(deps_user_id)
+    provider_order = _build_provider_order(deps_user_id, tag)
     if not provider_order:
         raise RuntimeError("No AI provider configured.")
 
     has_byok = provider_order[0][0] == "byok"
-    if not has_byok:
+    if not has_byok and not tag:
         dead_providers = get_dead_providers()
         if dead_providers:
             alive = [(n, c) for n, c in provider_order if n not in dead_providers]
@@ -211,9 +216,9 @@ def _resolve_provider_order(deps_user_id: str | None = None) -> list:
     return provider_order
 
 
-def _build_provider_order(deps_user_id: str | None = None) -> list:
+def _build_provider_order(deps_user_id: str | None = None, tag: str | None = None) -> list:
     """Build the provider fallback order from providers.json."""
-    return provider_config.build_provider_order(deps_user_id)
+    return provider_config.build_provider_order(deps_user_id, tag)
 
 
 def get_user_text_endpoint(user_id: str | None) -> dict | None:
@@ -1776,7 +1781,7 @@ def run_agent(text, deps, message_history=None, images=None):
     # the agent is vision-capable: attached images are passed straight to a vision model,
     # and see_image_from_sandbox is only exposed to one.
     try:
-        provider_order = _resolve_provider_order(deps.user_id)
+        provider_order = _resolve_provider_order(deps.user_id, tag=deps.provider_tag_filter)
         first_model = provider_order[0][1]["model"]
     except Exception:
         first_model = ""
@@ -1855,7 +1860,7 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
     from agent.fallback_cache import set_working_provider, mark_dead
 
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
-    provider_order = _resolve_provider_order(deps.user_id)
+    provider_order = _resolve_provider_order(deps.user_id, tag=deps.provider_tag_filter)
 
     # Retry configuration
     max_retries = 3

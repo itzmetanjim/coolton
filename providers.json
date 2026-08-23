@@ -9,11 +9,11 @@
     {"id": "mistral", "api_url": null, "api_key_env_var_name": "MISTRAL_API_KEY", "displayname": "Mistral"}
   ],
   "models": [
-    {"provider": "hcai", "model": "openai/gpt-5.6-luna", "display": "HCAI GPT-5.6 Luna"},
-    {"provider": "hcai", "model": "stealth/ox-alpha", "display": "HCAI Stealth OX Alpha"},
-    {"provider": "openrouter_fb", "model": "openrouter:stealth/ox-alpha", "display": "OpenRouter Fallback Stealth OX Alpha"},
-    {"provider": "hcai", "model": "z-ai/glm-5.2:free", "display": "HCAI GLM-5.2 (free)"},
-    {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.2:free", "display": "OpenRouter Fallback GLM-5.2 (free)"},
+    {"provider": "hcai", "model": "openai/gpt-5.6-luna", "display": "HCAI GPT-5.6 Luna", "tags": ["luna"]},
+    {"provider": "hcai", "model": "stealth/ox-alpha", "display": "HCAI Stealth OX Alpha", "tags": ["ox-alpha"]},
+    {"provider": "openrouter_fb", "model": "openrouter:stealth/ox-alpha", "display": "OpenRouter Fallback Stealth OX Alpha", "tags": ["ox-alpha"]},
+    {"provider": "hcai", "model": "z-ai/glm-5.2:free", "display": "HCAI GLM-5.2 (free)", "tags": ["glm5.2"]},
+    {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.2:free", "display": "OpenRouter Fallback GLM-5.2 (free)", "tags": ["glm5.2"]},
     {"provider": "anthropic", "model": "anthropic:claude-sonnet-4-6"},
     {"provider": "openai", "model": "openai:gpt-4.1-mini"},
     {"provider": "hcai", "model": "moonshotai/kimi-k2.6", "display": "HCAI Kimi K2.6"},

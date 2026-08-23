@@ -93,6 +93,12 @@ def run_agent_turn(
     """
     deps = None
     try:
+        from agent.provider_config import extract_tag_directive
+        text, tag_filter, tag_error = extract_tag_directive(text)
+        if tag_error:
+            say(text=tag_error, thread_ts=thread_ts)
+            return
+
         client.assistant_threads_setStatus(
             channel_id=channel_id,
             thread_ts=thread_ts,
@@ -107,6 +113,7 @@ def run_agent_turn(
             thread_ts=thread_ts,
             message_ts=message_ts,
             user_token=user_token,
+            provider_tag_filter=tag_filter,
         )
 
         from agent.plan_block import (

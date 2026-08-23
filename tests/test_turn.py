@@ -28,6 +28,7 @@ def mocks(monkeypatch):
         thread_ts=kw["thread_ts"],
         message_ts=kw["message_ts"],
         user_token=kw["user_token"],
+        provider_tag_filter=kw.get("provider_tag_filter"),
         plan_ts=None,
         plan_tasks={},
         should_skip=False,
@@ -218,3 +219,54 @@ def test_chunk_text_respects_default_limit():
     chunks = turn._chunk_text(long)
     assert all(len(c) <= turn._MAX_MESSAGE_CHARS for c in chunks)
     assert "".join(chunks) == long
+
+
+# ---------------------------------------------------------------------------
+# [!WITH:tag] provider tag directive
+# ---------------------------------------------------------------------------
+
+
+def test_valid_tag_directive_is_stripped_and_forces_provider(mocks):
+    _run_turn(mocks, text="hi [!WITH:luna] there")
+
+    call_text = turn.run_agent.call_args.args[0]
+    assert "[!WITH:" not in call_text
+    assert "hi" in call_text and "there" in call_text
+
+    deps_used = turn.run_agent.call_args.args[1]
+    assert deps_used.provider_tag_filter == "luna"
+
+    # a live directive is not an error — the turn proceeds normally
+    turn.conversation_store.set_history.assert_called_once()
+
+
+def test_invalid_tag_directive_short_circuits_before_any_work(mocks):
+    _run_turn(mocks, text="hi [!WITH:bogus] there")
+
+    turn.run_agent.assert_not_called()
+    mocks.client.assistant_threads_setStatus.assert_not_called()
+    mocks.say.assert_called_once()
+    error_text = mocks.say.call_args.kwargs["text"]
+    assert "bogus" in error_text
+    assert "luna" in error_text
+
+    import agent.plan_block as pb
+    pb.send_plan_message.assert_not_called()
+    turn.conversation_store.set_history.assert_not_called()
+
+
+def test_escaped_tag_directive_is_left_literal_with_backslash_stripped(mocks):
+    _run_turn(mocks, text=r"hi \[!WITH:luna] there")
+
+    call_text = turn.run_agent.call_args.args[0]
+    assert call_text == "hi [!WITH:luna] there"
+
+    deps_used = turn.run_agent.call_args.args[1]
+    assert deps_used.provider_tag_filter is None
+
+
+def test_no_tag_directive_leaves_provider_tag_filter_none(mocks):
+    _run_turn(mocks, text="just a normal message")
+
+    deps_used = turn.run_agent.call_args.args[1]
+    assert deps_used.provider_tag_filter is None
