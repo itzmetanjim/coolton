@@ -283,6 +283,58 @@ def test_provider_order_byok_first(monkeypatch, clean_env):
     assert order[0][1]["base_url"] == "https://user"
 
 
+def test_provider_order_tag_filter_restricts_to_tagged_models(monkeypatch, clean_env):
+    monkeypatch.setenv("HCAI_API_KEY", "h")
+    monkeypatch.setenv("OPENROUTER_API_KEY_FALLBACK", "or")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    order = agent_mod._build_provider_order(None, tag="luna")
+    from agent.provider_config import _get_models
+    assert all("luna" in (m.get("tags") or []) for name, cfg in order for m in _get_models() if m["model"] == cfg["model"])
+    # anthropic (untagged) must not appear when a tag filter is active
+    assert "anthropic" not in [name for name, _ in order]
+
+
+def test_provider_order_tag_filter_matches_multiple_providers(monkeypatch, clean_env):
+    monkeypatch.setenv("HCAI_API_KEY", "h")
+    monkeypatch.setenv("OPENROUTER_API_KEY_FALLBACK", "or")
+    order = agent_mod._build_provider_order(None, tag="glm5.2")
+    models = [cfg["model"] for _, cfg in order]
+    assert "z-ai/glm-5.2:free" in models
+    assert "openrouter:z-ai/glm-5.2:free" in models
+
+
+def test_provider_order_tag_filter_excludes_byok(monkeypatch, clean_env):
+    monkeypatch.setattr(agent_mod, "get_user_text_endpoint", lambda uid: {"model": "m", "base_url": "https://user", "api_key": "uk"})
+    monkeypatch.setenv("HCAI_API_KEY", "h")
+    order = agent_mod._build_provider_order("U1", tag="luna")
+    assert "byok" not in [name for name, _ in order]
+
+
+def test_provider_order_unknown_tag_yields_empty_order(monkeypatch, clean_env):
+    monkeypatch.setenv("HCAI_API_KEY", "h")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    assert agent_mod._build_provider_order(None, tag="nonexistent-tag") == []
+
+
+def test_resolve_provider_order_tag_skips_fallback_cache_reordering(monkeypatch, clean_env):
+    """A forced tag is deterministic — the fallback cache's "prefer last known
+    working provider" reordering must not silently reintroduce a provider
+    the tag already excluded, or reorder within it unexpectedly."""
+    monkeypatch.setenv("HCAI_API_KEY", "h")
+    monkeypatch.setenv("OPENROUTER_API_KEY_FALLBACK", "or")
+    monkeypatch.setattr("agent.fallback_cache.get_dead_providers", lambda: {"hcai_0"})
+    monkeypatch.setattr("agent.fallback_cache.get_working_provider", lambda: "openrouter_fb_1")
+
+    untagged_order = agent_mod._resolve_provider_order(None)
+    tagged_order = agent_mod._resolve_provider_order(None, tag="luna")
+
+    # Without a tag, the cache logic actively filters/reorders.
+    assert "hcai_0" not in [n for n, _ in untagged_order]
+    # With a tag forced, the raw tag-filtered order is used untouched by the cache.
+    from agent.provider_config import build_provider_order
+    assert tagged_order == build_provider_order(None, tag="luna")
+
+
 # ---------------------------------------------------------------------------
 # get_runtime_model
 # ---------------------------------------------------------------------------

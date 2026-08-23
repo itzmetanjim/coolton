@@ -54,6 +54,61 @@ def _get_vision_models() -> list[dict]:
     return _load().get("vision_models", [])
 
 
+def get_all_tags() -> list[str]:
+    """All distinct model tags declared in providers.json, sorted."""
+    tags: set[str] = set()
+    for m in _get_models():
+        tags.update(m.get("tags") or [])
+    return sorted(tags)
+
+
+_TAG_DIRECTIVE_RE = re.compile(r"(\\)?\[!WITH:([^\]]*)\]")
+
+
+def extract_tag_directive(text: str) -> tuple[str, str | None, str | None]:
+    """Parse a `[!WITH:tag]` directive out of `text`, forcing the provider
+    fallback chain to only try models carrying that tag for the turn.
+
+    A backslash immediately before the directive escapes it: only the
+    backslash is stripped, the bracket text is left in place for the model to
+    see literally, and no filter is applied.
+
+    Returns (cleaned_text, tag, error):
+    - `tag` is the matched tag (lowercased), or None if no live directive was
+      found.
+    - `error` is a ready-to-send message if a live directive named an unknown
+      tag. When set, the caller should not proceed with the turn — nothing
+      else about `cleaned_text`/`tag` is meaningful in that case.
+    """
+    found_tag: str | None = None
+    invalid_tag: str | None = None
+    known_tags = get_all_tags()
+
+    def _sub(match: re.Match) -> str:
+        nonlocal found_tag, invalid_tag
+        escaped, raw_tag = match.group(1), match.group(2).strip()
+        if escaped:
+            return match.group(0)[1:]  # drop only the leading backslash
+        if found_tag is None and invalid_tag is None:
+            if raw_tag.lower() in known_tags:
+                found_tag = raw_tag.lower()
+            else:
+                invalid_tag = raw_tag
+        return ""
+
+    cleaned = _TAG_DIRECTIVE_RE.sub(_sub, text)
+
+    if invalid_tag is not None:
+        available = ", ".join(f"`{t}`" for t in known_tags) or "(none configured)"
+        error = (
+            f"Invalid tag `{invalid_tag}`. Current tags are: {available}. "
+            f"Use a backslash before it (like `\\[!WITH:{invalid_tag}]`) to send it literally instead."
+        )
+        return cleaned, None, error
+
+    return cleaned, found_tag, None
+
+
 def _provider_map() -> dict[str, dict]:
     return {p["id"]: p for p in _get_providers()}
 
@@ -72,25 +127,31 @@ def _make_provider_name(provider_id: str, model_index: int) -> str:
     return f"{provider_id}_{model_index}"
 
 
-def build_provider_order(user_id: str | None = None) -> list[tuple[str, dict]]:
+def build_provider_order(user_id: str | None = None, tag: str | None = None) -> list[tuple[str, dict]]:
     """Build the provider fallback order from JSON config.
 
     Returns list of (provider_name, config_dict) pairs, same shape as the
     old _build_provider_order. BYOK is always prepended when a user endpoint
     exists. Entries whose env var is unset are skipped.
+
+    `tag`, when given, restricts the order to only models tagged with it
+    (see extract_tag_directive) — BYOK is excluded in that case since a
+    user's own endpoint carries no tag classification.
     """
     from agent.agent import get_user_text_endpoint
 
     provider_order: list[tuple[str, dict]] = []
 
     # BYOK
-    if user_id:
+    if user_id and not tag:
         user_endpoint = get_user_text_endpoint(user_id)
         if user_endpoint:
             provider_order.append(("byok", user_endpoint))
 
     pmap = _provider_map()
     for model_idx, model_entry in enumerate(_get_models()):
+        if tag and tag not in (model_entry.get("tags") or []):
+            continue
         pid = model_entry["provider"]
         pconf = pmap.get(pid)
         if not pconf:

@@ -20,3 +20,7 @@ class AgentDeps:
     halt_reason: str = ""
     model_used: str = ""
     run_started_at: float = 0.0
+    # Set from a `[!WITH:tag]` directive in the user's message (see
+    # agent/provider_config.extract_tag_directive) — forces the provider
+    # fallback chain to only try models carrying this tag for the turn.
+    provider_tag_filter: str | None = None
