@@ -1847,16 +1847,34 @@ def run_agent(text, deps, message_history=None, images=None):
         message_history=message_history,
         toolsets=toolsets,
         capabilities=capabilities,
-        # anthropic_* settings are ignored by every other provider (they're
-        # namespaced precisely so they can always be passed — see
-        # AnthropicModelSettings). pydantic_ai does not enable Anthropic
-        # prompt caching by default; this opts in to caching the system
-        # prompt, tool definitions, and (via anthropic_cache) the growing
-        # message history as the conversation continues.
+        # anthropic_*/openai_* settings are ignored by every provider that
+        # doesn't recognize them (both are namespaced precisely so they can
+        # always be passed together — see AnthropicModelSettings/
+        # OpenAIModelSettings). Neither pydantic_ai nor the actual providers
+        # coolton talks to enable caching on their own:
+        #
+        # - anthropic_cache/anthropic_cache_instructions/
+        #   anthropic_cache_tool_definitions: pydantic_ai does not enable
+        #   Anthropic prompt caching by default.
+        # - openai_prompt_cache_key/openai_prompt_cache_retention: HCAI
+        #   (coolton's primary configured provider, an OpenAI-compatible
+        #   proxy) does NOT auto-cache on a matching prefix alone — verified
+        #   live on 2026-08-23: an identical system prompt sent twice with no
+        #   cache key showed cached_tokens=0 on both calls; the same two
+        #   calls WITH a stable prompt_cache_key showed a 7372/7386-token
+        #   cache hit (~90% cost reduction) on the second call. Without a
+        #   cache key, a load-balanced backend has no way to route repeat
+        #   requests for the same thread back to the worker holding its
+        #   cache. Keying by (channel_id, thread_ts) groups every turn of one
+        #   Slack thread onto the same cache; 24h retention covers realistic
+        #   gaps between messages in a thread (the in-memory default is much
+        #   shorter-lived).
         model_settings={
             "anthropic_cache_instructions": True,
             "anthropic_cache_tool_definitions": True,
             "anthropic_cache": True,
+            "openai_prompt_cache_key": f"coolton-{deps.channel_id}-{deps.thread_ts}",
+            "openai_prompt_cache_retention": "24h",
         },
     )
 
