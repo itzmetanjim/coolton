@@ -518,20 +518,29 @@ class SlackPlatform(PlatformAdapter):
             pass
         return user_id
 
-    def build_context_prompt(self, deps: Any, model: str, is_vision: bool) -> str:
-        capability = (
-            "VISION-capable: attached images are visible to you, and you can call `see_image_from_sandbox` to view images in your sandbox."
-            if is_vision else
-            "NOT vision-capable: you cannot see images directly; download them to your sandbox and use `analyze_image`."
-        )
+    def build_context_prompt(self, deps: Any) -> str:
+        # Stable for every turn of this thread — safe inside the cached system
+        # prompt. Nothing here may vary turn to turn (see build_turn_context).
         return f"""\n## CURRENT CONTEXT
 - You are in channel_id: `{deps.channel_id}` (thread_ts: `{deps.thread_ts}` if in thread, else DM)
 - Use this channel_id for operations in the current channel unless user specifies otherwise
 - Your user_id (the HUMAN who messaged you): `{deps.user_id}`
 - Your own bot user id (this is YOU, not a third party): `{os.environ.get("COOLTON_BOT_ID", "")}`
 - Your cooltonUser helper account id (acts on your behalf): `{os.environ.get("COOLTON_USER_ID", "")}`
-- Message timestamp: `{deps.message_ts}`
-- Model: {model or "unknown"} — {capability}
+"""
+
+    def build_turn_context(self, deps: Any, model: str, is_vision: bool) -> str:
+        # Changes on every turn (message_ts is unique per message; model/capability
+        # can shift turn to turn with the provider fallback chain) — deliberately
+        # NOT part of the system prompt, which must stay byte-identical across
+        # turns for prompt caching to actually cache anything.
+        capability = (
+            "VISION-capable: attached images are visible to you, and you can call `see_image_from_sandbox` to view images in your sandbox."
+            if is_vision else
+            "NOT vision-capable: you cannot see images directly; download them to your sandbox and use `analyze_image`."
+        )
+        return f"""[Turn context — message timestamp: `{deps.message_ts}`, model: {model or "unknown"} ({capability})]
+
 """
 
     def toolsets(self, deps: Any) -> list[Any]:

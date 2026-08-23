@@ -2,6 +2,9 @@ slack-sdk==3.42.0
 slack-bolt>=1.28.0
 slack-cli-hooks<1.0.0
 pydantic-ai[openai,anthropic,groq,openrouter]
+pydantic-ai-skills
+fastapi
+uvicorn
 python-dotenv==1.2.2
 requests
 e2b-code-interpreter

@@ -26,8 +26,21 @@ class PlatformAdapter(Protocol):
         """Attribute a message using the platform's native identity format."""
         ...
 
-    def build_context_prompt(self, deps: Any, model: str, is_vision: bool) -> str:
-        """Build the platform context appended to the system prompt."""
+    def build_context_prompt(self, deps: Any) -> str:
+        """Build the platform context appended to the system prompt.
+
+        Only stable-per-thread facts belong here (channel/thread/user ids) —
+        this text becomes part of the cached system-prompt prefix, so anything
+        that changes turn to turn (see build_turn_context) would silently
+        break prompt caching for every turn of the conversation.
+        """
+        ...
+
+    def build_turn_context(self, deps: Any, model: str, is_vision: bool) -> str:
+        """Build the per-turn context (message id, current model/capability)
+        prepended to the user prompt instead of the system prompt, since it
+        changes on every turn and must not sit inside the cached prefix.
+        """
         ...
 
     def toolsets(self, deps: Any) -> list[Any]:

@@ -1787,7 +1787,12 @@ def run_agent(text, deps, message_history=None, images=None):
         first_model = ""
     is_vision = _is_vision_capable(first_model)
 
-    context_info = platform.build_context_prompt(deps, first_model, is_vision)
+    # Everything folded into full_prompt (the Agent's system_prompt) must be
+    # byte-identical across every turn of a thread, or providers can never
+    # build a cached prefix past it. build_context_prompt is thread-stable by
+    # design; the per-turn bits (message_ts, current model/capability) go into
+    # the user prompt instead, via build_turn_context below.
+    context_info = platform.build_context_prompt(deps)
     full_prompt = platform.system_prompt + context_info
     if custom_instructions:
         full_prompt += f"\n\n## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n"
@@ -1819,10 +1824,13 @@ def run_agent(text, deps, message_history=None, images=None):
         )
     )
 
-    user_prompt: str | list = text
+    turn_context = platform.build_turn_context(deps, first_model, is_vision)
+    text_with_turn_context = turn_context + text
+
+    user_prompt: str | list = text_with_turn_context
     if images and is_vision:
         user_prompt = [
-            text,
+            text_with_turn_context,
             *[
                 BinaryContent(
                     data=img["data"],
@@ -1839,6 +1847,17 @@ def run_agent(text, deps, message_history=None, images=None):
         message_history=message_history,
         toolsets=toolsets,
         capabilities=capabilities,
+        # anthropic_* settings are ignored by every other provider (they're
+        # namespaced precisely so they can always be passed — see
+        # AnthropicModelSettings). pydantic_ai does not enable Anthropic
+        # prompt caching by default; this opts in to caching the system
+        # prompt, tool definitions, and (via anthropic_cache) the growing
+        # message history as the conversation continues.
+        model_settings={
+            "anthropic_cache_instructions": True,
+            "anthropic_cache_tool_definitions": True,
+            "anthropic_cache": True,
+        },
     )
 
     try:
