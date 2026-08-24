@@ -52,8 +52,7 @@ def handle_app_mentioned(
         from agent.policy_consent import ensure_consent
         if not ensure_consent(
             client, say, user_id=user_id, channel_id=channel_id, thread_ts=thread_ts,
-            message_ts=event["ts"], text=text, user_token=context.user_token,
-            files=event.get("files"),
+            message_ts=event["ts"],
         ):
             return
 

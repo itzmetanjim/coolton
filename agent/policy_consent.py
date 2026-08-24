@@ -101,15 +101,15 @@ def clear_pending_for_user(user_id: str) -> None:
 
 
 def ensure_consent(
-    client, say, *, user_id: str, channel_id: str, thread_ts: str,
-    message_ts: str, text: str, user_token, files=None,
+    client, say, *, user_id: str, channel_id: str, thread_ts: str, message_ts: str,
 ) -> bool:
     """Check/record policy consent for an incoming message; prompt to opt in if needed.
 
     Shared by the message and app_mention handlers so the opt-in flow can't drift
     between them. Returns True if the caller should proceed handling the message,
     False if an opt-in prompt was sent instead (the caller must return without
-    processing).
+    processing). Opting in does not replay the message that triggered the prompt —
+    the user just gets a confirmation and can ask again (see handle_policy_opt_in).
     """
     if user_is_in_policy_channel(client, user_id):
         record_consent(user_id, joined_policy_channel=True)
@@ -118,9 +118,7 @@ def ensure_consent(
         return True
     pending_id = save_pending({
         "user_id": user_id, "channel_id": channel_id, "thread_ts": thread_ts,
-        "message_ts": message_ts, "text": text,
-        "user_token": user_token if isinstance(user_token, str) else None,
-        "files": files,
+        "message_ts": message_ts,
     })
     say(text="you need to opt in to the Coolton policy:",
         blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts)
