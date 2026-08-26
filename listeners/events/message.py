@@ -7,7 +7,9 @@ from logging import Logger
 from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
+from agent.active_runs import is_run_active
 from agent.leave_thread_store import is_thread_engaged
+from agent.steering_store import queue_steering_message
 from agent.stop_store import request_stop
 from thread_context import conversation_store
 from listeners.events.turn import run_agent_turn
@@ -120,6 +122,18 @@ def handle_message(
         client, say, user_id=user_id, channel_id=channel_id, thread_ts=thread_ts,
         message_ts=event["ts"],
     ):
+        return
+
+    # coolton is already working in this thread — steer the run already in
+    # flight instead of racing a second one alongside it. See
+    # agent/steering_store.py + plan_block.after_tool for how the running
+    # turn picks this up.
+    if is_run_active(channel_id, thread_ts):
+        queue_steering_message(channel_id, thread_ts, text, user_id)
+        try:
+            client.reactions_add(channel=channel_id, timestamp=event["ts"], name="white_check_mark")
+        except Exception:
+            logger.exception("Failed to react to steering message")
         return
 
     try:

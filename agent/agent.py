@@ -1884,7 +1884,14 @@ def run_agent(text, deps, message_history=None, images=None):
     except HaltRun as e:
         deps.should_skip = True
         deps.halt_reason = str(e)
-        return _SkipResult(message_history)
+        # !stop sets deps.halted_messages to a snapshot of everything up to
+        # the halt (see plan_block.before_tool) — use that so the thread
+        # doesn't lose the message that triggered this turn (and any tool
+        # round-trips already completed) when the run gets cut off. skip()
+        # never sets it, so that path keeps reverting to the pre-turn history,
+        # which is correct there (a skipped turn has zero side effects).
+        history = deps.halted_messages if deps.halted_messages is not None else message_history
+        return _SkipResult(history)
 
 
 def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):

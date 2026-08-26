@@ -270,3 +270,41 @@ def test_no_tag_directive_leaves_provider_tag_filter_none(mocks):
 
     deps_used = turn.run_agent.call_args.args[1]
     assert deps_used.provider_tag_filter is None
+
+
+def test_thread_is_marked_active_during_run_and_inactive_after(mocks):
+    from agent.active_runs import is_run_active
+
+    seen_active_mid_run = {}
+
+    def fake_run_agent(text, deps, **kwargs):
+        seen_active_mid_run["value"] = is_run_active("C1", "1.1")
+        return SimpleNamespace(output="Here is the answer.", all_messages=lambda: ["msg1"])
+
+    turn.run_agent.side_effect = fake_run_agent
+
+    _run_turn(mocks)
+
+    assert seen_active_mid_run["value"] is True
+    assert is_run_active("C1", "1.1") is False
+
+
+def test_thread_marked_inactive_even_when_run_raises(mocks):
+    from agent.active_runs import is_run_active
+
+    turn.run_agent.side_effect = RuntimeError("boom")
+
+    _run_turn(mocks)
+
+    assert is_run_active("C1", "1.1") is False
+
+
+def test_steering_queue_cleared_when_run_finishes(mocks):
+    from agent.steering_store import clear_steering_messages, peek_steering_messages, queue_steering_message
+
+    queue_steering_message("C1", "1.1", "leftover", "U9")
+    try:
+        _run_turn(mocks)
+        assert peek_steering_messages("C1", "1.1") == []
+    finally:
+        clear_steering_messages("C1", "1.1")
