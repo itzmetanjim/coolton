@@ -36,8 +36,10 @@ date
 sudo apt-get update; echo "UPDATE_RC=$?"
 sudo apt-get install -y --no-install-recommends \
     git curl ca-certificates build-essential python3 python3-pip python3-venv \
-    python3-dev nodejs npm jq unzip gnupg lsb-release \
+    python3-dev jq unzip gnupg lsb-release \
     neovim less ripgrep tmux zip; echo "APT_BASE_RC=$?"
+# nodejs/npm come from NodeSource below, not apt (trixie's apt nodejs lags behind
+# what current tooling needs — e.g. Wrangler requires Node >=22, apt's was 20.x).
 
 # --- editor / search niceties (tolerant; don't fail the build if one is unavailable) ---
 sudo apt-get install -y --no-install-recommends ripgrep neovim 2>&1 | tail -3 || true
@@ -55,6 +57,26 @@ if [ -n "$GH_VERSION" ]; then
   rm -rf /tmp/gh.tgz "/tmp/gh_${GH_VERSION}_linux_${ARCH}"
 fi
 gh --version | head -1 || echo "GH_INSTALL_FAILED"
+
+# --- Node.js (latest current release via NodeSource, not apt — see note above) ---
+curl -fsSL https://deb.nodesource.com/setup_current.x | sudo -E bash -; echo "NODESOURCE_RC=$?"
+sudo apt-get install -y nodejs; echo "NODE_INSTALL_RC=$?"
+node --version || echo "NODE_INSTALL_FAILED"
+npm --version || echo "NPM_INSTALL_FAILED"
+
+# --- Bun (latest, official installer; not packaged by apt at all) ---
+curl -fsSL https://bun.sh/install | bash; echo "BUN_INSTALL_RC=$?"
+sudo cp /home/user/.bun/bin/bun /usr/local/bin/bun 2>/dev/null || true
+sudo chmod +x /usr/local/bin/bun 2>/dev/null || true
+bun --version || echo "BUN_INSTALL_FAILED"
+
+# --- uv (fast Python package/version manager; lets the agent fetch any current
+#     CPython on demand instead of being pinned to whatever Debian ships) ---
+curl -fsSL https://astral.sh/uv/install.sh | sh; echo "UV_INSTALL_RC=$?"
+sudo cp /home/user/.local/bin/uv /usr/local/bin/uv 2>/dev/null || true
+sudo cp /home/user/.local/bin/uvx /usr/local/bin/uvx 2>/dev/null || true
+uv --version || echo "UV_INSTALL_FAILED"
+sudo pip3 install -q --break-system-packages --upgrade pip 2>&1 | tail -2 || echo "PIP_UPGRADE_FAILED"
 
 # --- git identity (no real token stored in the image) ---
 git config --global user.name "coolton-agent"
@@ -77,7 +99,7 @@ git remote set-url origin __COOLTON_REPO__ 2>/dev/null || true
 python3 -m venv .venv 2>/dev/null || true
 if [ -f requirements.txt ] && [ -x ./.venv/bin/pip ]; then ./.venv/bin/pip install -q -r requirements.txt 2>/dev/null || true; fi
 
-echo "provision done: $(git --version) | $(gh --version 2>/dev/null | head -1) | $(node --version 2>&1) | $(python3 --version 2>&1)"
+echo "provision done: $(git --version) | $(gh --version 2>/dev/null | head -1) | node $(node --version 2>&1) | npm $(npm --version 2>&1) | bun $(bun --version 2>&1) | python3 $(python3 --version 2>&1) | uv $(uv --version 2>&1)"
 true
 """.replace("__COOLTON_REPO__", COOLTON_REPO)
 
