@@ -179,7 +179,7 @@ def test_streaming_failure_falls_back_to_chat_post_message(mocks):
 
     posts = mocks.client.chat_postMessage.call_args_list
     assert posts
-    texts = [c.kwargs["text"] for c in posts if "text" in c.kwargs]
+    texts = [c.kwargs["markdown_text"] for c in posts if "markdown_text" in c.kwargs]
     assert texts == ["Here is the answer."]
     assert any("blocks" in c.kwargs for c in posts)
 
@@ -192,7 +192,7 @@ def test_streaming_stop_failure_falls_back_to_chat_post_message(mocks):
 
     mocks.say.assert_not_called()
     pb.complete_plan_message.assert_called_once()
-    texts = [c.kwargs["text"] for c in mocks.client.chat_postMessage.call_args_list if "text" in c.kwargs]
+    texts = [c.kwargs["markdown_text"] for c in mocks.client.chat_postMessage.call_args_list if "markdown_text" in c.kwargs]
     assert texts == ["Here is the answer."]
 
 

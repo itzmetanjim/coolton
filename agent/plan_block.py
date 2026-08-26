@@ -315,6 +315,33 @@ def build_plan_hooks():
     @hooks.on.after_model_request
     async def after_model(ctx, *, request_context, response):
         deps = ctx.deps
+        # A response that still has tool calls attached isn't the final answer —
+        # any text alongside those calls is the model's own mid-turn status
+        # narration (see the STATUS UPDATES system prompt section), so post it
+        # as a real thread message right away instead of holding it until the
+        # turn ends. A text-only response (no tool calls) is always the final
+        # answer, which run_agent_turn posts separately — never repost that here.
+        has_tool_calls = any(
+            getattr(part, "part_kind", None) == "tool-call" for part in response.parts
+        )
+        if has_tool_calls:
+            status_text = "\n\n".join(
+                part.content
+                for part in response.parts
+                if getattr(part, "part_kind", None) == "text" and getattr(part, "content", None)
+            ).strip()
+            if status_text:
+                redacted = _redact(status_text, context="status update")
+                logger.info("STATUS      | %s", _truncate(redacted, 500))
+                try:
+                    deps.client.chat_postMessage(
+                        channel=deps.channel_id,
+                        thread_ts=deps.thread_ts,
+                        markdown_text=redacted,
+                    )
+                except Exception as e:
+                    _log_slack_error("Failed to post status update", e)
+
         if not deps.plan_ts:
             return response
         thinking_text = "\n\n".join(

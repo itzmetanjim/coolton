@@ -60,9 +60,15 @@ def _post_fallback_response(
     *, client: WebClient, logger: Logger, channel_id: str, thread_ts: str,
     output: str, feedback_blocks,
 ) -> None:
-    """Deliver a response with regular chat.postMessage when streaming fails."""
+    """Deliver a response with regular chat.postMessage when streaming fails.
+
+    Uses markdown_text (not text) so the model's GFM-style output (**bold**,
+    [links](url), etc.) actually renders — plain `text` is parsed as Slack's
+    own mrkdwn dialect, not standard Markdown, and would show literal
+    asterisks/brackets instead of formatting.
+    """
     for chunk in _chunk_text(output):
-        client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=chunk)
+        client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, markdown_text=chunk)
     try:
         client.chat_postMessage(
             channel=channel_id, thread_ts=thread_ts, blocks=feedback_blocks

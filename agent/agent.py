@@ -1380,7 +1380,7 @@ def send_message(ctx: RunContext[AgentDeps], text: str) -> str:
         ctx.deps.client.chat_postMessage(
             channel=ctx.deps.channel_id,
             thread_ts=ctx.deps.thread_ts,
-            text=_redact(text, context="send_message"),
+            markdown_text=_redact(text, context="send_message"),
         )
         return "Message sent."
     except Exception as e:
@@ -1404,7 +1404,7 @@ def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread
     if not text:
         return "Error: text is required — provide the message content."
     try:
-        kwargs = {"channel": channel, "text": _redact(text, context="chat_postMessage")}
+        kwargs = {"channel": channel, "markdown_text": _redact(text, context="chat_postMessage")}
         if thread_ts:
             kwargs["thread_ts"] = thread_ts
         kwargs = _inject_poster(kwargs, ctx.deps.user_id)
