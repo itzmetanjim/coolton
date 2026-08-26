@@ -102,6 +102,22 @@ def update_plan_message(deps) -> None:
         _log_slack_error("Failed to update plan message", e)
 
 
+def set_model_task(deps, model_used: str, status: str = "in_progress") -> None:
+    """Show which model is currently being tried, live — as soon as an attempt
+    starts, not just after the whole turn finishes (agent_dynamic.run_sync runs
+    the entire tool-calling loop synchronously, so waiting for it to return was
+    the only signal previously available). Reuses one fixed task id so a
+    provider fallback updates this same line instead of stacking a new one each
+    time, and keeps it first in the list (see build_plan_blocks ordering).
+    """
+    if not deps.plan_ts:
+        return
+    deps.plan_tasks.pop(_MODEL_TASK_ID, None)
+    task = {"task_id": _MODEL_TASK_ID, "title": f"Model: {model_used}", "status": status}
+    deps.plan_tasks = {_MODEL_TASK_ID: task, **deps.plan_tasks}
+    update_plan_message(deps)
+
+
 def set_plan_error(deps, error_text: str) -> None:
     if not deps.plan_ts:
         return
@@ -140,16 +156,17 @@ def finalize_plan_message(deps, result_text: str | None = None) -> None:
     for task in deps.plan_tasks.values():
         if task.get("status") == "in_progress":
             task["status"] = "complete"
-    if deps.model_used:
-        model_id = _make_task_id()
+    if deps.model_used and _MODEL_TASK_ID not in deps.plan_tasks:
+        # Fallback for a caller that never went through the live per-attempt
+        # update (see set_model_task) — still show the model, just late. The
+        # normal path already has this task (and just got flipped to
+        # "complete" above), so this doesn't stack a second model line.
         model_task = {
-            "task_id": model_id,
+            "task_id": _MODEL_TASK_ID,
             "title": f"Model: {deps.model_used}",
             "status": "complete",
         }
-        # Shown first, not appended at the end where it was decided (after every
-        # tool step) — the model choice reads as a header, not a trailing detail.
-        deps.plan_tasks = {model_id: model_task, **deps.plan_tasks}
+        deps.plan_tasks = {_MODEL_TASK_ID: model_task, **deps.plan_tasks}
     respond_id = _make_task_id()
     deps.plan_tasks[respond_id] = {
         "task_id": respond_id,
@@ -258,6 +275,7 @@ TOOL_DISPLAY_NAMES = {
 
 _task_counter = 0
 _DEFAULT_THINKING_ID = "task_thinking"
+_MODEL_TASK_ID = "task_model"
 
 
 def _make_task_id():

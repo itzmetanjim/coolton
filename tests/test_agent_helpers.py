@@ -624,3 +624,79 @@ def test_slack_api_call_as_bot_rejects_chat_post_message_without_channel(monkeyp
         result = slack_bot_api.slack_api_call_as_bot("chat.postMessage", {})
     assert "requires a 'channel'" in result
     post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _run_with_provider_chain — live model display in the plan block
+# ---------------------------------------------------------------------------
+
+
+def test_run_with_provider_chain_shows_model_before_run_sync_returns(monkeypatch, clean_env):
+    """The plan block used to only learn which model answered after the whole
+    turn (including every tool call) finished. It must now show the model as
+    soon as an attempt starts, i.e. before run_sync is even called."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_mod, "_resolve_provider_order",
+        lambda user_id, tag=None: [("anthropic", {"model": "anthropic:claude-sonnet-4-6", "api_key": "k"})],
+    )
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+
+    call_order = []
+    monkeypatch.setattr(
+        "agent.plan_block.set_model_task",
+        lambda deps, model_used, status="in_progress": call_order.append(("set_model_task", model_used)),
+    )
+
+    def fake_run_sync(**kwargs):
+        call_order.append(("run_sync", None))
+        return SimpleNamespace(output="ok")
+
+    fake_agent = SimpleNamespace(run_sync=fake_run_sync)
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1")
+
+    result, provider = agent_mod._run_with_provider_chain(fake_agent, {}, deps)
+
+    assert provider == "anthropic"
+    assert call_order == [
+        ("set_model_task", "anthropic / anthropic:claude-sonnet-4-6"),
+        ("run_sync", None),
+    ]
+    assert deps.model_used == "anthropic / anthropic:claude-sonnet-4-6"
+
+
+def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatch, clean_env):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_mod, "_resolve_provider_order",
+        lambda user_id, tag=None: [
+            ("hcai_0", {"model": "openai/gpt-5.6-luna", "api_key": "k"}),
+            ("anthropic", {"model": "anthropic:claude-sonnet-4-6", "api_key": "k"}),
+        ],
+    )
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.fallback_cache.mark_dead", lambda name, err: None)
+
+    shown_models = []
+    monkeypatch.setattr(
+        "agent.plan_block.set_model_task",
+        lambda deps, model_used, status="in_progress": shown_models.append(model_used),
+    )
+
+    calls = {"n": 0}
+
+    def fake_run_sync(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("401 unauthorized")  # hard error, no retry, falls to next provider
+        return SimpleNamespace(output="ok")
+
+    fake_agent = SimpleNamespace(run_sync=fake_run_sync)
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1")
+
+    result, provider = agent_mod._run_with_provider_chain(fake_agent, {}, deps)
+
+    assert provider == "anthropic"
+    assert shown_models == ["hcai_0 / openai/gpt-5.6-luna", "anthropic / anthropic:claude-sonnet-4-6"]
