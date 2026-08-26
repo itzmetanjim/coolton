@@ -271,6 +271,85 @@ def test_build_plan_hooks_tool_error_marks_error_and_reraises():
     assert deps.plan_tasks["task_abc123"]["status"] == "error"
 
 
+def test_build_plan_hooks_shows_reasoning_between_tool_calls():
+    from pydantic_ai.messages import ModelResponse, ThinkingPart, ToolCallPart
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100", plan_tasks={"task_thinking": {"task_id": "task_thinking", "title": "Thinking", "status": "in_progress"}})
+    ctx = SimpleNamespace(deps=deps)
+    response = ModelResponse(parts=[
+        ThinkingPart(content="I should search the web for this."),
+        ToolCallPart(tool_name="search_web_tool", args={"query": "x"}),
+    ])
+
+    async def run():
+        return await _hook(hooks, "after_model_request")(ctx, request_context=None, response=response)
+
+    result = asyncio.run(run())
+
+    assert result is response
+    assert "task_thinking" not in deps.plan_tasks
+    reasoning_tasks = [t for t in deps.plan_tasks.values() if t["title"] == "Reasoning"]
+    assert len(reasoning_tasks) == 1
+    task = reasoning_tasks[0]
+    assert task["status"] == "complete"
+    assert "I should search the web for this." in task["output"]["elements"][0]["elements"][0]["text"]
+
+
+def test_build_plan_hooks_ignores_response_with_no_thinking_part():
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100")
+    ctx = SimpleNamespace(deps=deps)
+    response = ModelResponse(parts=[TextPart(content="just a normal answer")])
+
+    async def run():
+        await _hook(hooks, "after_model_request")(ctx, request_context=None, response=response)
+
+    asyncio.run(run())
+    assert deps.plan_tasks == {}
+
+
+def test_build_plan_hooks_reasoning_noop_when_plan_ts_unset():
+    from pydantic_ai.messages import ModelResponse, ThinkingPart
+
+    hooks = build_plan_hooks()
+    deps = _deps()  # plan_ts None
+    ctx = SimpleNamespace(deps=deps)
+    response = ModelResponse(parts=[ThinkingPart(content="secret reasoning")])
+
+    async def run():
+        await _hook(hooks, "after_model_request")(ctx, request_context=None, response=response)
+
+    asyncio.run(run())
+    assert deps.plan_tasks == {}
+
+
+def test_build_plan_hooks_multiple_reasoning_rounds_do_not_overwrite():
+    """Each model round's reasoning gets its own task — the point is to show the
+    trace between every tool call, not just the latest one."""
+    from pydantic_ai.messages import ModelResponse, ThinkingPart, ToolCallPart
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100")
+    ctx = SimpleNamespace(deps=deps)
+
+    async def run():
+        await _hook(hooks, "after_model_request")(
+            ctx, request_context=None,
+            response=ModelResponse(parts=[ThinkingPart(content="round one"), ToolCallPart(tool_name="t", args={})]),
+        )
+        await _hook(hooks, "after_model_request")(
+            ctx, request_context=None,
+            response=ModelResponse(parts=[ThinkingPart(content="round two")]),
+        )
+
+    asyncio.run(run())
+    reasoning_titles = [t for t in deps.plan_tasks.values() if t["title"] == "Reasoning"]
+    assert len(reasoning_titles) == 2
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

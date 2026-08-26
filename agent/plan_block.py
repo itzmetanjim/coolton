@@ -312,6 +312,34 @@ def build_plan_hooks():
     """
     hooks = Hooks()
 
+    @hooks.on.after_model_request
+    async def after_model(ctx, *, request_context, response):
+        deps = ctx.deps
+        if not deps.plan_ts:
+            return response
+        thinking_text = "\n\n".join(
+            part.content
+            for part in response.parts
+            if getattr(part, "part_kind", None) == "thinking" and getattr(part, "content", None)
+        )
+        if not thinking_text.strip():
+            return response
+        logger.info(
+            "REASONING   | %s",
+            _truncate(_redact(thinking_text, context="model reasoning"), 1000),
+        )
+        if _DEFAULT_THINKING_ID in deps.plan_tasks:
+            del deps.plan_tasks[_DEFAULT_THINKING_ID]
+        task_id = _make_task_id()
+        deps.plan_tasks[task_id] = {
+            "task_id": task_id,
+            "title": "Reasoning",
+            "status": "complete",
+            "output": _rich_output(_redact(thinking_text, context="model reasoning"), 1500),
+        }
+        update_plan_message(deps)
+        return response
+
     @hooks.on.before_tool_execute
     async def before_tool(ctx, *, call, tool_def, args):
         deps = ctx.deps
