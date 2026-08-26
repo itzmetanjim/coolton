@@ -17,6 +17,7 @@ from agent.plan_block import (
     delete_plan_message,
     finalize_plan_message,
     send_plan_message,
+    set_model_task,
     set_plan_error,
     update_plan_message,
 )
@@ -142,6 +143,47 @@ def test_finalize_plan_message_shows_model_first():
     ordered_titles = [t["title"] for t in deps.plan_tasks.values()]
     assert ordered_titles[0] == "Model: anthropic / claude"
     assert ordered_titles[1:] == ["Thinking", "search_web", "Responding"]
+
+
+# ---------------------------------------------------------------------------
+# set_model_task — live, per-attempt model display
+# ---------------------------------------------------------------------------
+
+
+def test_set_model_task_noop_without_plan_ts():
+    deps = _deps(plan_ts=None)
+    set_model_task(deps, "hcai / gpt-5.6-luna")
+    assert deps.plan_tasks == {}
+    deps.client.chat_update.assert_not_called()
+
+
+def test_set_model_task_shows_model_immediately_first():
+    deps = _deps(plan_ts="100.100", plan_tasks={"task_thinking": {"task_id": "task_thinking", "title": "Thinking", "status": "in_progress"}})
+    set_model_task(deps, "hcai / gpt-5.6-luna")
+    ordered_titles = [t["title"] for t in deps.plan_tasks.values()]
+    assert ordered_titles[0] == "Model: hcai / gpt-5.6-luna"
+    assert deps.plan_tasks["task_model"]["status"] == "in_progress"
+    deps.client.chat_update.assert_called_once()
+
+
+def test_set_model_task_updates_in_place_on_fallback_instead_of_stacking():
+    deps = _deps(plan_ts="100.100", plan_tasks={})
+    set_model_task(deps, "hcai / gpt-5.6-luna")
+    set_model_task(deps, "openrouter_fb / glm-5.2")
+    titles = [t["title"] for t in deps.plan_tasks.values()]
+    assert titles == ["Model: openrouter_fb / glm-5.2"]
+
+
+def test_finalize_plan_message_does_not_duplicate_a_live_model_task():
+    """When set_model_task already ran (the normal path once a provider is
+    picked), finalize_plan_message must reuse that task, not add a second
+    "Model:" line."""
+    deps = _deps(plan_ts="100.100", model_used="hcai / gpt-5.6-luna", plan_tasks={})
+    set_model_task(deps, "hcai / gpt-5.6-luna")
+    finalize_plan_message(deps)
+    model_titles = [t["title"] for t in deps.plan_tasks.values() if t["title"].startswith("Model:")]
+    assert model_titles == ["Model: hcai / gpt-5.6-luna"]
+    assert deps.plan_tasks["task_model"]["status"] == "complete"
 
 
 def test_complete_plan_message_completes_responding():

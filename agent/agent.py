@@ -1895,6 +1895,7 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
     last-known-good provider first.
     """
     from agent.fallback_cache import set_working_provider, mark_dead
+    from agent.plan_block import set_model_task
 
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
     provider_order = _resolve_provider_order(deps.user_id, tag=deps.provider_tag_filter)
@@ -1950,10 +1951,15 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
 
     for provider_name, prov_config in provider_order:
         provider_max_retries = prov_config.get("max_retries", max_retries)
+        model_name = prov_config["model"]
+        # Shown live, before the attempt even starts — not just after the whole
+        # turn finishes (agent_dynamic.run_sync runs the entire tool-calling loop
+        # synchronously, so waiting for it to return was the only signal callers
+        # had before). Reused across retries of the same provider and updated
+        # again if it falls back to a different one.
+        set_model_task(deps, f"{provider_name} / {model_name}")
         for attempt in range(provider_max_retries):
             try:
-                model_name = prov_config["model"]
-
                 # Create model object if custom base_url (BYOK, HCAI)
                 model_obj = None
                 if prov_config.get("base_url"):
