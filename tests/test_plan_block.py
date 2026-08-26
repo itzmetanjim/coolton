@@ -326,6 +326,81 @@ def test_build_plan_hooks_reasoning_noop_when_plan_ts_unset():
     assert deps.plan_tasks == {}
 
 
+def test_build_plan_hooks_posts_status_update_alongside_tool_call():
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100")
+    ctx = SimpleNamespace(deps=deps)
+    response = ModelResponse(parts=[
+        TextPart(content="→ _checking the deploy logs for the last restart_"),
+        ToolCallPart(tool_name="search_web_tool", args={"query": "x"}),
+    ])
+
+    async def run():
+        return await _hook(hooks, "after_model_request")(ctx, request_context=None, response=response)
+
+    result = asyncio.run(run())
+
+    assert result is response
+    deps.client.chat_postMessage.assert_called_once()
+    kwargs = deps.client.chat_postMessage.call_args.kwargs
+    assert kwargs["channel"] == "C1"
+    assert kwargs["thread_ts"] == "1.1"
+    assert kwargs["markdown_text"] == "→ _checking the deploy logs for the last restart_"
+
+
+def test_build_plan_hooks_does_not_repost_final_answer_as_status():
+    """A response with no tool calls is the final answer, already posted by
+    run_agent_turn — must not be duplicated here."""
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100")
+    ctx = SimpleNamespace(deps=deps)
+    response = ModelResponse(parts=[TextPart(content="here's the final answer")])
+
+    async def run():
+        await _hook(hooks, "after_model_request")(ctx, request_context=None, response=response)
+
+    asyncio.run(run())
+    deps.client.chat_postMessage.assert_not_called()
+
+
+def test_build_plan_hooks_skips_status_post_when_tool_call_has_no_text():
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100")
+    ctx = SimpleNamespace(deps=deps)
+    response = ModelResponse(parts=[ToolCallPart(tool_name="t", args={})])
+
+    async def run():
+        await _hook(hooks, "after_model_request")(ctx, request_context=None, response=response)
+
+    asyncio.run(run())
+    deps.client.chat_postMessage.assert_not_called()
+
+
+def test_build_plan_hooks_status_post_survives_slack_error():
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100")
+    deps.client.chat_postMessage.side_effect = RuntimeError("boom")
+    ctx = SimpleNamespace(deps=deps)
+    response = ModelResponse(parts=[
+        TextPart(content="→ _trying again_"),
+        ToolCallPart(tool_name="t", args={}),
+    ])
+
+    async def run():
+        return await _hook(hooks, "after_model_request")(ctx, request_context=None, response=response)
+
+    result = asyncio.run(run())
+    assert result is response
+
+
 def test_build_plan_hooks_multiple_reasoning_rounds_do_not_overwrite():
     """Each model round's reasoning gets its own task — the point is to show the
     trace between every tool call, not just the latest one."""

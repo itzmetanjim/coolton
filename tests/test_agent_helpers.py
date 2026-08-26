@@ -543,7 +543,7 @@ def test_chat_post_message_sends_as_bot():
     result = agent_mod.chat_postMessage(_run_ctx(client), channel="U0B2VTYER33", text="hello")
     assert result == "Message sent."
     client.chat_postMessage.assert_called_once_with(
-        channel="U0B2VTYER33", text="hello"
+        channel="U0B2VTYER33", markdown_text="hello"
     )
 
 
@@ -554,7 +554,7 @@ def test_chat_post_message_includes_thread_ts_when_passed():
         _run_ctx(client), channel="C1", text="hi", thread_ts="1.2"
     )
     assert result == "Message sent."
-    client.chat_postMessage.assert_called_once_with(channel="C1", text="hi", thread_ts="1.2")
+    client.chat_postMessage.assert_called_once_with(channel="C1", markdown_text="hi", thread_ts="1.2")
 
 
 def test_chat_post_message_requires_channel_and_text():
