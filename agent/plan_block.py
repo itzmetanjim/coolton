@@ -2,6 +2,7 @@ import logging
 import time
 
 from agent.redact import redact as _redact
+from agent.steering_store import clear_steering_messages, peek_steering_messages
 from agent.stop_store import HaltRun, stop_requested_for
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,39 @@ def _log_slack_error(where: str, e: Exception) -> None:
     logger.warning(f"{where}: {e} | slack_error={code}")
 
 
+def _retrying(call, where: str, attempts: int = 3) -> None:
+    """Retry a terminal plan-block Slack call a couple of times before giving up.
+
+    Only used for the ONE-SHOT transitions (finalize/complete/error/delete) —
+    those never get called again, so if the call that flips the block out of
+    "in_progress" (or removes it) silently fails — a transient network blip,
+    or Slack briefly rate-limiting chat.update after the burst of live
+    updates a busy run produces — nothing else retries it and the "Thinking…"
+    spinner is stuck showing in_progress forever. The frequent mid-run
+    update_plan_message() calls don't need this: a missed one just means the
+    next hook's update catches the display up.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            call()
+            return
+        except Exception as e:
+            last_exc = e
+            if attempt < attempts - 1:
+                delay = 1.0 * (attempt + 1)
+                resp = getattr(e, "response", None)
+                headers = getattr(resp, "headers", None) if resp is not None else None
+                if headers:
+                    try:
+                        delay = min(float(headers.get("Retry-After", delay)), 5.0)
+                    except (TypeError, ValueError):
+                        pass
+                time.sleep(delay)
+    if last_exc is not None:
+        _log_slack_error(where, last_exc)
+
+
 def update_plan_message(deps) -> None:
     if not deps.plan_ts:
         return
@@ -132,15 +166,12 @@ def set_plan_error(deps, error_text: str) -> None:
         "output": _rich_output(_redact(error_text, context="plan error"), 300),
     }
     blocks = build_plan_blocks("Error", list(deps.plan_tasks.values()))
-    try:
-        deps.client.chat_update(
-            channel=deps.channel_id,
-            ts=deps.plan_ts,
-            blocks=blocks,
-            text="Something went wrong",
-        )
-    except Exception as e:
-        _log_slack_error("Failed to set plan error", e)
+    _retrying(
+        lambda: deps.client.chat_update(
+            channel=deps.channel_id, ts=deps.plan_ts, blocks=blocks, text="Something went wrong",
+        ),
+        "Failed to set plan error",
+    )
 
     deps.plan_ts = None
 
@@ -174,15 +205,12 @@ def finalize_plan_message(deps, result_text: str | None = None) -> None:
         "status": "in_progress",
     }
     blocks = build_plan_blocks("Responding", list(deps.plan_tasks.values()))
-    try:
-        deps.client.chat_update(
-            channel=deps.channel_id,
-            ts=deps.plan_ts,
-            blocks=blocks,
-            text="Responding",
-        )
-    except Exception as e:
-        _log_slack_error("Failed to finalize plan message", e)
+    _retrying(
+        lambda: deps.client.chat_update(
+            channel=deps.channel_id, ts=deps.plan_ts, blocks=blocks, text="Responding",
+        ),
+        "Failed to finalize plan message",
+    )
 
 
 def complete_plan_message(deps) -> None:
@@ -193,15 +221,12 @@ def complete_plan_message(deps) -> None:
         if task.get("status") == "in_progress":
             task["status"] = "complete"
     blocks = build_plan_blocks("Done", list(deps.plan_tasks.values()))
-    try:
-        deps.client.chat_update(
-            channel=deps.channel_id,
-            ts=deps.plan_ts,
-            blocks=blocks,
-            text="Done",
-        )
-    except Exception as e:
-        _log_slack_error("Failed to complete plan message", e)
+    _retrying(
+        lambda: deps.client.chat_update(
+            channel=deps.channel_id, ts=deps.plan_ts, blocks=blocks, text="Done",
+        ),
+        "Failed to complete plan message",
+    )
 
 
 def delete_plan_message(deps) -> None:
@@ -213,10 +238,10 @@ def delete_plan_message(deps) -> None:
     """
     if not deps.plan_ts:
         return
-    try:
-        deps.client.chat_delete(channel=deps.channel_id, ts=deps.plan_ts)
-    except Exception as e:
-        _log_slack_error("Failed to delete plan message", e)
+    _retrying(
+        lambda: deps.client.chat_delete(channel=deps.channel_id, ts=deps.plan_ts),
+        "Failed to delete plan message",
+    )
     deps.plan_ts = None
 
 
@@ -304,6 +329,26 @@ def _display_for_tool(tool_name: str) -> str:
     return tool_name.replace("_", " ").capitalize()
 
 
+def _messages_safe_for_resume(messages: list) -> list:
+    """Trim a mid-run message list down to something safe to hand back as
+    `message_history` for the NEXT turn.
+
+    `ctx.messages` at `before_tool_execute` time still ends with the
+    ModelResponse that's about to be executed — its ToolCallPart(s) have no
+    matching ToolReturnPart yet. Sending that dangling tool call back to the
+    model API on the next turn breaks it (every tool_use needs a paired
+    tool_result), so drop that trailing response; everything before it
+    (including the user's message that started this turn, and any earlier
+    tool round-trips this same turn already completed) is complete and safe
+    to keep.
+    """
+    if messages and getattr(messages[-1], "parts", None) and any(
+        getattr(part, "part_kind", None) == "tool-call" for part in messages[-1].parts
+    ):
+        return list(messages[:-1])
+    return list(messages)
+
+
 def build_plan_hooks():
     """Return a Hooks capability that tracks every tool call (local + MCP) in the plan.
 
@@ -377,6 +422,7 @@ def build_plan_hooks():
         )
         # If the user sent !stop in this thread after this run started, halt before the next tool.
         if stop_requested_for(deps.channel_id, deps.thread_ts, deps.run_started_at):
+            deps.halted_messages = _messages_safe_for_resume(ctx.messages)
             raise HaltRun("!stop requested")
         if not deps.plan_ts:
             return args
@@ -401,6 +447,25 @@ def build_plan_hooks():
             call.tool_name,
             _truncate(_redact(_pretty_args(result), context=f"tool output {call.tool_name}"), 1000),
         )
+
+        # A message sent into this thread while the run was already in flight
+        # (see listeners/events/message.py and app_mentioned.py) queues here
+        # instead of racing a whole separate turn. Fold it into the next tool
+        # result the model sees so it can steer without needing a new run —
+        # only clear the queue once it's actually embedded in a string result;
+        # a non-string result (e.g. structured MCP output) leaves it queued
+        # for the next tool call that can carry it.
+        steering = peek_steering_messages(deps.channel_id, deps.thread_ts)
+        if steering and isinstance(result, str):
+            notes = "\n\n".join(
+                "[New message from the user while you were working on this — "
+                "read it and factor it in now]: " + _redact(s["text"], context="steering message")
+                for s in steering
+            )
+            logger.info("STEERING    | %s", _truncate(notes, 500))
+            result = f"{result}\n\n{notes}"
+            clear_steering_messages(deps.channel_id, deps.thread_ts)
+
         if not deps.plan_ts:
             return result
         task_id = f"task_{call.tool_call_id}"

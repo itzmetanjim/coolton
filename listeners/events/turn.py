@@ -5,6 +5,7 @@ status set, deps built, plan message posted, agent run, response streamed,
 history persisted, kevinton spawned. This keeps that pipeline in one place.
 """
 
+import time
 from logging import Logger
 
 from slack_bolt import Say, SayStream
@@ -98,6 +99,8 @@ def run_agent_turn(
     error handling) and never propagate.
     """
     deps = None
+    from agent.active_runs import mark_run_finished, mark_run_started
+    mark_run_started(channel_id, thread_ts, time.time())
     try:
         from agent.provider_config import extract_tag_directive
         text, tag_filter, tag_error = extract_tag_directive(text)
@@ -201,3 +204,12 @@ def run_agent_turn(
             text=f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})",
             thread_ts=thread_ts,
         )
+    finally:
+        # Whatever happened, this thread is no longer "actively running" —
+        # any message.py/app_mentioned.py check from here on should start a
+        # fresh turn rather than queuing as a steer for a run that's over.
+        # Anything left unconsumed in the steering queue belongs to this run
+        # and must not leak into a future, unrelated one.
+        mark_run_finished(channel_id, thread_ts)
+        from agent.steering_store import clear_steering_messages
+        clear_steering_messages(channel_id, thread_ts)

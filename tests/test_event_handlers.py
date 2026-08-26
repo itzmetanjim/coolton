@@ -188,6 +188,32 @@ def test_message_ignores_hashtag_prefix(ctx):
         run_turn.assert_not_called()
 
 
+def test_message_steers_into_active_run_instead_of_starting_a_new_one(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_run_active", return_value=True), \
+         patch("listeners.events.message.queue_steering_message") as queue_steering:
+        _msg(ctx, channel_type="im", text="also check the other thing")
+
+        run_turn.assert_not_called()
+        queue_steering.assert_called_once_with("C123", "111.111", "also check the other thing", "U1")
+        ctx.client.reactions_add.assert_called_once_with(
+            channel="C123", timestamp="111.111", name="white_check_mark"
+        )
+
+
+def test_message_does_not_steer_when_no_run_is_active(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_run_active", return_value=False):
+        _msg(ctx, channel_type="im")
+
+        run_turn.assert_called_once()
+        ctx.client.reactions_add.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # handle_app_mentioned
 # ---------------------------------------------------------------------------
@@ -232,6 +258,35 @@ def test_app_mentioned_starter_mention_joins_thread(ctx):
         _mention(ctx, text="<@BOT1> hi", ts="1.1", thread_ts="1.1")
         join_thread.assert_called_once_with("C123", "1.1")
         run_turn.assert_called_once()
+
+
+def test_app_mentioned_steers_into_active_run_instead_of_starting_a_new_one(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.ensure_coolton_user_in_channel"), \
+         patch("listeners.events.app_mentioned.is_run_active", return_value=True), \
+         patch("listeners.events.app_mentioned.queue_steering_message") as queue_steering:
+        _mention(ctx, text="<@BOT1> also check the other thing", ts="1.1", thread_ts="1.1")
+
+        run_turn.assert_not_called()
+        queue_steering.assert_called_once_with("C123", "1.1", "<@BOT1> also check the other thing", "U1")
+        ctx.client.reactions_add.assert_called_once_with(
+            channel="C123", timestamp="1.1", name="white_check_mark"
+        )
+
+
+def test_app_mentioned_does_not_steer_when_no_run_is_active(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.ensure_coolton_user_in_channel"), \
+         patch("listeners.events.app_mentioned.join_thread"), \
+         patch("listeners.events.app_mentioned.is_run_active", return_value=False):
+        _mention(ctx, text="<@BOT1> hi", ts="1.1", thread_ts="1.1")
+
+        run_turn.assert_called_once()
+        ctx.client.reactions_add.assert_not_called()
 
 
 def test_app_mentioned_mid_thread_mention_does_not_join(ctx):

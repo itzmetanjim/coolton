@@ -7,7 +7,9 @@ import pytest
 from agent.plan_block import (
     _combined_io,
     _display_for_tool,
+    _messages_safe_for_resume,
     _pretty_args,
+    _retrying,
     _rich_output,
     _truncate,
     build_plan_blocks,
@@ -207,6 +209,90 @@ def test_delete_plan_message_noop_without_plan_ts():
 
 
 # ---------------------------------------------------------------------------
+# _retrying — terminal plan-block transitions must not strand the spinner on
+# a transient Slack failure (chat_update rate-limited by the burst of live
+# updates a busy run produces, a network blip, etc).
+# ---------------------------------------------------------------------------
+
+
+def test_retrying_succeeds_first_try_without_sleeping(monkeypatch):
+    import agent.plan_block as pb
+    sleep = Mock()
+    monkeypatch.setattr(pb.time, "sleep", sleep)
+
+    call = Mock()
+    _retrying(call, "somewhere")
+
+    call.assert_called_once()
+    sleep.assert_not_called()
+
+
+def test_retrying_recovers_after_a_transient_failure(monkeypatch):
+    import agent.plan_block as pb
+    monkeypatch.setattr(pb.time, "sleep", Mock())
+
+    call = Mock(side_effect=[RuntimeError("boom"), None])
+    _retrying(call, "somewhere")
+
+    assert call.call_count == 2
+
+
+def test_retrying_gives_up_after_exhausting_attempts_without_raising(monkeypatch):
+    import agent.plan_block as pb
+    monkeypatch.setattr(pb.time, "sleep", Mock())
+
+    call = Mock(side_effect=RuntimeError("boom"))
+    _retrying(call, "somewhere", attempts=3)
+
+    assert call.call_count == 3
+
+
+def test_retrying_respects_retry_after_header(monkeypatch):
+    import agent.plan_block as pb
+    sleep = Mock()
+    monkeypatch.setattr(pb.time, "sleep", sleep)
+
+    err = RuntimeError("rate limited")
+    err.response = SimpleNamespace(headers={"Retry-After": "2"})
+    call = Mock(side_effect=[err, None])
+    _retrying(call, "somewhere")
+
+    sleep.assert_called_once_with(2.0)
+
+
+def test_set_plan_error_retries_chat_update_on_failure(monkeypatch):
+    monkeypatch.setattr("agent.plan_block.time.sleep", Mock())
+    deps = _deps(plan_ts="100.100")
+    deps.client.chat_update.side_effect = [RuntimeError("boom"), None]
+
+    set_plan_error(deps, "oh no")
+
+    assert deps.client.chat_update.call_count == 2
+    assert deps.plan_ts is None
+
+
+def test_complete_plan_message_retries_chat_update_on_failure(monkeypatch):
+    monkeypatch.setattr("agent.plan_block.time.sleep", Mock())
+    deps = _deps(plan_ts="100.100")
+    deps.client.chat_update.side_effect = [RuntimeError("boom"), None]
+
+    complete_plan_message(deps)
+
+    assert deps.client.chat_update.call_count == 2
+
+
+def test_delete_plan_message_retries_chat_delete_on_failure(monkeypatch):
+    monkeypatch.setattr("agent.plan_block.time.sleep", Mock())
+    deps = _deps(plan_ts="100.100")
+    deps.client.chat_delete.side_effect = [RuntimeError("boom"), None]
+
+    delete_plan_message(deps)
+
+    assert deps.client.chat_delete.call_count == 2
+    assert deps.plan_ts is None
+
+
+# ---------------------------------------------------------------------------
 # Hooks
 # ---------------------------------------------------------------------------
 
@@ -235,6 +321,95 @@ def test_build_plan_hooks_tracks_tool_lifecycle():
     task = deps.plan_tasks["task_abc123"]
     assert task["status"] == "complete"
     assert "fetched" in task["output"]["elements"][0]["elements"][0]["text"]
+
+
+def test_build_plan_hooks_folds_steering_message_into_next_tool_result():
+    from agent.steering_store import clear_steering_messages, queue_steering_message
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100", channel_id="STEER1", thread_ts="1.1")
+    ctx = SimpleNamespace(deps=deps)
+    call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
+    queue_steering_message("STEER1", "1.1", "also check the other thing", "U9")
+
+    async def run():
+        return await _hook(hooks, "after_tool_execute")(
+            ctx, call=call, tool_def=None, args={}, result="fetched"
+        )
+
+    try:
+        result = asyncio.run(run())
+    finally:
+        clear_steering_messages("STEER1", "1.1")
+
+    assert "fetched" in result
+    assert "also check the other thing" in result
+
+
+def test_build_plan_hooks_clears_steering_queue_once_delivered():
+    from agent.steering_store import (
+        clear_steering_messages,
+        peek_steering_messages,
+        queue_steering_message,
+    )
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100", channel_id="STEER2", thread_ts="1.1")
+    ctx = SimpleNamespace(deps=deps)
+    call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
+    queue_steering_message("STEER2", "1.1", "hey", "U9")
+
+    async def run():
+        await _hook(hooks, "after_tool_execute")(
+            ctx, call=call, tool_def=None, args={}, result="fetched"
+        )
+
+    try:
+        asyncio.run(run())
+        assert peek_steering_messages("STEER2", "1.1") == []
+    finally:
+        clear_steering_messages("STEER2", "1.1")
+
+
+def test_build_plan_hooks_leaves_steering_queued_when_result_is_not_a_string():
+    from agent.steering_store import (
+        clear_steering_messages,
+        peek_steering_messages,
+        queue_steering_message,
+    )
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100", channel_id="STEER3", thread_ts="1.1")
+    ctx = SimpleNamespace(deps=deps)
+    call = SimpleNamespace(tool_name="some_tool", tool_call_id="abc123")
+    queue_steering_message("STEER3", "1.1", "hey", "U9")
+
+    async def run():
+        return await _hook(hooks, "after_tool_execute")(
+            ctx, call=call, tool_def=None, args={}, result={"structured": True}
+        )
+
+    try:
+        result = asyncio.run(run())
+        assert result == {"structured": True}
+        assert len(peek_steering_messages("STEER3", "1.1")) == 1
+    finally:
+        clear_steering_messages("STEER3", "1.1")
+
+
+def test_build_plan_hooks_no_steering_queued_leaves_result_untouched():
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100", channel_id="STEER4", thread_ts="1.1")
+    ctx = SimpleNamespace(deps=deps)
+    call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
+
+    async def run():
+        return await _hook(hooks, "after_tool_execute")(
+            ctx, call=call, tool_def=None, args={}, result="fetched"
+        )
+
+    result = asyncio.run(run())
+    assert result == "fetched"
 
 
 def test_build_plan_hooks_does_not_track_when_plan_ts_unset():
@@ -269,6 +444,55 @@ def test_build_plan_hooks_tool_error_marks_error_and_reraises():
 
     asyncio.run(run())
     assert deps.plan_tasks["task_abc123"]["status"] == "error"
+
+
+def test_before_tool_hook_snapshots_messages_and_halts_on_stop(monkeypatch):
+    from agent.stop_store import HaltRun
+    from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
+
+    monkeypatch.setattr("agent.plan_block.stop_requested_for", lambda *a, **k: True)
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100", run_started_at=0.0)
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content="do the thing")]),
+        ModelResponse(parts=[ToolCallPart(tool_name="fetch_url_tool", args={})]),
+    ]
+    ctx = SimpleNamespace(deps=deps, messages=messages)
+    call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
+
+    async def run():
+        await _hook(hooks, "before_tool_execute")(ctx, call=call, tool_def=None, args={})
+
+    with pytest.raises(HaltRun, match="!stop"):
+        asyncio.run(run())
+
+    # The dangling tool call (no matching ToolReturnPart) is dropped; the
+    # user's message that started this turn is kept.
+    assert deps.halted_messages == messages[:1]
+
+
+def test_messages_safe_for_resume_drops_trailing_pending_tool_call():
+    from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
+
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content="hi")]),
+        ModelResponse(parts=[ToolCallPart(tool_name="t", args={})]),
+    ]
+    assert _messages_safe_for_resume(messages) == messages[:1]
+
+
+def test_messages_safe_for_resume_keeps_completed_history_untouched():
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content="hi")]),
+        ModelResponse(parts=[TextPart(content="done")]),
+    ]
+    assert _messages_safe_for_resume(messages) == messages
+
+
+def test_messages_safe_for_resume_handles_empty_list():
+    assert _messages_safe_for_resume([]) == []
 
 
 def test_build_plan_hooks_shows_reasoning_between_tool_calls():
