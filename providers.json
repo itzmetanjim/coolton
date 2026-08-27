@@ -23,7 +23,6 @@
     {"provider": "google", "model": "google:gemma-4-31b-it", "display": "Gemma 4 31B", "context_window": 262144},
     {"provider": "groq", "model": "groq:openai/gpt-oss-120b", "display": "Groq GPT-OSS-120B", "context_window": 131072},
     {"provider": "google", "model": "google:gemini-3.1-flash-lite", "display": "Gemini 3.1 Flash-Lite", "context_window": 1048576},
-    {"provider": "groq", "model": "groq:qwen/qwen3-32b", "display": "Groq Qwen 3 32B", "context_window": 131072},
     {"provider": "groq", "model": "groq:openai/gpt-oss-20b", "display": "Groq GPT-OSS-20B", "context_window": 131072},
     {"provider": "mistral", "model": "mistral:mistral-large-2512", "display": "Mistral Large 2512", "context_window": 262144}
   ],

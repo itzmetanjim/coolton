@@ -259,7 +259,6 @@ def test_provider_order_groq_adds_groq_entries(monkeypatch, clean_env):
     assert "groq_0" in names
     assert "groq_1" in names
     assert "groq_2" in names
-    assert "groq_3" in names
 
 
 def test_provider_order_hcai_models(monkeypatch, clean_env):
