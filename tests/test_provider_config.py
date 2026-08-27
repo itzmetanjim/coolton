@@ -2,9 +2,9 @@ from agent import provider_config
 
 
 def test_get_all_tags_matches_providers_json():
-    # These three are the ones configured today (luna, glm5.2, ox-alpha) —
+    # These three are the ones configured today (luna, glm5.2, glm5.3-flash) —
     # update this if providers.json's tags are intentionally changed.
-    assert provider_config.get_all_tags() == ["glm5.2", "luna", "ox-alpha"]
+    assert provider_config.get_all_tags() == ["glm5.2", "glm5.3-flash", "luna"]
 
 
 def test_extract_tag_directive_no_directive_is_unchanged():
@@ -45,7 +45,7 @@ def test_extract_tag_directive_unknown_tag_returns_error():
     assert tag is None
     assert error is not None
     assert "bogus" in error
-    assert "luna" in error and "glm5.2" in error and "ox-alpha" in error
+    assert "luna" in error and "glm5.2" in error and "glm5.3-flash" in error
     assert r"\[!WITH:bogus]" in error
 
 

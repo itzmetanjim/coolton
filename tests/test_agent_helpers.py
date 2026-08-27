@@ -455,7 +455,7 @@ def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
     [
         ("ANTHROPIC_API_KEY", "anthropic:claude-sonnet-4-6"),
         ("OPENAI_API_KEY", "openai:gpt-4.1-mini"),
-        ("OPENROUTER_API_KEY_FALLBACK", "openrouter:stealth/ox-alpha"),
+        ("OPENROUTER_API_KEY_FALLBACK", "openrouter:z-ai/glm-5.3-flash"),
         ("GOOGLE_API_KEY", "google:gemma-4-31b-it"),
         ("GROQ_API_KEY", "groq:qwen/qwen3.6-27b"),
         ("MISTRAL_API_KEY", "mistral:mistral-large-2512"),
