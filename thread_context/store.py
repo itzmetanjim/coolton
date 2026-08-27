@@ -13,6 +13,32 @@ logger = logging.getLogger(__name__)
 ModelMessagesTypeAdapter = TypeAdapter(list[ModelMessage])
 
 
+def _is_valid_history(messages: list[ModelMessage]) -> bool:
+    """A stored history is only safe to resend if every tool call has exactly
+    one matching return and vice versa — every provider rejects a call with
+    no return (or a return with no call) as a 400, so one thread that somehow
+    ends up with an unpaired one would otherwise fail the exact same way on
+    every single future turn, burning a full provider-fallback retry each
+    time with no way to recover on its own. However the mismatch got there
+    (a bug in compaction, a crash mid-write, anything), catching it here
+    means one broken conversation degrades to "lost its memory" instead of
+    "permanently wedged."
+    """
+    call_ids: set[str] = set()
+    return_ids: set[str] = set()
+    for msg in messages:
+        for part in getattr(msg, "parts", []):
+            tool_call_id = getattr(part, "tool_call_id", None)
+            if not tool_call_id:
+                continue
+            part_kind = getattr(part, "part_kind", None)
+            if part_kind == "tool-call":
+                call_ids.add(tool_call_id)
+            elif part_kind == "tool-return":
+                return_ids.add(tool_call_id)
+    return call_ids == return_ids
+
+
 class ConversationStore:
     """Thread-safe, file-persisted conversation history store.
 
@@ -65,10 +91,21 @@ class ConversationStore:
                 snapshot = dict(self._store)
                 self._write_seq += 1
                 seq = self._write_seq
+            elif not _is_valid_history(entry["messages"]):
+                logger.error(
+                    "Discarding structurally invalid stored history for %s:%s "
+                    "(unpaired tool call/return) — this thread will start fresh "
+                    "instead of failing every turn identically.",
+                    channel_id, thread_ts,
+                )
+                del self._store[key]
+                snapshot = dict(self._store)
+                self._write_seq += 1
+                seq = self._write_seq
             else:
                 return entry["messages"]
 
-        # Persisting the expiry is done outside the lock (see set_history for why).
+        # Persisting the expiry/discard is done outside the lock (see set_history for why).
         self._write_snapshot(snapshot, seq)
         return None
 
@@ -148,7 +185,14 @@ class ConversationStore:
                         
                         # Deserialize the JSON dictionaries back into rich Pydantic AI objects
                         messages = ModelMessagesTypeAdapter.validate_python(entry["messages"])
-                        
+                        if not _is_valid_history(messages):
+                            logger.error(
+                                "Skipping structurally invalid stored history for %s "
+                                "(unpaired tool call/return) — this thread will start fresh.",
+                                key_str,
+                            )
+                            continue
+
                         self._store[key_tuple] = {
                             "messages": messages,
                             "timestamp": entry["timestamp"]
