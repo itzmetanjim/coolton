@@ -256,9 +256,10 @@ def test_provider_order_groq_adds_groq_entries(monkeypatch, clean_env):
     monkeypatch.setenv("GROQ_API_KEY", "k")
     order = agent_mod._build_provider_order(None)
     names = [name for name, _ in order]
-    assert "groq_0" in names
-    assert "groq_1" in names
-    assert "groq_2" in names
+    groq_names = [n for n in names if n.startswith("groq")]
+    # Exact set, not just "these three are present" — a regression that adds
+    # or removes a groq model in providers.json should fail this.
+    assert sorted(groq_names) == ["groq_0", "groq_1", "groq_2"]
 
 
 def test_provider_order_hcai_models(monkeypatch, clean_env):

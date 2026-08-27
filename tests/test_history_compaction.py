@@ -178,9 +178,13 @@ def test_compaction_budget_scales_with_context_window():
 
 
 def test_compaction_budget_applies_fractions():
+    # Pinned to concrete numbers (35% / 10% of 200,000), not re-derived from
+    # the same fraction constants the implementation uses — a test that
+    # recomputes its expectation from the code under test can't catch the
+    # fraction itself being wrong.
     threshold, tail = hc._compaction_budget(200_000)
-    assert threshold == int(200_000 * hc._COMPACTION_TRIGGER_FRACTION)
-    assert tail == int(200_000 * hc._KEEP_TAIL_FRACTION)
+    assert threshold == 70_000
+    assert tail == 20_000
 
 
 def test_compaction_budget_floors_a_tiny_context_window():
