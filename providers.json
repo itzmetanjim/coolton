@@ -20,6 +20,8 @@
     {"provider": "groq", "model": "groq:qwen/qwen3.6-27b", "display": "Groq Qwen 3.6 27B", "context_window": 131072},
     {"provider": "hcai", "model": "minimax/minimax-m2.7", "display": "HCAI MiniMax M2.7", "context_window": 204800},
     {"provider": "openrouter_fb", "model": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", "display": "OpenRouter Fallback Nemotron", "context_window": 262144},
+    {"provider": "hcai", "model": "openrouter/free", "display": "HCAI OpenRouter Free", "context_window": 200000},
+    {"provider": "openrouter_fb", "model": "openrouter:openrouter/free", "display": "OpenRouter Fallback Free", "context_window": 200000},
     {"provider": "google", "model": "google:gemma-4-31b-it", "display": "Gemma 4 31B", "context_window": 262144},
     {"provider": "groq", "model": "groq:openai/gpt-oss-120b", "display": "Groq GPT-OSS-120B", "context_window": 131072},
     {"provider": "google", "model": "google:gemini-3.1-flash-lite", "display": "Gemini 3.1 Flash-Lite", "context_window": 1048576},
