@@ -2,7 +2,14 @@ import json
 import threading
 from datetime import datetime, timezone
 
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 
 from thread_context.store import ConversationStore
 
@@ -105,6 +112,82 @@ def test_response_messages_roundtrip(tmp_path):
     loaded = store.get_history("C1", "1.1")
     assert loaded is not None
     assert loaded[0].parts[0].content == "the answer"
+
+
+# ---------------------------------------------------------------------------
+# One broken conversation must not stay broken forever — a stored history
+# with an unpaired tool call/return gets rejected by every provider on every
+# future turn (see agent/history_compaction.py's split-boundary fix for how
+# this could happen), so get_history()/_load_from_disk() discard it and let
+# the thread start fresh instead of failing identically forever.
+# ---------------------------------------------------------------------------
+
+
+def _paired_tool_round(call_id: str = "call_1") -> list:
+    return [
+        ModelResponse(parts=[ToolCallPart(tool_name="t", args={}, tool_call_id=call_id)]),
+        ModelRequest(parts=[ToolReturnPart(tool_name="t", content="ok", tool_call_id=call_id)]),
+    ]
+
+
+def test_valid_tool_call_return_pair_is_returned_normally(tmp_path):
+    store = ConversationStore(file_path=str(tmp_path / "conversations.json"))
+    store.set_history("C1", "1.1", _paired_tool_round())
+    assert store.get_history("C1", "1.1") is not None
+
+
+def test_orphaned_tool_return_is_discarded(tmp_path):
+    path = str(tmp_path / "conversations.json")
+    store = ConversationStore(file_path=path)
+    # A return with no matching call anywhere — exactly what the history
+    # compaction bug could produce by summarizing the call away.
+    broken = [ModelRequest(parts=[ToolReturnPart(tool_name="t", content="ok", tool_call_id="orphan")])]
+    store.set_history("C1", "1.1", broken)
+
+    assert store.get_history("C1", "1.1") is None
+    # Discarding persists — it's gone on disk too, not just this one read.
+    on_disk = json.loads(tmp_path.joinpath("conversations.json").read_text())
+    assert "C1:1.1" not in on_disk
+
+
+def test_dangling_tool_call_is_discarded(tmp_path):
+    store = ConversationStore(file_path=str(tmp_path / "conversations.json"))
+    # A call with no return anywhere — providers reject this just as hard.
+    broken = [ModelResponse(parts=[ToolCallPart(tool_name="t", args={}, tool_call_id="never_returned")])]
+    store.set_history("C1", "1.1", broken)
+
+    assert store.get_history("C1", "1.1") is None
+
+
+def test_thread_recovers_after_broken_history_is_discarded(tmp_path):
+    """The whole point: one broken conversation degrades to "lost its memory",
+    not "permanently wedged" — the thread must be usable again right away."""
+    store = ConversationStore(file_path=str(tmp_path / "conversations.json"))
+    broken = [ModelRequest(parts=[ToolReturnPart(tool_name="t", content="ok", tool_call_id="orphan")])]
+    store.set_history("C1", "1.1", broken)
+    assert store.get_history("C1", "1.1") is None
+
+    store.set_history("C1", "1.1", _history("fresh start"))
+    assert store.get_history("C1", "1.1") is not None
+
+
+def test_invalid_history_skipped_on_load_from_disk(tmp_path):
+    path = str(tmp_path / "conversations.json")
+    orphan_return = {
+        "parts": [{
+            "part_kind": "tool-return",
+            "tool_name": "t",
+            "content": "ok",
+            "tool_call_id": "orphan",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }],
+        "kind": "request",
+    }
+    data = {"C1:1.1": {"timestamp": datetime.now().timestamp(), "messages": [orphan_return]}}
+    tmp_path.joinpath("conversations.json").write_text(json.dumps(data))
+
+    store = ConversationStore(file_path=path)
+    assert store.get_history("C1", "1.1") is None
 
 
 def test_concurrent_set_history_across_channels_all_persist(tmp_path):
