@@ -12,6 +12,7 @@
     {"provider": "hcai", "model": "openai/gpt-5.6-luna", "display": "HCAI GPT-5.6 Luna", "tags": ["luna"], "context_window": 272000},
     {"provider": "hcai", "model": "z-ai/glm-5.3-flash", "display": "HCAI GLM-5.3 Flash", "tags": ["glm5.3-flash"], "context_window": 1048576},
     {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.3-flash", "display": "OpenRouter Fallback GLM-5.3 Flash", "tags": ["glm5.3-flash"], "context_window": 1048576},
+    {"provider": "hcai", "model": "deepseek/deepseek-v4-flash", "display": "HCAI DeepSeek V4 Flash", "context_window": 1310720},
     {"provider": "hcai", "model": "z-ai/glm-5.2:free", "display": "HCAI GLM-5.2 (free)", "tags": ["glm5.2"], "context_window": 1048576},
     {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.2:free", "display": "OpenRouter Fallback GLM-5.2 (free)", "tags": ["glm5.2"], "context_window": 1048576},
     {"provider": "anthropic", "model": "anthropic:claude-sonnet-4-6", "context_window": 200000},
