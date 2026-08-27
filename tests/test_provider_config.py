@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from agent import provider_config
 
 
@@ -61,3 +65,99 @@ def test_extract_tag_directive_only_first_live_directive_wins():
     assert tag == "luna"
     assert error is None
     assert "[!WITH:" not in text
+
+
+def test_every_configured_model_declares_a_context_window():
+    """history_compaction.py sizes its compaction budget off the smallest
+    reachable model's context_window — a model added without one silently
+    falls back to a generic default instead of actually protecting that
+    model's real limit."""
+    models = provider_config._get_models()
+    missing = [m["model"] for m in models if not m.get("context_window")]
+    assert missing == []
+
+
+# ---------------------------------------------------------------------------
+# get_min_context_window — isolated against a throwaway providers.json so
+# these don't depend on (or accidentally mutate expectations about) the real
+# one, or on which real provider env vars happen to be set.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def isolated_config(tmp_path):
+    def _write(data: dict):
+        path = tmp_path / "providers.json"
+        path.write_text(json.dumps(data))
+        provider_config._load_config(str(path))
+        return path
+
+    yield _write
+    provider_config._reset()
+
+
+def test_get_min_context_window_returns_the_smallest_reachable(isolated_config, monkeypatch):
+    isolated_config({
+        "providers": [
+            {"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"},
+            {"id": "p2", "api_url": None, "api_key_env_var_name": "P2_KEY"},
+        ],
+        "models": [
+            {"provider": "p1", "model": "m1", "context_window": 200_000},
+            {"provider": "p2", "model": "m2", "context_window": 100_000},
+        ],
+    })
+    monkeypatch.setenv("P1_KEY", "k")
+    monkeypatch.setenv("P2_KEY", "k")
+    assert provider_config.get_min_context_window() == 100_000
+
+
+def test_get_min_context_window_skips_unreachable_providers(isolated_config, monkeypatch):
+    isolated_config({
+        "providers": [
+            {"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"},
+            {"id": "p2", "api_url": None, "api_key_env_var_name": "P2_KEY"},
+        ],
+        "models": [
+            {"provider": "p1", "model": "m1", "context_window": 200_000},
+            {"provider": "p2", "model": "m2", "context_window": 100_000},
+        ],
+    })
+    monkeypatch.setenv("P1_KEY", "k")
+    monkeypatch.delenv("P2_KEY", raising=False)
+    # p2's smaller window doesn't count — its key isn't set, so it can't
+    # actually serve this turn.
+    assert provider_config.get_min_context_window() == 200_000
+
+
+def test_get_min_context_window_respects_tag_filter(isolated_config, monkeypatch):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [
+            {"provider": "p1", "model": "m1", "context_window": 200_000, "tags": ["luna"]},
+            {"provider": "p1", "model": "m2", "context_window": 50_000},
+        ],
+    })
+    monkeypatch.setenv("P1_KEY", "k")
+    assert provider_config.get_min_context_window(tag="luna") == 200_000
+
+
+def test_get_min_context_window_falls_back_to_default_when_nothing_reachable(isolated_config, monkeypatch):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [{"provider": "p1", "model": "m1", "context_window": 200_000}],
+    })
+    monkeypatch.delenv("P1_KEY", raising=False)
+    assert provider_config.get_min_context_window(default=99_000) == 99_000
+
+
+def test_get_min_context_window_ignores_models_missing_the_field(isolated_config, monkeypatch):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [
+            {"provider": "p1", "model": "m1"},
+            {"provider": "p1", "model": "m2", "context_window": 77_000},
+        ],
+    })
+    monkeypatch.setenv("P1_KEY", "k")
+    assert provider_config.get_min_context_window() == 77_000

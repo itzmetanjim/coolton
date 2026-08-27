@@ -62,6 +62,34 @@ def get_all_tags() -> list[str]:
     return sorted(tags)
 
 
+def get_min_context_window(tag: str | None = None, default: int = 128_000) -> int:
+    """Smallest declared `context_window` among models actually reachable for
+    this turn's provider fallback chain — same tag + env-var-present
+    filtering as build_provider_order, so a size derived from this always
+    fits whichever provider in the chain ends up serving the turn.
+
+    BYOK is deliberately excluded: a user's own endpoint is an unknown
+    quantity with no declared context_window. `default` is a conservative
+    floor used when nothing reachable declares one (missing data, or no
+    provider env vars set at all, e.g. in tests).
+    """
+    pmap = _provider_map()
+    windows: list[int] = []
+    for model_entry in _get_models():
+        if tag and tag not in (model_entry.get("tags") or []):
+            continue
+        pconf = pmap.get(model_entry["provider"])
+        if not pconf:
+            continue
+        env_var = pconf.get("api_key_env_var_name")
+        if not (env_var and os.environ.get(env_var)):
+            continue
+        window = model_entry.get("context_window")
+        if window:
+            windows.append(window)
+    return min(windows) if windows else default
+
+
 _TAG_DIRECTIVE_RE = re.compile(r"(\\)?\[!WITH:([^\]]*)\]")
 
 
