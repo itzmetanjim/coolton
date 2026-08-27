@@ -1,7 +1,14 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 
 from agent import history_compaction as hc
 
@@ -95,3 +102,75 @@ def test_render_for_summary_flattens_text_parts():
     rendered = hc._render_for_summary(messages)
     assert "user message 1" in rendered
     assert "assistant reply 1" in rendered
+
+
+# ---------------------------------------------------------------------------
+# _safe_split_index — a fixed message-count boundary can land between a tool
+# call and its return; every provider rejects sending the return without its
+# matching call ("No tool call found for function call output with call_id
+# ..."), which is exactly what a naive `messages[-KEEP_TAIL_MESSAGES:]` slice
+# could do to a thread that happened to be mid-tool-call at that offset.
+# ---------------------------------------------------------------------------
+
+
+def _tool_round(call_id: str):
+    """One tool call/return pair, as it actually appears in real history:
+    a ModelResponse with the call, then a ModelRequest with the return."""
+    return [
+        ModelResponse(parts=[ToolCallPart(tool_name="run_linux_command", args={}, tool_call_id=call_id)]),
+        ModelRequest(parts=[ToolReturnPart(tool_name="run_linux_command", content="ok", tool_call_id=call_id)]),
+    ]
+
+
+def _filler(n: int):
+    """n single-message filler entries (unlike _messages(), 1 message each —
+    lets a test land the tool_round at an exact index without parity games)."""
+    return [ModelResponse(parts=[TextPart(content=f"filler {i}")]) for i in range(n)]
+
+
+def _messages_with_tool_round_at_boundary():
+    """A history built so the naive `len - KEEP_TAIL_MESSAGES` boundary falls
+    exactly between a ToolCallPart and its ToolReturnPart."""
+    call_index = hc.COMPACTION_MESSAGE_THRESHOLD
+    messages = _filler(call_index) + _tool_round("call_1") + _filler(hc.KEEP_TAIL_MESSAGES - 1)
+    naive_split = len(messages) - hc.KEEP_TAIL_MESSAGES
+    assert naive_split - 1 == call_index  # sanity-check the construction itself
+    assert hc._has_pending_tool_call(messages[naive_split - 1])
+    return messages
+
+
+def test_safe_split_index_matches_naive_split_when_boundary_is_clean():
+    messages = _messages(40)
+    assert hc._safe_split_index(messages, hc.KEEP_TAIL_MESSAGES) == len(messages) - hc.KEEP_TAIL_MESSAGES
+
+
+def test_safe_split_index_pulls_a_split_tool_round_into_the_tail():
+    messages = _messages_with_tool_round_at_boundary()
+    naive_split = len(messages) - hc.KEEP_TAIL_MESSAGES
+
+    split = hc._safe_split_index(messages, hc.KEEP_TAIL_MESSAGES)
+
+    assert split == naive_split - 1
+    assert not hc._has_pending_tool_call(messages[split - 1])
+
+
+def test_maybe_compact_history_never_orphans_a_tool_return(monkeypatch):
+    messages = _messages_with_tool_round_at_boundary()
+    monkeypatch.setattr(hc, "_summarize", lambda transcript, deps: "dense summary text")
+
+    result = hc.maybe_compact_history(messages, _deps())
+
+    tail = result[1:]
+    call_ids_with_calls = {
+        p.tool_call_id
+        for m in tail if isinstance(m, ModelResponse)
+        for p in m.parts if isinstance(p, ToolCallPart)
+    }
+    call_ids_with_returns = {
+        p.tool_call_id
+        for m in tail if isinstance(m, ModelRequest)
+        for p in m.parts if isinstance(p, ToolReturnPart)
+    }
+    # Every return kept in the tail must have its call kept alongside it —
+    # never sent to a provider with the call summarized away.
+    assert call_ids_with_returns <= call_ids_with_calls

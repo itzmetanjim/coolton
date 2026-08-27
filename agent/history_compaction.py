@@ -74,6 +74,31 @@ def _summarize(transcript: str, deps) -> str:
     return "".join(p.content for p in response.parts if hasattr(p, "content"))
 
 
+def _has_pending_tool_call(message: ModelMessage) -> bool:
+    return any(
+        getattr(part, "part_kind", None) == "tool-call"
+        for part in getattr(message, "parts", [])
+    )
+
+
+def _safe_split_index(messages: list[ModelMessage], keep_tail: int) -> int:
+    """Find a head/tail split that never separates a tool call from its return.
+
+    A fixed message-count boundary can land right between a ModelResponse's
+    ToolCallPart(s) and the ModelRequest immediately after it carrying the
+    matching ToolReturnPart(s). Summarizing the call away while keeping the
+    return verbatim in the tail leaves an orphaned function_call_output with
+    no matching function_call — every provider rejects that on the next turn
+    ("No tool call found for function call output with call_id ..."). Walk
+    the boundary left past any ModelResponse that still has an unresolved
+    tool call sitting right at the candidate split point.
+    """
+    split = max(len(messages) - keep_tail, 0)
+    while split > 0 and _has_pending_tool_call(messages[split - 1]):
+        split -= 1
+    return split
+
+
 def maybe_compact_history(messages: list[ModelMessage], deps) -> list[ModelMessage]:
     """Return `messages` unchanged if short enough, otherwise a compacted list: one
     synthetic summary message covering everything before the tail, plus the tail
@@ -81,7 +106,8 @@ def maybe_compact_history(messages: list[ModelMessage], deps) -> list[ModelMessa
     if len(messages) <= COMPACTION_MESSAGE_THRESHOLD:
         return messages
 
-    head, tail = messages[:-KEEP_TAIL_MESSAGES], messages[-KEEP_TAIL_MESSAGES:]
+    split = _safe_split_index(messages, KEEP_TAIL_MESSAGES)
+    head, tail = messages[:split], messages[split:]
     transcript = _render_for_summary(head)
     if not transcript:
         return messages
