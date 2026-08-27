@@ -21,15 +21,44 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
 logger = logging.getLogger(__name__)
 
-# ModelMessage count (not conversation "turns" — tool calls/returns each add
-# their own message) that triggers a compaction pass.
-COMPACTION_MESSAGE_THRESHOLD = 60
-# Most recent messages kept verbatim after compaction, so near-term context
-# (the last few exchanges, in-flight tool results) survives untouched.
-KEEP_TAIL_MESSAGES = 20
+# Estimated-token threshold that triggers a compaction pass — NOT a
+# ModelMessage count. A message-count threshold treats a thread of 60 short
+# chat turns the same as 60 messages padded with a couple of huge tool
+# outputs; token size is what actually threatens to push real context out of
+# the model's window, so that's what this triggers on (see _estimate_tokens
+# for how it's approximated).
+COMPACTION_TOKEN_THRESHOLD = 40_000
+# Estimated tokens of the most recent messages kept verbatim after
+# compaction, so near-term context (the last few exchanges, in-flight tool
+# results) survives untouched.
+KEEP_TAIL_TOKENS = 12_000
+
+# Coolton's provider fallback chain spans several real tokenizers (Anthropic,
+# OpenAI-compatible, Groq, ...) with no single correct token count between
+# them. A chars/4 estimate is the standard rough heuristic for English text —
+# cheap, dependency-free, and provider-agnostic. This decides "is this thread
+# getting long", not anything billed, so it doesn't need to be exact.
+_CHARS_PER_TOKEN = 4
 
 _TRANSCRIPT_CHAR_LIMIT = 20000
 _PART_CHAR_LIMIT = 2000
+
+
+def _message_size_chars(message: ModelMessage) -> int:
+    """Rough character size of one message's content — including tool call
+    args, not just text/tool-return content, since a large `code_mode` script
+    or sandbox command is real context weight too."""
+    total = 0
+    for part in getattr(message, "parts", []):
+        for attr in ("content", "args"):
+            value = getattr(part, attr, None)
+            if value:
+                total += len(value) if isinstance(value, str) else len(str(value))
+    return total
+
+
+def _estimate_tokens(messages: list[ModelMessage]) -> int:
+    return sum(_message_size_chars(m) for m in messages) // _CHARS_PER_TOKEN
 
 
 def _render_for_summary(messages: list[ModelMessage]) -> str:
@@ -81,32 +110,44 @@ def _has_pending_tool_call(message: ModelMessage) -> bool:
     )
 
 
-def _safe_split_index(messages: list[ModelMessage], keep_tail: int) -> int:
-    """Find a head/tail split that never separates a tool call from its return.
+def _safe_split_index(messages: list[ModelMessage], keep_tail_tokens: int) -> int:
+    """Find a head/tail split that keeps roughly `keep_tail_tokens` of the most
+    recent messages verbatim, without ever separating a tool call from its
+    return.
 
-    A fixed message-count boundary can land right between a ModelResponse's
-    ToolCallPart(s) and the ModelRequest immediately after it carrying the
-    matching ToolReturnPart(s). Summarizing the call away while keeping the
-    return verbatim in the tail leaves an orphaned function_call_output with
-    no matching function_call — every provider rejects that on the next turn
-    ("No tool call found for function call output with call_id ..."). Walk
-    the boundary left past any ModelResponse that still has an unresolved
-    tool call sitting right at the candidate split point.
+    Walks backward from the end accumulating each message's estimated token
+    size until the tail budget is spent (always keeping at least the last
+    message, however large, so the tail is never empty). Landing that
+    boundary right between a ModelResponse's ToolCallPart(s) and the
+    ModelRequest immediately after it carrying the matching ToolReturnPart(s)
+    would leave an orphaned function_call_output with no matching
+    function_call — every provider rejects that on the next turn ("No tool
+    call found for function call output with call_id ..."). So after finding
+    the token-budget boundary, walk it further left past any ModelResponse
+    that still has an unresolved tool call sitting right at that point.
     """
-    split = max(len(messages) - keep_tail, 0)
+    tail_tokens = 0
+    split = len(messages)
+    while split > 0:
+        candidate_tokens = _message_size_chars(messages[split - 1]) // _CHARS_PER_TOKEN
+        if tail_tokens > 0 and tail_tokens + candidate_tokens > keep_tail_tokens:
+            break
+        tail_tokens += candidate_tokens
+        split -= 1
     while split > 0 and _has_pending_tool_call(messages[split - 1]):
         split -= 1
     return split
 
 
 def maybe_compact_history(messages: list[ModelMessage], deps) -> list[ModelMessage]:
-    """Return `messages` unchanged if short enough, otherwise a compacted list: one
+    """Return `messages` unchanged if small enough, otherwise a compacted list: one
     synthetic summary message covering everything before the tail, plus the tail
     kept verbatim. Never raises — falls back to the untouched history on any error."""
-    if len(messages) <= COMPACTION_MESSAGE_THRESHOLD:
+    total_tokens = _estimate_tokens(messages)
+    if total_tokens <= COMPACTION_TOKEN_THRESHOLD:
         return messages
 
-    split = _safe_split_index(messages, KEEP_TAIL_MESSAGES)
+    split = _safe_split_index(messages, KEEP_TAIL_TOKENS)
     head, tail = messages[:split], messages[split:]
     transcript = _render_for_summary(head)
     if not transcript:
@@ -133,7 +174,8 @@ def maybe_compact_history(messages: list[ModelMessage], deps) -> list[ModelMessa
         ]
     )
     logger.info(
-        "Compacted thread history: %d messages -> 1 summary + %d tail messages",
-        len(messages), len(tail),
+        "Compacted thread history: ~%d tokens (%d messages) -> 1 summary + "
+        "%d tail messages (~%d tokens)",
+        total_tokens, len(messages), len(tail), _estimate_tokens(tail),
     )
     return [summary_message, *tail]
