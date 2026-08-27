@@ -13,6 +13,7 @@
     {"provider": "hcai", "model": "z-ai/glm-5.3-flash", "display": "HCAI GLM-5.3 Flash", "tags": ["glm5.3-flash"], "context_window": 1048576},
     {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.3-flash", "display": "OpenRouter Fallback GLM-5.3 Flash", "tags": ["glm5.3-flash"], "context_window": 1048576},
     {"provider": "hcai", "model": "deepseek/deepseek-v4-flash", "display": "HCAI DeepSeek V4 Flash", "context_window": 1310720},
+    {"provider": "hcai", "model": "qwen/qwen3.8-flash", "display": "HCAI Qwen3.8 Flash", "context_window": 1000000},
     {"provider": "hcai", "model": "z-ai/glm-5.2:free", "display": "HCAI GLM-5.2 (free)", "tags": ["glm5.2"], "context_window": 1048576},
     {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.2:free", "display": "OpenRouter Fallback GLM-5.2 (free)", "tags": ["glm5.2"], "context_window": 1048576},
     {"provider": "anthropic", "model": "anthropic:claude-sonnet-4-6", "context_window": 200000},
