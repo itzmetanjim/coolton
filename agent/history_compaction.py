@@ -21,17 +21,26 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
 logger = logging.getLogger(__name__)
 
-# Estimated-token threshold that triggers a compaction pass — NOT a
-# ModelMessage count. A message-count threshold treats a thread of 60 short
-# chat turns the same as 60 messages padded with a couple of huge tool
-# outputs; token size is what actually threatens to push real context out of
-# the model's window, so that's what this triggers on (see _estimate_tokens
-# for how it's approximated).
-COMPACTION_TOKEN_THRESHOLD = 40_000
-# Estimated tokens of the most recent messages kept verbatim after
-# compaction, so near-term context (the last few exchanges, in-flight tool
-# results) survives untouched.
-KEEP_TAIL_TOKENS = 12_000
+# What triggers a compaction pass, and how much survives it, both scale off
+# the smallest context window actually reachable in the provider fallback
+# chain (see get_min_context_window in provider_config.py, and
+# _compaction_budget below) — NOT a fixed constant. Providers.json has models
+# ranging from ~131K to 1M+ tokens; a threshold sized for the small end wastes
+# most of a 1M-token model's headroom, while one sized for the large end would
+# risk overflowing a 131K one. Deriving it per-turn from whichever models
+# could actually serve this turn keeps it safe either way.
+#
+# Fractions of that context window: trigger compaction once accumulated
+# history would use more than this share of it, and keep this share as a
+# verbatim tail. The rest of the window is headroom this module doesn't
+# account for — system prompt, tool definitions, the new turn's own content,
+# and the model's output budget.
+_COMPACTION_TRIGGER_FRACTION = 0.35
+_KEEP_TAIL_FRACTION = 0.10
+# Floors so a small/misconfigured context_window (or the get_min_context_window
+# fallback default) never shrinks these to something impractically small.
+_MIN_COMPACTION_TOKEN_THRESHOLD = 20_000
+_MIN_KEEP_TAIL_TOKENS = 6_000
 
 # Coolton's provider fallback chain spans several real tokenizers (Anthropic,
 # OpenAI-compatible, Groq, ...) with no single correct token count between
@@ -42,6 +51,13 @@ _CHARS_PER_TOKEN = 4
 
 _TRANSCRIPT_CHAR_LIMIT = 20000
 _PART_CHAR_LIMIT = 2000
+
+
+def _compaction_budget(context_window: int) -> tuple[int, int]:
+    """(trigger_threshold, keep_tail_tokens) for a given context window."""
+    threshold = max(int(context_window * _COMPACTION_TRIGGER_FRACTION), _MIN_COMPACTION_TOKEN_THRESHOLD)
+    keep_tail = max(int(context_window * _KEEP_TAIL_FRACTION), _MIN_KEEP_TAIL_TOKENS)
+    return threshold, keep_tail
 
 
 def _message_size_chars(message: ModelMessage) -> int:
@@ -143,11 +159,15 @@ def maybe_compact_history(messages: list[ModelMessage], deps) -> list[ModelMessa
     """Return `messages` unchanged if small enough, otherwise a compacted list: one
     synthetic summary message covering everything before the tail, plus the tail
     kept verbatim. Never raises — falls back to the untouched history on any error."""
+    from agent.provider_config import get_min_context_window
+
     total_tokens = _estimate_tokens(messages)
-    if total_tokens <= COMPACTION_TOKEN_THRESHOLD:
+    context_window = get_min_context_window(getattr(deps, "provider_tag_filter", None))
+    threshold, keep_tail_tokens = _compaction_budget(context_window)
+    if total_tokens <= threshold:
         return messages
 
-    split = _safe_split_index(messages, KEEP_TAIL_TOKENS)
+    split = _safe_split_index(messages, keep_tail_tokens)
     head, tail = messages[:split], messages[split:]
     transcript = _render_for_summary(head)
     if not transcript:
