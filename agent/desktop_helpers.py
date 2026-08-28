@@ -212,8 +212,13 @@ def get_current_window_id(sandbox, proxy_info) -> str:
 
 
 def get_application_windows(sandbox, proxy_info, application: str) -> list[str]:
+    # `|| true`: xdotool search exits non-zero (which commands.run raises on) when no
+    # window matches — a real, non-error outcome here, not a failure.
     ensure_desktop(sandbox, proxy_info)
-    out = _run(sandbox, proxy_info, f"xdotool search --onlyvisible --class {shlex.quote(application)}").stdout.strip()
+    out = _run(
+        sandbox, proxy_info,
+        f"xdotool search --onlyvisible --class {shlex.quote(application)} || true",
+    ).stdout.strip()
     return out.split("\n") if out else []
 
 
@@ -248,9 +253,12 @@ def _vnc_running(sandbox, proxy_info) -> bool:
 
 
 def _wait_for_port(sandbox, proxy_info, port: int, timeout: int = 10) -> bool:
+    # e2b's commands.run() raises CommandExitException on a non-zero exit code (unlike
+    # a shell where you'd just check $?) — grep legitimately exits 1 while the port
+    # isn't up yet, so `|| true` keeps this polling instead of raising every iteration.
     deadline = time.time() + timeout
     while time.time() < deadline:
-        result = _run(sandbox, proxy_info, f"netstat -tuln | grep ':{port} '")
+        result = _run(sandbox, proxy_info, f"netstat -tuln | grep ':{port} ' || true")
         if result.stdout.strip():
             return True
         time.sleep(0.5)
