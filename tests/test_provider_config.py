@@ -6,9 +6,9 @@ from agent import provider_config
 
 
 def test_get_all_tags_matches_providers_json():
-    # These are the ones configured today (glm5.2, glm5.3-flash, luna, vision) —
+    # These are the ones configured today (free, glm5.2, glm5.3-flash, luna, vision) —
     # update this if providers.json's tags are intentionally changed.
-    assert provider_config.get_all_tags() == ["glm5.2", "glm5.3-flash", "luna", "vision"]
+    assert provider_config.get_all_tags() == ["free", "glm5.2", "glm5.3-flash", "luna", "vision"]
 
 
 def test_extract_tag_directive_no_directive_is_unchanged():
