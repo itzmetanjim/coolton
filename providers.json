@@ -6,7 +6,8 @@
     {"id": "groq", "api_url": null, "api_key_env_var_name": "GROQ_API_KEY", "displayname": "Groq"},
     {"id": "openrouter_fb", "api_url": null, "api_key_env_var_name": "OPENROUTER_API_KEY_FALLBACK", "pydantic_ai_env_var": "OPENROUTER_API_KEY", "displayname": "OpenRouter Fallback", "max_retries": 5},
     {"id": "google", "api_url": null, "api_key_env_var_name": "GOOGLE_API_KEY", "displayname": "Google", "aliases": ["gemini", "gemini_gemma"]},
-    {"id": "mistral", "api_url": null, "api_key_env_var_name": "MISTRAL_API_KEY", "displayname": "Mistral"}
+    {"id": "mistral", "api_url": null, "api_key_env_var_name": "MISTRAL_API_KEY", "displayname": "Mistral"},
+    {"id": "opencode_zen", "api_url": "https://opencode.ai/zen/v1", "api_key_env_var_name": "OPENCODE_ZEN_API_KEY", "displayname": "OpenCode Zen"}
   ],
   "models": [
     {"provider": "hcai", "model": "openai/gpt-5.6-luna", "display": "HCAI GPT-5.6 Luna", "tags": ["luna"], "context_window": 272000},
@@ -14,6 +15,12 @@
     {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.3-flash", "display": "OpenRouter Fallback GLM-5.3 Flash", "tags": ["glm5.3-flash"], "context_window": 1048576},
     {"provider": "hcai", "model": "deepseek/deepseek-v4-flash", "display": "HCAI DeepSeek V4 Flash", "context_window": 1310720},
     {"provider": "hcai", "model": "qwen/qwen3.8-flash", "display": "HCAI Qwen3.8 Flash", "context_window": 1000000},
+    {"provider": "opencode_zen", "model": "big-pickle", "display": "OpenCode Zen Big Pickle (free)", "context_window": 200000},
+    {"provider": "opencode_zen", "model": "mimo-v2.5-free", "display": "OpenCode Zen MiMo-V2.5 (free)", "context_window": 1048576},
+    {"provider": "opencode_zen", "model": "hy3-free", "display": "OpenCode Zen Hy3 (free)", "context_window": 262144},
+    {"provider": "opencode_zen", "model": "nemotron-3-ultra-free", "display": "OpenCode Zen Nemotron 3 Ultra (free)", "context_window": 262144},
+    {"provider": "opencode_zen", "model": "nemotron-3.5-lightning-free", "display": "OpenCode Zen Nemotron 3.5 Lightning (free)", "context_window": 1048576},
+    {"provider": "opencode_zen", "model": "muse-spark-1.2-contributor-free", "display": "OpenCode Zen Muse Spark 1.2 Contributor (free)", "context_window": 1048576},
     {"provider": "hcai", "model": "z-ai/glm-5.2:free", "display": "HCAI GLM-5.2 (free)", "tags": ["glm5.2"], "context_window": 1048576},
     {"provider": "openrouter_fb", "model": "openrouter:z-ai/glm-5.2:free", "display": "OpenRouter Fallback GLM-5.2 (free)", "tags": ["glm5.2"], "context_window": 1048576},
     {"provider": "anthropic", "model": "anthropic:claude-sonnet-4-6", "context_window": 200000},
