@@ -100,7 +100,15 @@ def enforce_rate_limit():
     logger.warning(f"Rate Limit Check: Sleeping for {sleep_needed:.2f}s")
     time.sleep(sleep_needed)
 
-SYSTEM_PROMPT = SlackPlatform().system_prompt
+GIT_IDENTITY_PROMPT = """\
+
+## GIT IDENTITY
+Before doing any Git operation, configure the repository's local Git identity:
+`git config user.email coolton@tanjim.org` and `git config user.name Coolton`.
+Always use email `coolton@tanjim.org` and name `Coolton` for Git commits.
+"""
+
+SYSTEM_PROMPT = SlackPlatform().system_prompt + GIT_IDENTITY_PROMPT
 
 _cached_model: str | None = None
 
@@ -1900,7 +1908,7 @@ def run_agent(text, deps, message_history=None, images=None):
     # design; the per-turn bits (message_ts, current model/capability) go into
     # the user prompt instead, via build_turn_context below.
     context_info = platform.build_context_prompt(deps)
-    full_prompt = platform.system_prompt + context_info
+    full_prompt = platform.system_prompt + GIT_IDENTITY_PROMPT + context_info
     if custom_instructions:
         full_prompt += f"\n\n## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n"
 
