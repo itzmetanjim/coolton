@@ -90,6 +90,26 @@ echo "--- python data libs ---"
 sudo pip3 install -q --break-system-packages numpy pandas duckdb 2>&1 | tail -2 || echo "PYLIBS_INSTALL_FAILED"
 python3 -c "import pandas, numpy, duckdb; print('pandas', pandas.__version__, '| duckdb', duckdb.__version__)" 2>&1 || true
 
+# --- XFCE desktop (computer use): Xvfb, xfce4, input/screenshot tools, VNC + noVNC,
+#     fonts (otherwise screenshots render tofu boxes), and a few GUI apps. Started lazily
+#     at runtime by agent/desktop_helpers.py — not at sandbox boot. ---
+echo "--- desktop stack ---"
+sudo apt-get install -y --no-install-recommends \
+    xserver-xorg x11-xserver-utils xvfb x11-utils xauth \
+    xfce4 xfce4-goodies xdotool scrot x11vnc net-tools x11-apps dbus-x11 at-spi2-core \
+    fonts-dejavu fonts-liberation fonts-noto-color-emoji \
+    firefox-esr chromium libreoffice gimp evince ristretto mousepad galculator \
+    2>&1 | tail -5 || echo "DESKTOP_APT_FAILED"
+xdotool --version 2>&1 || echo "XDOTOOL_INSTALL_FAILED"
+scrot --version 2>&1 || echo "SCROT_INSTALL_FAILED"
+x11vnc -version 2>&1 || echo "X11VNC_INSTALL_FAILED"
+
+echo "--- noVNC ---"
+sudo mkdir -p /opt/noVNC && sudo chown user:user /opt/noVNC
+git clone -b e2b-desktop https://github.com/e2b-dev/noVNC.git /opt/noVNC 2>&1 | tail -3 || echo "NOVNC_CLONE_FAILED"
+ln -sf /opt/noVNC/vnc.html /opt/noVNC/index.html 2>/dev/null || true
+git clone -b v0.12.0 https://github.com/novnc/websockify.git /opt/noVNC/utils/websockify 2>&1 | tail -3 || echo "WEBSOCKIFY_CLONE_FAILED"
+
 # --- pre-clone the coolton repo (public) so the agent can edit + PR immediately ---
 mkdir -p /home/user/work
 git clone __COOLTON_REPO__ /home/user/work/coolton; echo "CLONE_RC=$?"

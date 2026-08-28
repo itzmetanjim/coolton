@@ -303,6 +303,21 @@ def test_provider_order_tag_filter_matches_multiple_providers(monkeypatch, clean
     assert "openrouter:z-ai/glm-5.2:free" in models
 
 
+def test_provider_order_tag_filter_vision_matches_configured_vision_models(monkeypatch, clean_env):
+    # computer_use's vision gate (provider_config.is_vision_model) depends on this
+    # filter reaching exactly the models tagged "vision" in providers.json — every
+    # provider that has a vision-tagged entry needs its key set for a complete check.
+    monkeypatch.setenv("HCAI_API_KEY", "h")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("OPENAI_API_KEY", "o")
+    monkeypatch.setenv("GOOGLE_API_KEY", "g")
+    order = agent_mod._build_provider_order(None, tag="vision")
+    from agent.provider_config import _get_models
+    vision_models = {m["model"] for m in _get_models() if "vision" in (m.get("tags") or [])}
+    assert {cfg["model"] for _, cfg in order} == vision_models
+    assert vision_models  # sanity: the tag actually exists in current config
+
+
 def test_provider_order_tag_filter_excludes_byok(monkeypatch, clean_env):
     monkeypatch.setattr(agent_mod, "get_user_text_endpoint", lambda uid: {"model": "m", "base_url": "https://user", "api_key": "uk"})
     monkeypatch.setenv("HCAI_API_KEY", "h")

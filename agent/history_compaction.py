@@ -60,6 +60,16 @@ def _compaction_budget(context_window: int) -> tuple[int, int]:
     return threshold, keep_tail
 
 
+# Flat per-attachment char estimate for non-text content (BinaryContent, ImageUrl, ...)
+# inside a UserPromptPart's `content` list — roughly what a 1024x768 image actually
+# costs a vision model in tokens (~1,600) expressed in chars. A UserPromptPart holding a
+# screenshot (see_image_from_sandbox, and now computer_use) sets `content` to a list like
+# [str, BinaryContent(...)]; str()-ing that list (the previous behavior) puts the raw PNG
+# bytes through repr(), so a single ~200KB screenshot alone estimated at ~50k tokens and
+# tripped compaction immediately.
+_BINARY_CONTENT_CHAR_ESTIMATE = 6_400
+
+
 def _message_size_chars(message: ModelMessage) -> int:
     """Rough character size of one message's content — including tool call
     args, not just text/tool-return content, since a large `code_mode` script
@@ -68,8 +78,15 @@ def _message_size_chars(message: ModelMessage) -> int:
     for part in getattr(message, "parts", []):
         for attr in ("content", "args"):
             value = getattr(part, attr, None)
-            if value:
-                total += len(value) if isinstance(value, str) else len(str(value))
+            if not value:
+                continue
+            if isinstance(value, str):
+                total += len(value)
+            elif isinstance(value, list):
+                for item in value:
+                    total += len(item) if isinstance(item, str) else _BINARY_CONTENT_CHAR_ESTIMATE
+            else:
+                total += len(str(value))
     return total
 
 
