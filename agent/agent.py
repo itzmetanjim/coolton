@@ -2029,17 +2029,11 @@ def run_agent(text, deps, message_history=None, images=None):
         # computer_use tools don't pause the sandbox after every action (unlike
         # run_linux_command) so a live noVNC stream survives the whole turn; pause
         # it once here instead, however the turn ended.
-        #
-        # request_timeout bounds each E2B API call (not the sandbox's own
-        # lifecycle) — this cleanup already runs after a HaltRun (!stop), so a
-        # slow/unresponsive E2B API here must not itself become the thing
-        # blocking the turn from actually ending and the "thinking" indicator
-        # from clearing.
         if deps.desktop_active:
             try:
                 sandbox_id = get_thread_sandbox_id(deps.channel_id, deps.thread_ts)
                 if sandbox_id:
-                    Sandbox.connect(sandbox_id, request_timeout=10).pause(request_timeout=10)
+                    Sandbox.connect(sandbox_id).pause()
             except Exception:
                 pass
 
