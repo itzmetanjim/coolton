@@ -90,6 +90,31 @@ def get_min_context_window(tag: str | None = None, default: int = 128_000) -> in
     return min(windows) if windows else default
 
 
+def is_vision_model(model_name: str) -> bool:
+    """True if `model_name` matches a model tagged "vision" in providers.json.
+
+    `model_name` is expected in the form pydantic_ai's `RunContext.model.model_name`
+    reports it: for HCAI-style models (built directly as an OpenAIChatModel) that's
+    the raw `providers.json` "model" string; for provider-prefixed string models
+    (e.g. "anthropic:claude-sonnet-4-6") pydantic_ai strips the "anthropic:" prefix
+    before exposing model_name, so both forms are checked here.
+
+    BYOK/unknown models (not present in providers.json at all) are treated as
+    non-vision — same conservative default as get_min_context_window's BYOK
+    exclusion: better to block a tool that needs real pixels than guess.
+    """
+    if not model_name:
+        return False
+    m = model_name.lower()
+    for entry in _get_models():
+        if "vision" not in (entry.get("tags") or []):
+            continue
+        raw = entry["model"].lower()
+        if m == raw or m == raw.split(":", 1)[-1]:
+            return True
+    return False
+
+
 _TAG_DIRECTIVE_RE = re.compile(r"(\\)?\[!WITH:([^\]]*)\]")
 
 

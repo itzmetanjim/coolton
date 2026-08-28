@@ -6,9 +6,9 @@ from agent import provider_config
 
 
 def test_get_all_tags_matches_providers_json():
-    # These three are the ones configured today (luna, glm5.2, glm5.3-flash) —
+    # These are the ones configured today (glm5.2, glm5.3-flash, luna, vision) —
     # update this if providers.json's tags are intentionally changed.
-    assert provider_config.get_all_tags() == ["glm5.2", "glm5.3-flash", "luna"]
+    assert provider_config.get_all_tags() == ["glm5.2", "glm5.3-flash", "luna", "vision"]
 
 
 def test_extract_tag_directive_no_directive_is_unchanged():
@@ -161,3 +161,44 @@ def test_get_min_context_window_ignores_models_missing_the_field(isolated_config
     })
     monkeypatch.setenv("P1_KEY", "k")
     assert provider_config.get_min_context_window() == 77_000
+
+
+# ---------------------------------------------------------------------------
+# is_vision_model — the computer_use tool's gate (agent/agent.py) checks this
+# against ctx.model.model_name, which is NOT an env-var-reachability question
+# (unlike get_min_context_window above), just a tag lookup.
+# ---------------------------------------------------------------------------
+
+
+def test_is_vision_model_matches_a_vision_tagged_model(isolated_config):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [
+            {"provider": "p1", "model": "vision-model", "tags": ["vision"]},
+            {"provider": "p1", "model": "text-model"},
+        ],
+    })
+    assert provider_config.is_vision_model("vision-model") is True
+    assert provider_config.is_vision_model("text-model") is False
+
+
+def test_is_vision_model_matches_after_pydantic_ai_strips_the_provider_prefix(isolated_config):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [{"provider": "p1", "model": "anthropic:claude-x", "tags": ["vision"]}],
+    })
+    # pydantic_ai's RunContext.model.model_name reports "claude-x" for a model built
+    # from the string "anthropic:claude-x" (prefix stripped) — not the raw
+    # providers.json string, so both forms must resolve to the same entry.
+    assert provider_config.is_vision_model("claude-x") is True
+    assert provider_config.is_vision_model("anthropic:claude-x") is True
+
+
+def test_is_vision_model_false_for_a_model_not_in_config(isolated_config):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [{"provider": "p1", "model": "known-model", "tags": ["vision"]}],
+    })
+    # BYOK/unknown models default to non-vision — see is_vision_model's docstring.
+    assert provider_config.is_vision_model("some-byok-model") is False
+    assert provider_config.is_vision_model("") is False

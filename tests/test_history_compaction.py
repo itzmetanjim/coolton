@@ -160,6 +160,26 @@ def test_estimate_tokens_sums_across_messages():
     assert hc._estimate_tokens(messages) == 600
 
 
+def test_estimate_tokens_scores_binary_content_flat_not_by_byte_count():
+    """A UserPromptPart carrying an image (see_image_from_sandbox, computer_use
+    screenshots) sets `content` to a list like [str, BinaryContent(...)]. Naively
+    str()-ing that list runs repr() over the raw image bytes — a ~200KB screenshot
+    would then estimate at ~50k tokens and trip compaction on its own.
+
+    1,600 tokens is pinned directly (not re-derived from the implementation's own
+    constant) as roughly what a single 1024x768 image actually costs a vision model —
+    a 200KB image must land near that regardless of its byte size, and nowhere near
+    the ~50,000 tokens naive str()-ing the raw bytes would have produced.
+    """
+    from pydantic_ai.messages import BinaryContent
+
+    big_image = BinaryContent(data=b"x" * 200_000, media_type="image/png")
+    msg = ModelRequest(parts=[UserPromptPart(content=["caption", big_image])])
+    tokens = hc._estimate_tokens([msg])
+    assert 1_500 <= tokens <= 1_700
+    assert tokens < 10_000  # rules out the naive str()-the-raw-bytes regression
+
+
 # ---------------------------------------------------------------------------
 # _compaction_budget — the trigger threshold and tail size scale off the
 # smallest reachable model's context window (see get_min_context_window in

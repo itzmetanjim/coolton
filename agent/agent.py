@@ -17,6 +17,8 @@ from agent.deps import AgentDeps
 from agent.platforms.slack import SlackPlatform
 from agent.stop_store import HaltRun
 from agent.tools import add_emoji_reaction
+from agent.tools.computer_use import computer_use as _computer_use_dispatch
+from agent.tools.computer_use import computer_stream as _computer_stream_start
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
 from agent import provider_config
 from agent.redact import redact as _redact, strip_secret_keys as _strip_secret_keys
@@ -337,6 +339,8 @@ CODE_MODE_EXCLUDED_TOOLS = {
     "install_opencode_tool",
     "run_opencode_tool",
     "upload_file_from_sandbox",
+    "computer_use",
+    "computer_stream_tool",
     "skip",
     "leave_thread_tool",
     "join_thread_tool",
@@ -663,6 +667,109 @@ def see_image_from_sandbox(ctx: RunContext[AgentDeps], path: str) -> ToolReturn[
             BinaryContent(data=data, media_type=mime, vendor_metadata={"detail": "high"}),
         ],
     )
+
+
+_VISION_GATE_ERROR = (
+    "Error: computer use needs a model that can see screenshots, and this turn is "
+    "running on `{model}`, which can't. Ask the user to re-send their message starting "
+    "with `[!WITH:vision]` — that pins the run to a vision-capable model for this turn."
+)
+
+
+@agent.tool
+def computer_use(
+    ctx: RunContext[AgentDeps],
+    action: str,
+    x: int | None = None,
+    y: int | None = None,
+    x2: int | None = None,
+    y2: int | None = None,
+    text: str = "",
+    keys: list[str] | str = "",
+    direction: str = "down",
+    amount: int = 1,
+    target: str = "",
+) -> ToolReturn[str]:
+    """Use a real XFCE desktop (mouse, keyboard, screenshots) inside your sandbox.
+
+    Needs a vision-capable model — see a screenshot after every action to know where
+    things are and what happened. If the current turn isn't running on one, this
+    returns an error telling the user to re-send with `[!WITH:vision]`.
+
+    Actions:
+    - "screenshot": see the current screen (no other args). ALWAYS start here and take
+      one after every action that might change the screen — coordinates only make sense
+      relative to what you just saw.
+    - "click" / "right_click" / "middle_click" / "double_click": x, y (pixel coords from
+      the last screenshot). Omit x/y to click at the current cursor position.
+    - "move_mouse": x, y (required).
+    - "scroll": direction ("up"/"down"), amount (number of notches).
+    - "drag": x, y, x2, y2 (drag from one point to another).
+    - "type": text (typed at the current text cursor/focus).
+    - "key": keys — a single key name ("enter", "escape", "tab") or a list for a
+      combo (["ctrl", "c"]).
+    - "wait": amount (milliseconds) — for a page/app to finish loading or animating.
+    - "open_url": target (a URL, opened in the default browser).
+    - "launch_app": target (an app's .desktop id, e.g. "firefox-esr", "org.gnome.gedit").
+
+    Args:
+        action: One of the actions above.
+        x, y: Primary coordinate (pixels, from the most recent screenshot).
+        x2, y2: Second coordinate, for "drag".
+        text: Text to type, for action="type".
+        keys: Key name or list of keys for a combo, for action="key".
+        direction: Scroll direction, for action="scroll".
+        amount: Scroll notches or wait milliseconds, depending on action.
+        target: URL or app name, for "open_url" / "launch_app".
+    """
+    if not os.environ.get("E2B_API_KEY"):
+        return ToolReturn("Error: E2B_API_KEY not configured.")
+    if not provider_config.is_vision_model(ctx.model.model_name):
+        return ToolReturn(_VISION_GATE_ERROR.format(model=ctx.model.model_name))
+    try:
+        result = _computer_use_dispatch(
+            ctx.deps.channel_id, ctx.deps.thread_ts, action,
+            x=x, y=y, x2=x2, y2=y2,
+            text=text or None, keys=keys or None,
+            direction=direction, amount=amount, target=target or None,
+        )
+    except Exception as e:
+        return ToolReturn(f"Error: {e}")
+    ctx.deps.desktop_active = True
+    if isinstance(result, bytes):
+        return ToolReturn(
+            "Screenshot of your desktop.",
+            content=[
+                "(Desktop screenshot via computer_use)",
+                BinaryContent(data=result, media_type="image/png", vendor_metadata={"detail": "high"}),
+            ],
+        )
+    return ToolReturn(result)
+
+
+@agent.tool
+def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
+    """Start (or re-share) a live, view-only stream of your desktop and post it to the thread.
+
+    Call this once when you begin a computer-use session so the user can watch what
+    you're doing. Safe to call again later in the same session to re-post the link.
+    """
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured."
+    try:
+        url = _computer_stream_start(ctx.deps.channel_id, ctx.deps.thread_ts)
+    except Exception as e:
+        return f"Error starting desktop stream: {e}"
+    ctx.deps.desktop_active = True
+    error = send_web_embed(
+        channel_id=ctx.deps.channel_id,
+        text="coolton's desktop — live (view-only)",
+        url=url,
+        title="coolton's desktop",
+    )
+    if error:
+        return f"{error} | url: {url}"
+    return "Live desktop view posted to the thread (view-only)."
 
 
 @agent.tool
@@ -1879,19 +1986,31 @@ def run_agent(text, deps, message_history=None, images=None):
     )
 
     try:
-        result, _provider = _run_with_provider_chain(agent_dynamic, run_kwargs, deps)
-        return result
-    except HaltRun as e:
-        deps.should_skip = True
-        deps.halt_reason = str(e)
-        # !stop sets deps.halted_messages to a snapshot of everything up to
-        # the halt (see plan_block.before_tool) — use that so the thread
-        # doesn't lose the message that triggered this turn (and any tool
-        # round-trips already completed) when the run gets cut off. skip()
-        # never sets it, so that path keeps reverting to the pre-turn history,
-        # which is correct there (a skipped turn has zero side effects).
-        history = deps.halted_messages if deps.halted_messages is not None else message_history
-        return _SkipResult(history)
+        try:
+            result, _provider = _run_with_provider_chain(agent_dynamic, run_kwargs, deps)
+            return result
+        except HaltRun as e:
+            deps.should_skip = True
+            deps.halt_reason = str(e)
+            # !stop sets deps.halted_messages to a snapshot of everything up to
+            # the halt (see plan_block.before_tool) — use that so the thread
+            # doesn't lose the message that triggered this turn (and any tool
+            # round-trips already completed) when the run gets cut off. skip()
+            # never sets it, so that path keeps reverting to the pre-turn history,
+            # which is correct there (a skipped turn has zero side effects).
+            history = deps.halted_messages if deps.halted_messages is not None else message_history
+            return _SkipResult(history)
+    finally:
+        # computer_use tools don't pause the sandbox after every action (unlike
+        # run_linux_command) so a live noVNC stream survives the whole turn; pause
+        # it once here instead, however the turn ended.
+        if deps.desktop_active:
+            try:
+                sandbox_id = get_thread_sandbox_id(deps.channel_id, deps.thread_ts)
+                if sandbox_id:
+                    Sandbox.connect(sandbox_id).pause()
+            except Exception:
+                pass
 
 
 def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):

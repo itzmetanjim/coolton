@@ -26,6 +26,7 @@ from .slack_info import (
     remove_emoji_reaction,
 )
 from .slack_search import search_slack_messages, read_conversation_history
+from .computer_use import computer_use, computer_stream
 
 __all__ = [
     "add_emoji_reaction",
@@ -60,4 +61,6 @@ __all__ = [
     "remove_emoji_reaction",
     "search_slack_messages",
     "read_conversation_history",
+    "computer_use",
+    "computer_stream",
 ]
