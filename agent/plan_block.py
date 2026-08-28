@@ -475,7 +475,7 @@ def build_plan_hooks():
         if task is not None:
             task["status"] = "complete"
             task["output"] = _combined_io(
-                task.get("input", ""), _redact(str(result), context=f"tool output {call.tool_name}")
+                task.get("input", ""), _redact(_safe_str(result), context=f"tool output {call.tool_name}")
             )
             update_plan_message(deps)
         return result
@@ -515,14 +515,44 @@ def _combined_io(tool_input: str, tool_output: str) -> dict:
     return _rich_text("\n".join(parts))
 
 
+def _safe_str(value) -> str:
+    """str(value), but summarize binary payloads instead of stringifying them.
+
+    A `computer_use` screenshot (or see_image_from_sandbox) result is a
+    ToolReturn whose `content` holds a BinaryContent with the raw image bytes.
+    str()-ing that embeds the full byte payload as escaped text — for a
+    ~200KB screenshot that's roughly a megabyte of string to build, then
+    `_redact()` does a linear substring scan per known secret over the whole
+    thing before any of it ever gets truncated for display. That's real,
+    observed latency on every single screenshot step (visible as coolton
+    "getting stuck" right after a computer_use call), not just wasted memory.
+    """
+    data = getattr(value, "data", None)
+    if isinstance(data, (bytes, bytearray)):
+        media_type = getattr(value, "media_type", "binary")
+        return f"<{media_type}, {len(data)} bytes>"
+    # ToolReturn-like: summarize return_value + content instead of the raw repr,
+    # since content may itself hold BinaryContent.
+    return_value = getattr(value, "return_value", None)
+    content = getattr(value, "content", None)
+    if return_value is not None or content is not None:
+        pieces = [str(return_value)] if return_value is not None else []
+        if isinstance(content, (list, tuple)):
+            pieces.extend(_safe_str(c) for c in content)
+        elif content is not None:
+            pieces.append(_safe_str(content))
+        return " | ".join(pieces)
+    return str(value)
+
+
 def _pretty_args(value) -> str:
     """Render tool args / results compactly for logging (dicts, lists, strings)."""
     if isinstance(value, dict):
         parts = []
         for k, v in value.items():
-            v_str = _truncate(str(v), 300)
+            v_str = _truncate(_safe_str(v), 300)
             parts.append(f"{k}={v_str}")
         return "{" + ", ".join(parts) + "}"
     if isinstance(value, (list, tuple)):
-        return "[" + ", ".join(_truncate(str(v), 300) for v in value) + "]"
-    return str(value)
+        return "[" + ", ".join(_truncate(_safe_str(v), 300) for v in value) + "]"
+    return _safe_str(value)

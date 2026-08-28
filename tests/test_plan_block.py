@@ -323,6 +323,34 @@ def test_build_plan_hooks_tracks_tool_lifecycle():
     assert "fetched" in task["output"]["elements"][0]["elements"][0]["text"]
 
 
+def test_build_plan_hooks_after_tool_summarizes_binary_content_in_plan_card():
+    """The plan-card output (task["output"], built via _combined_io) is a second,
+    separate str(result) call site from _pretty_args's own logging call — both
+    needed the BinaryContent fix, not just one."""
+    from pydantic_ai.messages import ToolReturn, BinaryContent
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100")
+    ctx = SimpleNamespace(deps=deps)
+    call = SimpleNamespace(tool_name="computer_use", tool_call_id="shot1")
+    result = ToolReturn(
+        return_value="Screenshot of your desktop.",
+        content=["(Desktop screenshot via computer_use)", BinaryContent(data=b"x" * 200_000, media_type="image/png")],
+    )
+
+    async def run():
+        await _hook(hooks, "before_tool_execute")(ctx, call=call, tool_def=None, args={"action": "screenshot"})
+        await _hook(hooks, "after_tool_execute")(ctx, call=call, tool_def=None, args={}, result=result)
+
+    asyncio.run(run())
+
+    task = deps.plan_tasks["task_shot1"]
+    output_text = task["output"]["elements"][0]["elements"][0]["text"]
+    assert len(output_text) < 1000
+    assert "image/png" in output_text
+    assert "x" * 100 not in output_text
+
+
 def test_build_plan_hooks_folds_steering_message_into_next_tool_result():
     from agent.steering_store import clear_steering_messages, queue_steering_message
 
@@ -670,6 +698,33 @@ def test_pretty_args_variants():
     assert _pretty_args({"a": 1, "b": "x"}) == "{a=1, b=x}"
     assert _pretty_args([1, "two"]) == "[1, two]"
     assert _pretty_args("plain") == "plain"
+
+
+def test_pretty_args_summarizes_binary_content_instead_of_stringifying_it():
+    """A computer_use screenshot's ToolReturn embeds a BinaryContent with the raw
+    PNG bytes. str()-ing that (the old behavior) builds a ~megabyte escaped string
+    per screenshot before any truncation happens — this must stay a short summary
+    regardless of payload size."""
+    from pydantic_ai.messages import ToolReturn, BinaryContent
+
+    big_image = BinaryContent(data=b"x" * 200_000, media_type="image/png")
+    result = ToolReturn(
+        return_value="Screenshot of your desktop.",
+        content=["(Desktop screenshot via computer_use)", big_image],
+    )
+    rendered = _pretty_args(result)
+    assert len(rendered) < 500
+    assert "Screenshot of your desktop." in rendered
+    assert "image/png" in rendered
+    assert "200000 bytes" in rendered
+    assert "x" * 100 not in rendered  # the raw byte payload never got embedded
+
+
+def test_pretty_args_binary_content_directly():
+    from pydantic_ai.messages import BinaryContent
+
+    img = BinaryContent(data=b"\x89PNG\x00" * 10_000, media_type="image/png")
+    assert _pretty_args(img) == f"<image/png, {len(img.data)} bytes>"
 
 
 def test_truncate():
