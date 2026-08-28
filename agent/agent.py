@@ -774,6 +774,7 @@ def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
         text="coolton's desktop — live (view-only)",
         url=url,
         title="coolton's desktop",
+        thread_ts=ctx.deps.thread_ts,
     )
     if error:
         return f"{error} | url: {url}"
@@ -1238,6 +1239,7 @@ def send_web_embed(
     channel_id: str, text: str, url: str, title: str,
     thumbnail_url: str = "https://placehold.co/1280x720?text=click%20to%20open%20the%20\\ncoolton%20embed",
     user_token: str | None = None,
+    thread_ts: str | None = None,
 ) -> str:
     token = os.environ.get("SLACK_BOT_TOKEN")
     if not token:
@@ -1249,6 +1251,8 @@ def send_web_embed(
         "alt_text": title,
     }]
     payload = {"channel": channel_id, "text": text, "blocks": blocks}
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
     try:
         response = requests.post("https://slack.com/api/chat.postMessage", json=payload, headers=headers)
@@ -1265,6 +1269,7 @@ def send_web_embed(
 def send_whiteboard_embed(
     channel_id: str, text: str = "whiteboard", title: str = "whiteboard",
     whiteboard_id: str | None = None, user_token: str | None = None,
+    thread_ts: str | None = None,
 ) -> str:
     if whiteboard_id is None:
         whiteboard_id = f"{random.randint(0, 0xFFFFFF):06X}"
@@ -1272,7 +1277,10 @@ def send_whiteboard_embed(
     thumbnail_url = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed"
     text_with_id = f"{text} #{whiteboard_id}"
     title_with_id = f"{title} #{whiteboard_id}"
-    result = send_web_embed(channel_id=channel_id, text=text_with_id, url=url, title=title_with_id, thumbnail_url=thumbnail_url)
+    result = send_web_embed(
+        channel_id=channel_id, text=text_with_id, url=url, title=title_with_id,
+        thumbnail_url=thumbnail_url, thread_ts=thread_ts,
+    )
     if result.startswith("Success"):
         return f"{result} (whiteboard id: {whiteboard_id})"
     return result
@@ -1283,21 +1291,24 @@ def send_whiteboard_embed_tool(
     ctx: RunContext[AgentDeps], text: str = "whiteboard",
     title: str = "whiteboard", whiteboard_id: str | None = None,
 ) -> str:
-    """Send a Felix whiteboard (tldraw) embed to the current channel.
-    
+    """Send a Felix whiteboard (tldraw) embed to the current thread.
+
     Creates a new whiteboard with a random ID at felix's tldraw instance.
-    
+
     Args:
         text: Fallback text (default: "whiteboard").
         title: Embed title (default: "whiteboard").
         whiteboard_id: Optional specific 6-digit uppercase hex ID like "3A9F01" (default: random).
     """
-    return send_whiteboard_embed(channel_id=ctx.deps.channel_id, text=text, title=title, whiteboard_id=whiteboard_id)
+    return send_whiteboard_embed(
+        channel_id=ctx.deps.channel_id, text=text, title=title,
+        whiteboard_id=whiteboard_id, thread_ts=ctx.deps.thread_ts,
+    )
 
 
 def send_html_embed(
     channel_id: str, html: str, text: str = "html embed", title: str = "html embed",
-    user_token: str | None = None,
+    user_token: str | None = None, thread_ts: str | None = None,
 ) -> str:
     from html import escape as _html_escape
 
@@ -1313,7 +1324,10 @@ def send_html_embed(
     except Exception as e:
         return f"Error hosting HTML embed: {e}"
     thumbnail_url = "https://placehold.co/1280x720?text=click%20to%20open%20the%20\\ncoolton%20embed"
-    return send_web_embed(channel_id=channel_id, text=text, url=url, title=title, thumbnail_url=thumbnail_url, user_token=user_token)
+    return send_web_embed(
+        channel_id=channel_id, text=text, url=url, title=title,
+        thumbnail_url=thumbnail_url, user_token=user_token, thread_ts=thread_ts,
+    )
 
 
 @agent.tool
@@ -1321,7 +1335,7 @@ def send_html_embed_tool(
     ctx: RunContext[AgentDeps], html: str, text: str = "html embed",
     title: str = "html embed",
 ) -> str:
-    """Send custom HTML as a live embed in the current channel.
+    """Send custom HTML as a live embed in the current thread.
 
     Your HTML is hosted on the coolton file server (2390.proxy.tanjim.org) as a
     short URL and sent as a Slack embed (same mechanism as the whiteboard embed).
@@ -1338,7 +1352,10 @@ def send_html_embed_tool(
         text: Fallback text (default: "html embed").
         title: Embed title (default: "html embed").
     """
-    return send_html_embed(channel_id=ctx.deps.channel_id, html=html, text=text, title=title)
+    return send_html_embed(
+        channel_id=ctx.deps.channel_id, html=html, text=text, title=title,
+        thread_ts=ctx.deps.thread_ts,
+    )
 
 
 @agent.tool
