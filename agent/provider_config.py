@@ -50,10 +50,6 @@ def _get_models() -> list[dict]:
     return _load()["models"]
 
 
-def _get_vision_models() -> list[dict]:
-    return _load().get("vision_models", [])
-
-
 def get_all_tags() -> list[str]:
     """All distinct model tags declared in providers.json, sorted."""
     tags: set[str] = set()
@@ -230,17 +226,30 @@ def build_provider_order(user_id: str | None = None, tag: str | None = None) -> 
 
 
 def build_vision_chain() -> list[tuple[str, str, str, str]]:
-    """Build the vision provider chain from JSON config.
+    """Build the vision provider chain for analyze_image (the OpenAI-compatible
+    image-captioning fallback for non-vision-running-model turns) directly from
+    the "vision" tag on providers.json's `models` — no separate hand-maintained
+    list. That tag is already the single source of truth is_vision_model() (the
+    computer_use gate) and the `[!WITH:vision]` fallback-chain filter both use;
+    a second list here meant the same fact ("is this model vision-capable") had
+    to be kept in sync by hand in two places.
+
+    Only providers with a real `api_url` qualify — this hits models directly
+    via OpenAI-compatible chat/completions (see agent/tools/vision.py), which
+    plain env-var-based providers (anthropic, openai, google, groq, mistral —
+    talked to through their native SDKs, not raw HTTP) can't serve.
 
     Returns list of (provider_label, base_url, api_key, model) tuples.
     """
     pmap = _provider_map()
     chain: list[tuple[str, str, str, str]] = []
 
-    for entry in _get_vision_models():
+    for entry in _get_models():
+        if "vision" not in (entry.get("tags") or []):
+            continue
         pid = entry["provider"]
         pconf = pmap.get(pid)
-        if not pconf:
+        if not pconf or not pconf.get("api_url"):
             continue
 
         env_var = pconf.get("api_key_env_var_name")
@@ -248,7 +257,7 @@ def build_vision_chain() -> list[tuple[str, str, str, str]]:
         if not api_key:
             continue
 
-        chain.append((pid, pconf.get("api_url") or "", api_key, entry["model"]))
+        chain.append((pid, pconf["api_url"], api_key, entry["model"]))
 
     return chain
 

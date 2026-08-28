@@ -202,3 +202,45 @@ def test_is_vision_model_false_for_a_model_not_in_config(isolated_config):
     # BYOK/unknown models default to non-vision — see is_vision_model's docstring.
     assert provider_config.is_vision_model("some-byok-model") is False
     assert provider_config.is_vision_model("") is False
+
+
+# ---------------------------------------------------------------------------
+# build_vision_chain — derived directly from the "vision" tag on `models`
+# (no separate hand-maintained vision_models list) so the tag is the single
+# source of truth for both is_vision_model and this chain.
+# ---------------------------------------------------------------------------
+
+
+def test_build_vision_chain_uses_the_vision_tag_not_a_separate_list(isolated_config, monkeypatch):
+    isolated_config({
+        "providers": [{"id": "hcai", "api_url": "https://hcai.example/v1", "api_key_env_var_name": "HCAI_KEY"}],
+        "models": [
+            {"provider": "hcai", "model": "vision-model", "tags": ["vision"]},
+            {"provider": "hcai", "model": "text-only-model"},
+        ],
+    })
+    monkeypatch.setenv("HCAI_KEY", "k")
+    chain = provider_config.build_vision_chain()
+    assert chain == [("hcai", "https://hcai.example/v1", "k", "vision-model")]
+
+
+def test_build_vision_chain_excludes_providers_without_a_base_url(isolated_config, monkeypatch):
+    """analyze_image talks OpenAI-compatible chat/completions HTTP directly —
+    a provider with no api_url (anthropic, openai, google, ... talked to via
+    their native SDKs) can't serve that, even if one of its models is
+    otherwise vision-tagged for the agent's own multimodal turns."""
+    isolated_config({
+        "providers": [{"id": "anthropic", "api_url": None, "api_key_env_var_name": "ANTHROPIC_KEY"}],
+        "models": [{"provider": "anthropic", "model": "claude-x", "tags": ["vision"]}],
+    })
+    monkeypatch.setenv("ANTHROPIC_KEY", "k")
+    assert provider_config.build_vision_chain() == []
+
+
+def test_build_vision_chain_skips_unreachable_providers(isolated_config, monkeypatch):
+    isolated_config({
+        "providers": [{"id": "hcai", "api_url": "https://hcai.example/v1", "api_key_env_var_name": "HCAI_KEY"}],
+        "models": [{"provider": "hcai", "model": "vision-model", "tags": ["vision"]}],
+    })
+    monkeypatch.delenv("HCAI_KEY", raising=False)
+    assert provider_config.build_vision_chain() == []
