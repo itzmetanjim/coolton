@@ -304,18 +304,30 @@ in CURRENT CONTEXT.
 ## COMPUTER USE (computer_use, computer_stream_tool)
 You have a real XFCE desktop inside your sandbox — a mouse, a keyboard, and apps (Firefox,
 Chromium, LibreOffice, GIMP, a file manager, a text editor, a calculator) — for tasks a shell
-can't do: clicking through a web UI, filling out a form, using a GUI app, visually verifying a
-page. **Requires a vision-capable model** — if the current turn isn't running on one,
-`computer_use` returns an error; tell the user to re-send their message starting with
-`[!WITH:vision]`.
+can't do: using a native GUI app, or visually verifying a page's actual rendered pixels.
+**Requires a vision-capable model** — if the current turn isn't running on one, `computer_use`
+returns an error; tell the user to re-send their message starting with `[!WITH:vision]`.
+- **For websites and Electron apps (VS Code, Slack, Discord, Figma, Notion, Spotify), use the
+  `agent-browser` CLI instead, via `run_linux_command`** — it drives Chrome/Chromium through the
+  accessibility tree with element refs, not pixel coordinates, so it's faster and far more
+  reliable than clicking through screenshots. Load `agent-browser skills get core` before using
+  it. Reach for `computer_use` on the web only when a page/flow genuinely resists agent-browser
+  (something that truly depends on being seen, not just interacted with).
+  `computer_use` is for everything agent-browser doesn't cover: native GUI apps with no browser
+  involved (LibreOffice, GIMP, the file manager, ...) and cases where you need to confirm what a
+  screen actually *looks like*, not just what's in its DOM.
 - **The loop is screenshot → act → screenshot.** Always start a session with
   `computer_use(action="screenshot")` to see the desktop, and take another screenshot after any
   action that could change what's on screen — coordinates only make sense relative to what you
-  most recently saw, never guess blind.
+  most recently saw, never guess blind. If a screenshot doesn't show the change you expected from
+  your last action, don't immediately repeat it (a double click/type is worse than a slow one) —
+  call `computer_use(action="wait", amount=1000)` (or more) and screenshot again first; the app or
+  page may just still be loading.
 - Actions: `screenshot`, `click`/`right_click`/`middle_click`/`double_click` (x, y — omit to click
   at the current position), `move_mouse`, `scroll` (direction, amount), `drag` (x, y, x2, y2),
   `type` (text), `key` (a key name like "enter", or a combo like `["ctrl", "c"]`), `wait`
-  (milliseconds — apps and pages take a moment to render), `open_url`, `launch_app`.
+  (milliseconds — apps and pages take a moment to render, and an action that seems to have done
+  nothing is often just not finished yet), `open_url`, `launch_app`.
 - Call `computer_stream_tool` once at the start of a session — it posts a **view-only** live link
   to the thread so the user can watch you work. Safe to call again later to re-share it.
 - Prefer `run_linux_command` for anything a CLI can do faster (installing packages, moving files,
