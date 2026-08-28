@@ -4,7 +4,7 @@ from slack_bolt import Ack, BoltContext
 from slack_sdk import WebClient
 
 from agent import provider_config
-from agent.provider_probe import test_provider
+from agent.provider_probe import probe_all
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +27,12 @@ def handle_test_providers(ack: Ack, body: dict, client: WebClient, context: Bolt
             client.chat_postMessage(channel=user_id, text="No AI providers configured.")
             return
 
+        # Probes run in parallel across providers (serially within one provider,
+        # to not hammer a single upstream's rate limits) — a fully sequential
+        # sweep of every configured model took roughly the sum of all of their
+        # latencies, tens of seconds to minutes.
         results = []
-        for provider_name, config in order:
-            ok, display, elapsed, detail = test_provider(provider_name, config)
+        for provider_name, ok, display, elapsed, detail in probe_all(order):
             status = ":white_check_mark:" if ok else ":x:"
             line = f"{status} *{display}* — {elapsed:.1f}s"
             if ok:
