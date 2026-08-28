@@ -312,6 +312,7 @@ def test_provider_order_tag_filter_vision_matches_configured_vision_models(monke
     monkeypatch.setenv("OPENAI_API_KEY", "o")
     monkeypatch.setenv("GOOGLE_API_KEY", "g")
     monkeypatch.setenv("KILOCODE_API_KEY", "kc")
+    monkeypatch.setenv("OPENROUTER_API_KEY_FALLBACK", "or")
     order = agent_mod._build_provider_order(None, tag="vision")
     from agent.provider_config import _get_models
     vision_models = {m["model"] for m in _get_models() if "vision" in (m.get("tags") or [])}
