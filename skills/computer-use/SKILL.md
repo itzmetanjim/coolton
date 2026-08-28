@@ -1,6 +1,6 @@
 ---
 name: computer-use
-description: 'Playbook for driving the XFCE desktop inside your sandbox with computer_use / computer_stream_tool — waiting for windows to paint, dismissing first-run dialogs, staying in the right focus, and when a GUI action is worth it over run_linux_command. USE FOR: clicking through a web UI, filling out a form, using a GUI app, visually verifying a rendered page. DO NOT USE FOR: anything a shell command or API call can do faster.'
+description: 'Playbook for driving the XFCE desktop inside your sandbox with computer_use / computer_stream_tool — waiting for windows to paint, dismissing first-run dialogs, staying in the right focus, when a GUI action is worth it over run_linux_command, and when agent-browser should be used instead. USE FOR: using a native GUI app, visually verifying a rendered page. DO NOT USE FOR: websites or Electron apps (use agent-browser), or anything a shell command or API call can do faster.'
 ---
 
 # Computer Use
@@ -12,8 +12,27 @@ see screenshots; there's no way to act correctly blind.
 
 Ask yourself first: does this actually need a screen? `run_linux_command` (curl, a CLI, a script)
 is faster and more reliable for anything it can do. Reach for the desktop only when the task is
-inherently visual or GUI-only — clicking through a web flow with no API, using an app with no CLI,
-or visually confirming something rendered correctly.
+inherently visual or GUI-only.
+
+## computer_use vs agent-browser
+These overlap on "things with a screen" but are not interchangeable — pick wrong and you'll either
+waste turns clicking through screenshots for something a DOM query would've done in one call, or
+fight a GUI app that has no accessibility tree to snapshot.
+
+- **A website, or an Electron app** (VS Code, Slack, Discord, Figma, Notion, Spotify) → use
+  `agent-browser` (via `run_linux_command`; run `agent-browser skills get core` first). It drives
+  Chrome/Chromium over CDP with accessibility-tree snapshots and `@eN` element refs — no pixel
+  coordinates, no screenshot-then-guess loop, and it survives page reflows that would invalidate a
+  computer_use screenshot's coordinates instantly.
+- **A native GUI app with no browser involved** (LibreOffice, GIMP, the file manager, a text
+  editor, a calculator) → `computer_use`. agent-browser has nothing to attach to here.
+- **You need to confirm what something actually *looks like***, not just what's in the DOM (visual
+  layout, rendering, a generated image, whether text is legible) → `computer_use`, even on a
+  webpage — agent-browser's accessibility tree doesn't tell you what pixels the user would
+  literally see.
+- A web flow that genuinely resists agent-browser (something that only reacts to a real synthetic
+  mouse/keyboard event, not automation) is the one case worth falling back to computer_use on a
+  website. Try agent-browser first; don't default to computer_use for the web out of habit.
 
 ## The loop
 1. `computer_use(action="screenshot")` first, always — see the actual current state before acting.
@@ -23,7 +42,12 @@ or visually confirming something rendered correctly.
 3. Take another screenshot after any action that could have changed the screen (a click that
    opens something, typing that triggers autocomplete, a page navigation). Don't chain several
    blind actions in a row on the assumption of what happened.
-4. Call `computer_stream_tool` once near the start of a session so the user has a live view. It's
+4. **If that screenshot doesn't show the change you expected, don't assume the action failed and
+   retry it.** Call `computer_use(action="wait", amount=1000)` (or longer for something heavy —
+   an app launch, a page load) and screenshot again. A double click, a duplicate keystroke, or
+   re-submitting a form because you acted too early is a much worse failure mode than pausing a
+   beat. Only treat it as an actual failure once a wait-and-recheck still shows nothing changed.
+5. Call `computer_stream_tool` once near the start of a session so the user has a live view. It's
    safe to call again if you think they lost the link.
 
 ## Timing
