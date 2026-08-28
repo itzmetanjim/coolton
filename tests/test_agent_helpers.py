@@ -716,3 +716,61 @@ def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatc
 
     assert provider == "anthropic"
     assert shown_models == ["hcai_0 / openai/gpt-5.6-luna", "anthropic / anthropic:claude-sonnet-4-6"]
+
+
+# ---------------------------------------------------------------------------
+# Embeds (whiteboard, HTML, computer_stream_tool) must reply in the current
+# thread, not post a new top-level message — send_web_embed's payload had no
+# thread_ts at all until now.
+# ---------------------------------------------------------------------------
+
+
+def test_send_web_embed_includes_thread_ts_when_given(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod.send_web_embed(
+            channel_id="C1", text="t", url="https://example.com", title="title",
+            thread_ts="1.2",
+        )
+    assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
+
+
+def test_send_web_embed_omits_thread_ts_when_not_given(monkeypatch):
+    """Direct calls without a thread (e.g. from some future non-turn context)
+    must not send a bogus empty thread_ts that Slack would reject."""
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod.send_web_embed(channel_id="C1", text="t", url="https://example.com", title="title")
+    assert "thread_ts" not in post.call_args.kwargs["json"]
+
+
+def test_whiteboard_embed_tool_threads_off_the_current_deps_thread_ts(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod.send_whiteboard_embed_tool(_run_ctx(Mock()))
+    assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"  # _run_ctx's deps.thread_ts
+
+
+def test_html_embed_tool_threads_off_the_current_deps_thread_ts(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr("agent.web64_client.upload_bytes", lambda *a, **k: "https://example.com/e.html")
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod.send_html_embed_tool(_run_ctx(Mock()), html="<p>hi</p>")
+    assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
+
+
+def test_computer_stream_tool_threads_the_embed_off_the_current_thread(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(
+        agent_mod, "_computer_stream_start", lambda channel_id, thread_ts: "https://x.e2b.app/vnc.html"
+    )
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod.computer_stream_tool(ctx)
+    assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
