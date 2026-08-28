@@ -59,21 +59,57 @@ def _group_key(provider_name: str) -> str:
     return re.sub(r"_\d+$", "", provider_name)
 
 
-def _probe_group(entries: list[tuple[str, dict]]) -> list[tuple[str, bool]]:
+def _probe_group(entries: list[tuple[str, dict]]) -> list[tuple[str, bool, str, float, str]]:
     """Probe every model belonging to one underlying provider, serially —
-    run inside one worker thread by refresh_fallback_cache."""
+    run inside one worker thread by probe_all. Returns full
+    (provider_name, ok, display, elapsed, detail) tuples."""
     results = []
     for provider_name, config in entries:
         ok, display, elapsed, detail = test_provider(provider_name, config)
-        results.append((provider_name, ok))
+        results.append((provider_name, ok, display, elapsed, detail))
         if ok:
-            logger.info("Fallback cache refresh: %s (%s) OK in %.1fs", provider_name, display, elapsed)
+            logger.info("Provider probe: %s (%s) OK in %.1fs", provider_name, display, elapsed)
         else:
             logger.warning(
-                "Fallback cache refresh: %s (%s) FAILED in %.1fs: %s",
+                "Provider probe: %s (%s) FAILED in %.1fs: %s",
                 provider_name, display, elapsed, detail[:200],
             )
     return results
+
+
+def probe_all(order: list[tuple[str, dict]]) -> list[tuple[str, bool, str, float, str]]:
+    """Probe every (provider_name, config) pair in `order`, parallelized across
+    providers. Shared by refresh_fallback_cache (background) and the
+    interactive "Test Providers" button (listeners/actions/test_providers.py) —
+    both used to probe fully sequentially, which meant the button's total wait
+    was roughly the sum of every single configured model's latency (tens of
+    models, several seconds each).
+
+    Entries are grouped by underlying provider (see _group_key): models
+    sharing one upstream stay serial within their own thread, so as not to
+    hammer that provider's rate limits concurrently, but independent
+    providers' groups run in parallel.
+
+    Returns (provider_name, ok, display, elapsed, detail) tuples reassembled
+    into the same order as `order`, regardless of which group's thread
+    happens to finish first — callers that care about fallback priority
+    (refresh_fallback_cache picks the first ok=True as the working provider)
+    depend on this.
+    """
+    if not order:
+        return []
+
+    groups: dict[str, list[tuple[str, dict]]] = {}
+    for provider_name, config in order:
+        groups.setdefault(_group_key(provider_name), []).append((provider_name, config))
+
+    by_name: dict[str, tuple[bool, str, float, str]] = {}
+    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+        for group_results in pool.map(_probe_group, groups.values()):
+            for provider_name, ok, display, elapsed, detail in group_results:
+                by_name[provider_name] = (ok, display, elapsed, detail)
+
+    return [(provider_name, *by_name[provider_name]) for provider_name, _ in order]
 
 
 def refresh_fallback_cache() -> None:
@@ -84,19 +120,6 @@ def refresh_fallback_cache() -> None:
     stay continuously fresh instead of passively expiring — a live user turn
     then never has to discover a dead or working provider by trial and error,
     as long as this ran within the last refresh cycle.
-
-    Models are grouped by underlying provider (see _group_key) and each group
-    is probed serially within its own thread — so as not to hammer one
-    upstream's rate limits with concurrent requests — but different providers'
-    groups run in parallel, since they're independent APIs. A fully serial
-    probe pays every model's latency one after another even across completely
-    unrelated services; this only serializes what actually needs it.
-
-    refresh_from_results treats the first ok=True entry in `results` as the
-    new cached working provider, so the final list must come back in the same
-    fallback-priority order as `order` regardless of which group's thread
-    happens to finish first — results are reassembled by provider_name after
-    every group completes, not appended in completion order.
     """
     from agent.fallback_cache import refresh_from_results
 
@@ -105,15 +128,6 @@ def refresh_fallback_cache() -> None:
         logger.info("Fallback cache refresh: no providers configured, skipping")
         return
 
-    groups: dict[str, list[tuple[str, dict]]] = {}
-    for provider_name, config in order:
-        groups.setdefault(_group_key(provider_name), []).append((provider_name, config))
-
-    ok_by_name: dict[str, bool] = {}
-    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
-        for group_results in pool.map(_probe_group, groups.values()):
-            for provider_name, ok in group_results:
-                ok_by_name[provider_name] = ok
-
-    results = [(provider_name, ok_by_name[provider_name]) for provider_name, _ in order]
+    full_results = probe_all(order)
+    results = [(provider_name, ok) for provider_name, ok, _, _, _ in full_results]
     refresh_from_results(results)
