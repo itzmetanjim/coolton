@@ -29,9 +29,9 @@ class AgentDeps:
     # everything up to the halt (the user's message, any completed tool
     # round-trips) instead of reverting the thread to its pre-turn state.
     halted_messages: list | None = None
-    # Set by the computer_use tool the first time it starts an XFCE desktop this
-    # turn. run_agent only pauses the sandbox (agent/desktop_helpers.py) once at
-    # the very end of the turn when this is set, instead of after every single
-    # action like run_linux_command does — a live noVNC stream would otherwise
-    # die between every click.
-    desktop_active: bool = False
+    # Set by any tool that starts a live view the user is watching (the CUA
+    # desktop's noVNC stream, agent-browser's dashboard) this turn. run_agent
+    # only pauses the sandbox (agent/desktop_helpers.py) once at the very end
+    # of the turn when this is set, instead of after every single action like
+    # run_linux_command does — a live stream would otherwise die mid-session.
+    keep_sandbox_warm: bool = False

@@ -27,6 +27,7 @@ from .slack_info import (
 )
 from .slack_search import search_slack_messages, read_conversation_history
 from .computer_use import computer_use, computer_stream
+from .agent_browser_stream import agent_browser_stream
 
 __all__ = [
     "add_emoji_reaction",
@@ -63,4 +64,5 @@ __all__ = [
     "read_conversation_history",
     "computer_use",
     "computer_stream",
+    "agent_browser_stream",
 ]

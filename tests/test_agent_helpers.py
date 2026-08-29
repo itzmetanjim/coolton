@@ -778,3 +778,44 @@ def test_computer_stream_tool_threads_the_embed_off_the_current_thread(monkeypat
         post.return_value.json.return_value = {"ok": True}
         agent_mod.computer_stream_tool(ctx)
     assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
+
+
+def test_computer_stream_tool_marks_keep_sandbox_warm(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(
+        agent_mod, "_computer_stream_start", lambda channel_id, thread_ts: "https://x.e2b.app/vnc.html"
+    )
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod.computer_stream_tool(ctx)
+    assert ctx.deps.keep_sandbox_warm is True
+
+
+def test_agent_browser_stream_tool_threads_the_embed_and_marks_keep_sandbox_warm(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(
+        agent_mod, "_agent_browser_stream_start",
+        lambda channel_id, thread_ts: "https://2390.proxy.tanjim.org/ab/tok123",
+    )
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        result = agent_mod.agent_browser_stream_tool(ctx)
+    assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
+    assert post.call_args.kwargs["json"]["blocks"][0]["video_url"] == "https://2390.proxy.tanjim.org/ab/tok123"
+    assert ctx.deps.keep_sandbox_warm is True
+    # send_web_embed's return value is always a non-empty string (success or
+    # error), and computer_stream_tool's identical `if error:` check treats any
+    # of them as the failure branch — matching that existing (if surprising)
+    # behavior rather than diverging from it for just this tool.
+    assert result == "Success: Embed sent to C1 | url: https://2390.proxy.tanjim.org/ab/tok123"
+
+
+def test_agent_browser_stream_tool_requires_e2b_api_key(monkeypatch):
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    ctx = _run_ctx(Mock())
+    result = agent_mod.agent_browser_stream_tool(ctx)
+    assert "E2B_API_KEY" in result
