@@ -1,6 +1,7 @@
 import logging
 import time
 
+import agent.thread_status as thread_status
 from agent.redact import redact as _redact
 from agent.steering_store import clear_steering_messages, peek_steering_messages
 from agent.stop_store import HaltRun, stop_requested_for
@@ -424,6 +425,8 @@ def build_plan_hooks():
             call.tool_name,
             _truncate(_redact(_pretty_args(args), context=f"tool input {call.tool_name}"), 1000),
         )
+        display = _display_for_tool(call.tool_name)
+        thread_status.set_status(deps.channel_id, deps.thread_ts, f"calling tool: {display}")
         # If the user sent !stop in this thread after this run started, halt before the next tool.
         if stop_requested_for(deps.channel_id, deps.thread_ts, deps.run_started_at):
             deps.halted_messages = _messages_safe_for_resume(ctx.messages)
@@ -431,7 +434,6 @@ def build_plan_hooks():
         if not deps.plan_ts:
             return args
         task_id = f"task_{call.tool_call_id}"
-        display = _display_for_tool(call.tool_name)
         if _DEFAULT_THINKING_ID in deps.plan_tasks:
             del deps.plan_tasks[_DEFAULT_THINKING_ID]
         deps.plan_tasks[task_id] = {

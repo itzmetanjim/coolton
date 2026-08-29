@@ -455,6 +455,52 @@ def test_build_plan_hooks_does_not_track_when_plan_ts_unset():
     assert deps.plan_tasks == {}
 
 
+def test_build_plan_hooks_updates_live_thread_status_on_tool_call():
+    import agent.thread_status as thread_status
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100", channel_id="TS1", thread_ts="1.1")
+    thread_status.start(deps.client, "TS1", "1.1")
+    deps.client.assistant_threads_setStatus.reset_mock()
+    ctx = SimpleNamespace(deps=deps)
+    call = SimpleNamespace(tool_name="add_emoji_reaction", tool_call_id="abc123")
+
+    async def run():
+        await _hook(hooks, "before_tool_execute")(ctx, call=call, tool_def=None, args={})
+
+    try:
+        asyncio.run(run())
+        deps.client.assistant_threads_setStatus.assert_called_once_with(
+            channel_id="TS1", thread_ts="1.1", status="calling tool: Reacting to message"
+        )
+    finally:
+        thread_status.stop("TS1", "1.1")
+
+
+def test_build_plan_hooks_updates_live_thread_status_even_without_a_plan_message():
+    """The live status pill is independent of the plan/thinking block — it should still
+    update even when plan_ts is unset (e.g. send_plan_message failed)."""
+    import agent.thread_status as thread_status
+
+    hooks = build_plan_hooks()
+    deps = _deps(channel_id="TS2", thread_ts="1.1")  # plan_ts None
+    thread_status.start(deps.client, "TS2", "1.1")
+    deps.client.assistant_threads_setStatus.reset_mock()
+    ctx = SimpleNamespace(deps=deps)
+    call = SimpleNamespace(tool_name="search_web_tool", tool_call_id="abc123")
+
+    async def run():
+        await _hook(hooks, "before_tool_execute")(ctx, call=call, tool_def=None, args={})
+
+    try:
+        asyncio.run(run())
+        deps.client.assistant_threads_setStatus.assert_called_once_with(
+            channel_id="TS2", thread_ts="1.1", status="calling tool: Searching the web"
+        )
+    finally:
+        thread_status.stop("TS2", "1.1")
+
+
 def test_build_plan_hooks_tool_error_marks_error_and_reraises():
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
