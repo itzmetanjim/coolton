@@ -316,8 +316,12 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str) -> str:
         sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
         # Pass the GitHub proxy env directly (E2B `envs=`) so gh/git/curl are authenticated
         # via the host proxy on every command; the real token never enters the sandbox.
+        # commands.run()'s own default timeout is 60s, too short for legitimate slow
+        # commands (agent-browser opening a page and waiting for it to load, npm
+        # installs, builds) — match code_mode's sandbox call (line ~424) at 600s rather
+        # than leave the SDK default in place.
         try:
-            result = sandbox.commands.run(command, envs=_proxy_env(proxy_info))
+            result = sandbox.commands.run(command, envs=_proxy_env(proxy_info), timeout=600)
         finally:
             sandbox.pause()
         output = []

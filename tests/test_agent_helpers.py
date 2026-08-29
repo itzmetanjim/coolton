@@ -819,3 +819,35 @@ def test_agent_browser_stream_tool_requires_e2b_api_key(monkeypatch):
     ctx = _run_ctx(Mock())
     result = agent_mod.agent_browser_stream_tool(ctx)
     assert "E2B_API_KEY" in result
+
+
+# ---------------------------------------------------------------------------
+# run_linux_command must not use commands.run()'s own 60s default — that's too
+# short for legitimate slow commands (agent-browser opening a page and waiting
+# for it to load, npm installs, builds), and a bare "context deadline exceeded"
+# from the SDK is what a user actually hit running agent-browser this way.
+# ---------------------------------------------------------------------------
+
+
+def test_run_linux_command_passes_a_generous_timeout_to_commands_run(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+
+    class _FakeCommands:
+        def run(self, cmd, envs=None, timeout=None):
+            _FakeCommands.last_call = {"cmd": cmd, "envs": envs, "timeout": timeout}
+            return SimpleNamespace(stdout="ok", stderr="", exit_code=0)
+
+    class _FakeSandbox:
+        def __init__(self):
+            self.commands = _FakeCommands()
+
+        def pause(self):
+            pass
+
+    fake_sandbox = _FakeSandbox()
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, None))
+    ctx = _run_ctx(Mock())
+    agent_mod.run_linux_command(ctx, "echo hi")
+    assert _FakeCommands.last_call["timeout"] == 600
