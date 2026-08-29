@@ -68,6 +68,12 @@ command will finish on its own.
    beat. Only treat it as an actual failure once a wait-and-recheck still shows nothing changed.
 5. Call `computer_stream_tool` once near the start of a session so the user has a live view. It's
    safe to call again if you think they lost the link.
+6. Every `action="screenshot"` also posts that image to the thread as its own message (throttled
+   to a few seconds apart), not just the live stream link — so take one every so often even when
+   you don't strictly need it to decide your next move. This matters just as much during a
+   `--headed` agent-browser session (same shared desktop, same throttle) — a long stretch of
+   agent-browser commands with no screenshot in between means the user sees nothing until you're
+   done, so check in with a screenshot periodically rather than only at the end.
 
 ## Timing
 The desktop starts cold on first use (Xvfb + xfce4 boot inside `ensure_desktop`) — the very first

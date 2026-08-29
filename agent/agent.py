@@ -705,6 +705,38 @@ _VISION_GATE_ERROR = (
     "with `[!WITH:vision]` — that pins the run to a vision-capable model for this turn."
 )
 
+_SCREENSHOT_POST_MIN_INTERVAL_SECONDS = 8
+
+
+def _maybe_post_screenshot(ctx: RunContext[AgentDeps], png: bytes) -> None:
+    """Post a desktop screenshot to the thread as its own message, throttled so a fast
+    screenshot/click loop (computer_use, or the model checking in on a --headed
+    agent-browser session) doesn't spam the channel with one message per action.
+
+    Best-effort: any failure here must never break the actual computer_use action's
+    return value to the model, so exceptions are swallowed after a warning log.
+    """
+    now = time.time()
+    if now - ctx.deps.last_screenshot_post_ts < _SCREENSHOT_POST_MIN_INTERVAL_SECONDS:
+        return
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token:
+        return
+    try:
+        from agent.web64_client import upload_bytes
+        url = upload_bytes(png, "screenshot.png", mime="image/png")
+        payload = {
+            "channel": ctx.deps.channel_id,
+            "text": "desktop screenshot",
+            "thread_ts": ctx.deps.thread_ts,
+            "blocks": [{"type": "image", "image_url": url, "alt_text": "desktop screenshot"}],
+        }
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+        requests.post("https://slack.com/api/chat.postMessage", json=payload, headers=headers, timeout=15)
+        ctx.deps.last_screenshot_post_ts = now
+    except Exception as e:
+        logger.warning(f"Failed to post desktop screenshot to thread: {e}")
+
 
 @agent.tool
 def computer_use(
@@ -725,6 +757,13 @@ def computer_use(
     Needs a vision-capable model — see a screenshot after every action to know where
     things are and what happened. If the current turn isn't running on one, this
     returns an error telling the user to re-send with `[!WITH:vision]`.
+
+    A "screenshot" action also posts that image to the thread itself (throttled to at
+    most once every few seconds), so the user sees progress inline without needing to
+    open the live stream. This works the same way during a --headed agent-browser
+    session (same shared desktop) — call `action="screenshot"` periodically as a
+    check-in even if you don't strictly need it to decide your next move, so the user
+    gets to see it happen instead of just a final report.
 
     Actions:
     - "screenshot": see the current screen (no other args). ALWAYS start here and take
@@ -767,6 +806,7 @@ def computer_use(
         return ToolReturn(f"Error: {e}")
     ctx.deps.keep_sandbox_warm = True
     if isinstance(result, bytes):
+        _maybe_post_screenshot(ctx, result)
         return ToolReturn(
             "Screenshot of your desktop.",
             content=[

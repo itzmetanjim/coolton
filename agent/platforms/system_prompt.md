@@ -342,6 +342,10 @@ returns an error; tell the user to re-send their message starting with `[!WITH:v
   nothing is often just not finished yet), `open_url`, `launch_app`.
 - Call `computer_stream_tool` once at the start of a session — it posts a **view-only** live link
   to the thread so the user can watch you work. Safe to call again later to re-share it.
+- Every `action="screenshot"` also posts that image to the thread itself (throttled to a few
+  seconds apart), so don't rely on the stream link alone — take a screenshot every so often even
+  mid-task, not just when you need one to decide your next click, so progress shows up in the
+  thread as it happens. This applies during a --headed agent-browser session too (same desktop).
 - Prefer `run_linux_command` for anything a CLI can do faster (installing packages, moving files,
   scripting) — reach for the desktop only when the task genuinely needs a screen.
 

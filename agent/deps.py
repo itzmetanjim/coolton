@@ -29,9 +29,14 @@ class AgentDeps:
     # everything up to the halt (the user's message, any completed tool
     # round-trips) instead of reverting the thread to its pre-turn state.
     halted_messages: list | None = None
-    # Set by any tool that starts a live view the user is watching (the CUA
-    # desktop's noVNC stream, agent-browser's dashboard) this turn. run_agent
-    # only pauses the sandbox (agent/desktop_helpers.py) once at the very end
-    # of the turn when this is set, instead of after every single action like
-    # run_linux_command does — a live stream would otherwise die mid-session.
+    # Set by any tool that starts a live view the user is watching (the desktop's
+    # noVNC stream, shared by computer_use and a --headed agent-browser session)
+    # this turn. run_agent only pauses the sandbox (agent/desktop_helpers.py) once
+    # at the very end of the turn when this is set, instead of after every single
+    # action like run_linux_command does — a live stream would otherwise die
+    # mid-session.
     keep_sandbox_warm: bool = False
+    # Last time (time.time()) a desktop screenshot was posted to the thread as its
+    # own message (agent.agent._maybe_post_screenshot). Throttles computer_use's
+    # "screenshot" action so a fast click/screenshot loop doesn't spam the channel.
+    last_screenshot_post_ts: float = 0.0
