@@ -504,6 +504,7 @@ def _run_ctx(client):
     deps = SimpleNamespace(
         client=client, channel_id="C1", thread_ts="1.2", user_id="U_TEST",
         last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=0.0, keep_sandbox_warm=False,
+        slack_api_call_failures={},
     )
     return RunContext(model=None, usage=None, prompt="", deps=deps)
 
@@ -639,6 +640,70 @@ def test_slack_api_call_returns_full_error_json(monkeypatch):
     assert "required" in result
     assert "channel" in result
     assert "provided" in result
+
+
+def test_slack_api_call_does_not_block_before_the_retry_limit(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": False, "error": "missing_argument"}
+        agent_mod.slack_api_call(ctx, method="conversations.join", params={})
+        result = agent_mod.slack_api_call(ctx, method="conversations.join", params={})
+    assert "missing_argument" in result
+    assert post.call_count == 2  # under the limit, both attempts actually hit the network
+
+
+def test_slack_api_call_blocks_after_repeated_identical_failures(monkeypatch):
+    """The exact loop a user reported: the model kept calling conversations.join with
+    an empty params dict, never correcting itself. After enough identical failures the
+    tool must refuse to keep retrying it unchanged rather than hitting the network
+    (and looping) forever."""
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": False, "error": "missing_argument"}
+        for _ in range(2):
+            agent_mod.slack_api_call(ctx, method="conversations.join", params={})
+        result = agent_mod.slack_api_call(ctx, method="conversations.join", params={})
+    assert post.call_count == 2  # the 3rd attempt never reaches the network
+    assert "already failed" in result
+    assert "params was empty" in result
+
+
+def test_slack_api_call_block_is_specific_to_the_exact_method_and_params(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": False, "error": "missing_argument"}
+        for _ in range(3):
+            agent_mod.slack_api_call(ctx, method="conversations.join", params={})
+        # A different channel is a different failure signature — not blocked by the above.
+        result = agent_mod.slack_api_call(ctx, method="conversations.join", params={"channel": "C2"})
+    assert post.call_count == 3  # 2 identical + 1 for the genuinely different call
+    assert "already failed" not in result
+
+
+def test_slack_api_call_a_success_does_not_get_blocked_later(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        for _ in range(5):
+            result = agent_mod.slack_api_call(ctx, method="auth.test", params={})
+    assert post.call_count == 5
+    assert "Success" in result
+
+
+def test_slack_api_call_as_bot_tool_blocks_after_repeated_identical_failures(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    ctx = _run_ctx(Mock())
+    with patch("agent.tools.slack_bot_api.requests.post") as post:
+        post.return_value.json.return_value = {"ok": False, "error": "missing_argument"}
+        for _ in range(2):
+            agent_mod.slack_api_call_as_bot_tool(ctx, method="conversations.join", params={})
+        result = agent_mod.slack_api_call_as_bot_tool(ctx, method="conversations.join", params={})
+    assert post.call_count == 2
+    assert "already failed" in result
 
 
 def test_slack_api_call_as_bot_rejects_chat_post_message_without_channel(monkeypatch):
