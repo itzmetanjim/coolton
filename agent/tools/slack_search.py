@@ -104,6 +104,40 @@ def assert_readable_channel(channel_id: str, current_channel_id: str = "") -> st
         return f"Could not verify channel {channel_id} is safe to read ({e}); refusing."
 
 
+def _join_channel_as_bot(bot_token: str, channel_id: str) -> bool:
+    """Best-effort: join channel_id as the bot itself (conversations.join, needs the
+    channels:join scope — already granted). Returns True on success, False on anything
+    that isn't a plain self-joinable public channel — never raises.
+
+    Slack Connect (is_ext_shared) and org-shared (is_org_shared) channels, plus plain
+    private ones, aren't skipped by relying on conversations.join to just fail cleanly
+    for them: a Slack Connect channel needs an explicit human invite from the other
+    side, not an auto-join, so this checks conversations.info first and refuses to
+    even attempt it for any of those — read_conversation_history falls back to
+    reporting the original not_in_channel error for a human to resolve instead."""
+    try:
+        info = requests.get(
+            f"{SLACK_API}/conversations.info",
+            params={"channel": channel_id},
+            headers={"Authorization": f"Bearer {bot_token}"},
+            timeout=10,
+        ).json()
+        if not info.get("ok"):
+            return False
+        ch = info.get("channel") or {}
+        if ch.get("is_org_shared") or ch.get("is_ext_shared") or ch.get("is_private"):
+            return False
+        response = requests.post(
+            f"{SLACK_API}/conversations.join",
+            json={"channel": channel_id},
+            headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json; charset=utf-8"},
+            timeout=10,
+        )
+        return bool(response.json().get("ok"))
+    except Exception:
+        return False
+
+
 def read_conversation_history(
     channel_id: str,
     limit: int = 20,
@@ -145,6 +179,15 @@ def read_conversation_history(
             timeout=20,
         )
         res_json = response.json()
+        if not res_json.get("ok") and res_json.get("error") == "not_in_channel" and _join_channel_as_bot(bot_token, channel_id):
+            # Self-heal: the bot itself (not cooltonUser — a separate identity/token,
+            # invite_coolton_user_to_channel doesn't help here) wasn't a member. A
+            # public channel needs no invite, just channels:join — retry once.
+            response = requests.get(
+                f"{SLACK_API}/{method}", params=params,
+                headers={"Authorization": f"Bearer {bot_token}"}, timeout=20,
+            )
+            res_json = response.json()
         if not res_json.get("ok"):
             return f"Slack API error: {res_json}"
         messages = res_json.get("messages", [])
