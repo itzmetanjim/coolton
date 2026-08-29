@@ -34,9 +34,18 @@ fight a GUI app that has no accessibility tree to snapshot.
   mouse/keyboard event, not automation) is the one case worth falling back to computer_use on a
   website. Try agent-browser first; don't default to computer_use for the web out of habit.
 
-Either way, if the session is nontrivial, call `agent_browser_stream_tool()` (once, the same way
-`computer_stream_tool` works for the desktop) so the user can watch agent-browser's own live
-viewport instead of waiting for a final report.
+agent-browser runs headless by default (fast CDP automation, no rendering needed) — nothing to
+watch even if you post a stream link. If the session is nontrivial and worth letting the user
+watch live: call `agent_browser_stream_tool()` once first (it's the exact same view-only desktop
+stream `computer_stream_tool` posts — agent-browser doesn't get its own separate viewer), then run
+agent-browser itself with `--headed` and `DISPLAY=:0` so its Chrome window actually renders into
+that desktop instead of staying invisible:
+```
+DISPLAY=:0 agent-browser open --headed https://example.com
+```
+Both are required together — `--headed` alone with no DISPLAY set (or a DISPLAY nothing is
+listening on) still won't show up anywhere, and `agent_browser_stream_tool` without `--headed`
+just shows an empty desktop while agent-browser works invisibly off-screen.
 
 `run_linux_command` defaults to a 60s timeout — plenty for a quick command, not for a cold browser
 session opening a page and waiting for it to load. Raise `timeout` up front (a few hundred

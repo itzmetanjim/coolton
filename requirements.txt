@@ -5,8 +5,6 @@ pydantic-ai[openai,anthropic,groq,openrouter]
 pydantic-ai-skills
 fastapi
 uvicorn
-httpx
-websockets
 python-dotenv==1.2.2
 requests
 e2b-code-interpreter

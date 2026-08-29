@@ -798,20 +798,20 @@ def test_agent_browser_stream_tool_threads_the_embed_and_marks_keep_sandbox_warm
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     monkeypatch.setattr(
         agent_mod, "_agent_browser_stream_start",
-        lambda channel_id, thread_ts: "https://2390.proxy.tanjim.org/ab/tok123",
+        lambda channel_id, thread_ts: "https://x.e2b.app/vnc.html",
     )
     ctx = _run_ctx(Mock())
     with patch("agent.agent.requests.post") as post:
         post.return_value.json.return_value = {"ok": True}
         result = agent_mod.agent_browser_stream_tool(ctx)
     assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
-    assert post.call_args.kwargs["json"]["blocks"][0]["video_url"] == "https://2390.proxy.tanjim.org/ab/tok123"
+    assert post.call_args.kwargs["json"]["blocks"][0]["video_url"] == "https://x.e2b.app/vnc.html"
     assert ctx.deps.keep_sandbox_warm is True
     # send_web_embed's return value is always a non-empty string (success or
     # error), and computer_stream_tool's identical `if error:` check treats any
     # of them as the failure branch — matching that existing (if surprising)
     # behavior rather than diverging from it for just this tool.
-    assert result == "Success: Embed sent to C1 | url: https://2390.proxy.tanjim.org/ab/tok123"
+    assert result == "Success: Embed sent to C1 | url: https://x.e2b.app/vnc.html"
 
 
 def test_agent_browser_stream_tool_requires_e2b_api_key(monkeypatch):
@@ -884,3 +884,32 @@ def test_run_linux_command_clamps_an_out_of_range_positive_timeout(monkeypatch):
 
     agent_mod.run_linux_command(ctx, "echo hi", timeout=999999)
     assert fake_commands.last_call["timeout"] == 1800  # ceiling
+
+
+# ---------------------------------------------------------------------------
+# agent.tools.agent_browser_stream.agent_browser_stream — must ensure the
+# desktop is up before starting its stream (a --headed agent-browser session
+# renders into that desktop; if it's not up yet, there's nothing to render into).
+# ---------------------------------------------------------------------------
+
+
+def test_agent_browser_stream_ensures_desktop_before_starting_stream(monkeypatch):
+    # agent/tools/__init__.py does `from .agent_browser_stream import agent_browser_stream`,
+    # which overwrites the `agent_browser_stream` attribute on the `agent.tools` package with
+    # the function itself — `import agent.tools.agent_browser_stream as x` would resolve to
+    # that shadowed function, not the submodule. Go through sys.modules directly instead.
+    abs_mod = importlib.import_module("agent.tools.agent_browser_stream")
+
+    calls = []
+    fake_sandbox = object()
+    fake_proxy_info = {"token": "t"}
+
+    monkeypatch.setattr(abs_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, fake_proxy_info))
+    monkeypatch.setattr(abs_mod.dh, "ensure_desktop", lambda sb, pi: calls.append(("ensure_desktop", sb, pi)))
+    monkeypatch.setattr(abs_mod.dh, "start_stream", lambda sb, pi: calls.append(("start_stream", sb, pi)) or "https://x.e2b.app/vnc.html")
+
+    url = abs_mod.agent_browser_stream("C1", "1.1")
+
+    assert url == "https://x.e2b.app/vnc.html"
+    assert [c[0] for c in calls] == ["ensure_desktop", "start_stream"]
+    assert all(c[1] is fake_sandbox and c[2] is fake_proxy_info for c in calls)
