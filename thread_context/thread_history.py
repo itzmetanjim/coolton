@@ -55,7 +55,15 @@ def build_thread_context(
         if not cursor or len(fetched) >= MAX_TOTAL:
             break
 
-    prior = [m for m in fetched if m.get("ts") != exclude_ts and m.get("text")]
+    # "##"-prefixed messages are never processed or responded to (see
+    # listeners/events/message.py / app_mentioned.py) — they must stay out of the
+    # model's context too, not just skip triggering a response, or a private
+    # aside dropped into a thread leaks in the moment a real message pulls this
+    # thread's history for the first time.
+    prior = [
+        m for m in fetched
+        if m.get("ts") != exclude_ts and m.get("text") and not m["text"].strip().startswith("##")
+    ]
     if not prior:
         return None
     prior = prior[-MAX_CONTEXT:]
