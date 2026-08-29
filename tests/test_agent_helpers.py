@@ -822,17 +822,14 @@ def test_agent_browser_stream_tool_requires_e2b_api_key(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# run_linux_command must not use commands.run()'s own 60s default — that's too
-# short for legitimate slow commands (agent-browser opening a page and waiting
-# for it to load, npm installs, builds), and a bare "context deadline exceeded"
-# from the SDK is what a user actually hit running agent-browser this way.
+# run_linux_command must not silently use commands.run()'s own 60s default without
+# the model being able to change it — a bare "context deadline exceeded" from the
+# SDK is what a user actually hit running a slow agent-browser command this way.
 # ---------------------------------------------------------------------------
 
 
-def test_run_linux_command_passes_a_generous_timeout_to_commands_run(monkeypatch):
+def _fake_sandbox_recording_timeout(monkeypatch):
     from types import SimpleNamespace
-
-    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
 
     class _FakeCommands:
         def run(self, cmd, envs=None, timeout=None):
@@ -848,58 +845,42 @@ def test_run_linux_command_passes_a_generous_timeout_to_commands_run(monkeypatch
 
     fake_sandbox = _FakeSandbox()
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, None))
+    return _FakeCommands
+
+
+def test_run_linux_command_defaults_to_a_60s_timeout(monkeypatch):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_commands = _fake_sandbox_recording_timeout(monkeypatch)
     ctx = _run_ctx(Mock())
     agent_mod.run_linux_command(ctx, "echo hi")
-    assert _FakeCommands.last_call["timeout"] == 600
+    assert fake_commands.last_call["timeout"] == 60
 
 
 def test_run_linux_command_lets_the_model_raise_the_timeout(monkeypatch):
-    from types import SimpleNamespace
-
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-
-    class _FakeCommands:
-        def run(self, cmd, envs=None, timeout=None):
-            _FakeCommands.last_call = {"timeout": timeout}
-            return SimpleNamespace(stdout="ok", stderr="", exit_code=0)
-
-    class _FakeSandbox:
-        def __init__(self):
-            self.commands = _FakeCommands()
-
-        def pause(self):
-            pass
-
-    fake_sandbox = _FakeSandbox()
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, None))
+    fake_commands = _fake_sandbox_recording_timeout(monkeypatch)
     ctx = _run_ctx(Mock())
     agent_mod.run_linux_command(ctx, "agent-browser open https://en.wikipedia.org/wiki/AI", timeout=1500)
-    assert _FakeCommands.last_call["timeout"] == 1500
+    assert fake_commands.last_call["timeout"] == 1500
 
 
-def test_run_linux_command_clamps_an_out_of_range_timeout(monkeypatch):
-    from types import SimpleNamespace
-
+def test_run_linux_command_timeout_zero_disables_it(monkeypatch):
+    """0 is the model's explicit opt-in to let a command run unbounded — matches
+    commands.run()'s own SDK semantics (falsy timeout -> no deadline sent)."""
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_commands = _fake_sandbox_recording_timeout(monkeypatch)
+    ctx = _run_ctx(Mock())
+    agent_mod.run_linux_command(ctx, "echo hi", timeout=0)
+    assert fake_commands.last_call["timeout"] == 0
 
-    class _FakeCommands:
-        def run(self, cmd, envs=None, timeout=None):
-            _FakeCommands.last_call = {"timeout": timeout}
-            return SimpleNamespace(stdout="ok", stderr="", exit_code=0)
 
-    class _FakeSandbox:
-        def __init__(self):
-            self.commands = _FakeCommands()
-
-        def pause(self):
-            pass
-
-    fake_sandbox = _FakeSandbox()
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, None))
+def test_run_linux_command_clamps_an_out_of_range_positive_timeout(monkeypatch):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_commands = _fake_sandbox_recording_timeout(monkeypatch)
     ctx = _run_ctx(Mock())
 
-    agent_mod.run_linux_command(ctx, "echo hi", timeout=0)
-    assert _FakeCommands.last_call["timeout"] == 10  # floor, not an unbounded/disabled timeout
+    agent_mod.run_linux_command(ctx, "echo hi", timeout=1)
+    assert fake_commands.last_call["timeout"] == 10  # floor
 
     agent_mod.run_linux_command(ctx, "echo hi", timeout=999999)
-    assert _FakeCommands.last_call["timeout"] == 1800  # ceiling
+    assert fake_commands.last_call["timeout"] == 1800  # ceiling
