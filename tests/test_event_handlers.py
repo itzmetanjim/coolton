@@ -300,14 +300,20 @@ def test_app_mentioned_mid_thread_mention_does_not_join(ctx):
         run_turn.assert_called_once()
 
 
-def test_app_mentioned_empty_ping_greets(ctx):
+def test_app_mentioned_empty_ping_runs_a_turn_with_thread_context_prefilled(ctx):
+    """A bare "@coolton" with no text used to short-circuit to a hardcoded canned
+    greeting and never touch history at all. It should run a real turn instead, with
+    the thread's existing context prefilled if there is any, so the model can respond
+    to what's actually going on rather than a generic string."""
     from unittest.mock import patch
 
-    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
-        _mention(ctx, text="<@BOT1>")
-        run_turn.assert_not_called()
-        ctx.say.assert_called_once()
-        assert "How can I help you" in ctx.say.call_args.kwargs["text"]
+    store = Mock(get_history=Mock(return_value=None))
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.conversation_store", store):
+        _mention(ctx, text="<@BOT1>", ts="111.111", thread_ts="1.1")
+        run_turn.assert_called_once()
+        assert run_turn.call_args.kwargs["history"] == ["ctx"]  # from build_thread_context, mocked in ctx fixture
+    ctx.say.assert_not_called()
 
 
 def test_app_mentioned_builds_thread_context_when_history_none(ctx):

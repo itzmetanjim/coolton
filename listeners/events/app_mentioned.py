@@ -1,4 +1,3 @@
-import re
 from logging import Logger
 
 from slack_bolt import BoltContext, Say, SayStream
@@ -81,15 +80,11 @@ def handle_app_mentioned(
             join_thread(channel_id, thread_ts)
 
         # The bot mention stays in the text verbatim — the model is taught to read
-        # <@BOTID> as "@coolton". Only use a stripped copy to test for empty pings.
-        has_content = re.sub(r"<@[A-Z0-9]+>", "", text).strip()
-
-        if not has_content:
-            say(
-                text="Hey there! How can I help you? Ask me anything and I'll do my best.",
-                thread_ts=thread_ts,
-            )
-            return
+        # <@BOTID> as "@coolton". A bare, contentless mention ("@coolton" with nothing
+        # else) still runs a real turn rather than a hardcoded canned reply — with
+        # thread history prefilled (below) the model can respond to what's actually
+        # going on instead of a generic greeting, and without any history it still
+        # generates a natural one itself from the system prompt/personality.
 
         # Get conversation history
         history = conversation_store.get_history(channel_id, thread_ts)
