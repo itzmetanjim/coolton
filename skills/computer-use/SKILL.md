@@ -38,10 +38,11 @@ Either way, if the session is nontrivial, call `agent_browser_stream_tool()` (on
 `computer_stream_tool` works for the desktop) so the user can watch agent-browser's own live
 viewport instead of waiting for a final report.
 
-`run_linux_command` defaults to a 600s timeout, but a cold browser session opening a page and
-waiting for it to load can still exceed that — pass a higher `timeout` (up to 1800) up front for
-anything chained (`open ... && wait ...`) rather than finding out from a "context deadline
-exceeded" error.
+`run_linux_command` defaults to a 60s timeout — plenty for a quick command, not for a cold browser
+session opening a page and waiting for it to load. Raise `timeout` up front (a few hundred
+seconds, or up to 1800) for anything chained (`open ... && wait ...`) rather than finding out from
+a "context deadline exceeded" error. `timeout=0` disables it entirely if you're confident the
+command will finish on its own.
 
 ## The loop
 1. `computer_use(action="screenshot")` first, always — see the actual current state before acting.

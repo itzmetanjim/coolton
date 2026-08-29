@@ -304,7 +304,7 @@ def invite_coolton_user_to_channel(ctx: RunContext[AgentDeps]) -> str:
 
 _RUN_LINUX_COMMAND_MIN_TIMEOUT = 10
 _RUN_LINUX_COMMAND_MAX_TIMEOUT = 1800
-_RUN_LINUX_COMMAND_DEFAULT_TIMEOUT = 600
+_RUN_LINUX_COMMAND_DEFAULT_TIMEOUT = 60
 
 
 @agent.tool
@@ -315,24 +315,28 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str, timeout: int = _
 
     Args:
         command: The shell command to run.
-        timeout: Max seconds to let the command run before giving up (default 600).
-            Raise this for commands you expect to be slow (agent-browser opening a
-            page and waiting for it to load, npm installs, builds, long scripts) —
-            the default is not always enough. Lower it if you want a quick command
-            to fail fast instead of hanging. Clamped to 10-1800 seconds.
+        timeout: Max seconds to let the command run before giving up (default 60,
+            same as a quick shell command needs). Raise this BEFORE running anything
+            you expect to be slow (agent-browser opening a page and waiting for it
+            to load, npm installs, builds, long scripts) — don't wait to find out
+            from a "context deadline exceeded" error. Pass 0 to disable the timeout
+            entirely and let the command run as long as it needs; only do this when
+            you're confident it will actually finish on its own. Any other value is
+            clamped to 10-1800 seconds.
     """
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured."
     channel_id = ctx.deps.channel_id
     thread_ts = ctx.deps.thread_ts
-    timeout = max(_RUN_LINUX_COMMAND_MIN_TIMEOUT, min(timeout, _RUN_LINUX_COMMAND_MAX_TIMEOUT))
+    if timeout != 0:
+        timeout = max(_RUN_LINUX_COMMAND_MIN_TIMEOUT, min(timeout, _RUN_LINUX_COMMAND_MAX_TIMEOUT))
     try:
         sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
         # Pass the GitHub proxy env directly (E2B `envs=`) so gh/git/curl are authenticated
         # via the host proxy on every command; the real token never enters the sandbox.
-        # commands.run()'s own default timeout is 60s, too short for a lot of legitimate
-        # commands — the model picks how long to allow (see the `timeout` param above),
-        # defaulting to 600s rather than leaving the SDK's 60s default in place.
+        # timeout=0 here means "disabled" (falsy timeout -> no deadline sent, per the E2B
+        # SDK's own timeout_to_ms helper) — the model opts into that explicitly per call,
+        # it isn't the implicit default.
         try:
             result = sandbox.commands.run(command, envs=_proxy_env(proxy_info), timeout=timeout)
         finally:
