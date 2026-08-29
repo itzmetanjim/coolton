@@ -851,3 +851,55 @@ def test_run_linux_command_passes_a_generous_timeout_to_commands_run(monkeypatch
     ctx = _run_ctx(Mock())
     agent_mod.run_linux_command(ctx, "echo hi")
     assert _FakeCommands.last_call["timeout"] == 600
+
+
+def test_run_linux_command_lets_the_model_raise_the_timeout(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+
+    class _FakeCommands:
+        def run(self, cmd, envs=None, timeout=None):
+            _FakeCommands.last_call = {"timeout": timeout}
+            return SimpleNamespace(stdout="ok", stderr="", exit_code=0)
+
+    class _FakeSandbox:
+        def __init__(self):
+            self.commands = _FakeCommands()
+
+        def pause(self):
+            pass
+
+    fake_sandbox = _FakeSandbox()
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, None))
+    ctx = _run_ctx(Mock())
+    agent_mod.run_linux_command(ctx, "agent-browser open https://en.wikipedia.org/wiki/AI", timeout=1500)
+    assert _FakeCommands.last_call["timeout"] == 1500
+
+
+def test_run_linux_command_clamps_an_out_of_range_timeout(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+
+    class _FakeCommands:
+        def run(self, cmd, envs=None, timeout=None):
+            _FakeCommands.last_call = {"timeout": timeout}
+            return SimpleNamespace(stdout="ok", stderr="", exit_code=0)
+
+    class _FakeSandbox:
+        def __init__(self):
+            self.commands = _FakeCommands()
+
+        def pause(self):
+            pass
+
+    fake_sandbox = _FakeSandbox()
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, None))
+    ctx = _run_ctx(Mock())
+
+    agent_mod.run_linux_command(ctx, "echo hi", timeout=0)
+    assert _FakeCommands.last_call["timeout"] == 10  # floor, not an unbounded/disabled timeout
+
+    agent_mod.run_linux_command(ctx, "echo hi", timeout=999999)
+    assert _FakeCommands.last_call["timeout"] == 1800  # ceiling
