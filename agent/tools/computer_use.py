@@ -1,7 +1,7 @@
 """Computer-use tool: drive an XFCE desktop inside the thread's existing E2B sandbox.
 
 Pure dispatch logic lives here; the `@agent.tool` wrapper in agent/agent.py handles
-RunContext plumbing, the vision-model gate, and marking deps.desktop_active — matching
+RunContext plumbing, the vision-model gate, and marking deps.keep_sandbox_warm — matching
 how every other tool in this codebase splits "tools/*.py logic" from "agent.py wrapper".
 """
 

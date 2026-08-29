@@ -34,6 +34,10 @@ fight a GUI app that has no accessibility tree to snapshot.
   mouse/keyboard event, not automation) is the one case worth falling back to computer_use on a
   website. Try agent-browser first; don't default to computer_use for the web out of habit.
 
+Either way, if the session is nontrivial, call `agent_browser_stream_tool()` (once, the same way
+`computer_stream_tool` works for the desktop) so the user can watch agent-browser's own live
+viewport instead of waiting for a final report.
+
 ## The loop
 1. `computer_use(action="screenshot")` first, always — see the actual current state before acting.
 2. Decide the single next action from what you see. Coordinates are pixels *in that screenshot*,

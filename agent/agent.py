@@ -19,6 +19,7 @@ from agent.stop_store import HaltRun
 from agent.tools import add_emoji_reaction
 from agent.tools.computer_use import computer_use as _computer_use_dispatch
 from agent.tools.computer_use import computer_stream as _computer_stream_start
+from agent.tools.agent_browser_stream import agent_browser_stream as _agent_browser_stream_start
 from agent.byok_store import get_text_endpoint_id, get_endpoint_decrypted
 from agent import provider_config
 from agent.redact import redact as _redact, strip_secret_keys as _strip_secret_keys
@@ -743,7 +744,7 @@ def computer_use(
         )
     except Exception as e:
         return ToolReturn(f"Error: {e}")
-    ctx.deps.desktop_active = True
+    ctx.deps.keep_sandbox_warm = True
     if isinstance(result, bytes):
         return ToolReturn(
             "Screenshot of your desktop.",
@@ -768,7 +769,7 @@ def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
         url = _computer_stream_start(ctx.deps.channel_id, ctx.deps.thread_ts)
     except Exception as e:
         return f"Error starting desktop stream: {e}"
-    ctx.deps.desktop_active = True
+    ctx.deps.keep_sandbox_warm = True
     error = send_web_embed(
         channel_id=ctx.deps.channel_id,
         text="coolton's desktop — live (view-only)",
@@ -779,6 +780,34 @@ def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     if error:
         return f"{error} | url: {url}"
     return "Live desktop view posted to the thread (view-only)."
+
+
+@agent.tool
+def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
+    """Start (or re-share) a live view of your agent-browser session and post it to the thread.
+
+    Call this once when you begin a nontrivial agent-browser task so the user can
+    watch what you're doing. Safe to call again later in the same session to
+    re-post the link. Shows agent-browser's own observability dashboard (viewport +
+    activity feed), not a raw browser window.
+    """
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured."
+    try:
+        url = _agent_browser_stream_start(ctx.deps.channel_id, ctx.deps.thread_ts)
+    except Exception as e:
+        return f"Error starting agent-browser stream: {e}"
+    ctx.deps.keep_sandbox_warm = True
+    error = send_web_embed(
+        channel_id=ctx.deps.channel_id,
+        text="coolton's browser — live view",
+        url=url,
+        title="coolton's browser",
+        thread_ts=ctx.deps.thread_ts,
+    )
+    if error:
+        return f"{error} | url: {url}"
+    return "Live browser view posted to the thread."
 
 
 @agent.tool
@@ -2026,10 +2055,10 @@ def run_agent(text, deps, message_history=None, images=None):
             history = deps.halted_messages if deps.halted_messages is not None else message_history
             return _SkipResult(history)
     finally:
-        # computer_use tools don't pause the sandbox after every action (unlike
-        # run_linux_command) so a live noVNC stream survives the whole turn; pause
-        # it once here instead, however the turn ended.
-        if deps.desktop_active:
+        # computer_use / agent_browser_stream_tool don't pause the sandbox after
+        # every action (unlike run_linux_command) so a live stream survives the
+        # whole turn; pause it once here instead, however the turn ended.
+        if deps.keep_sandbox_warm:
             try:
                 sandbox_id = get_thread_sandbox_id(deps.channel_id, deps.thread_ts)
                 if sandbox_id:
