@@ -1,4 +1,6 @@
 
+import time
+
 import pytest
 from pydantic_ai.models.openai import OpenAIChatModel
 from unittest.mock import Mock, patch
@@ -499,7 +501,10 @@ def _run_ctx(client):
     from pydantic_ai import RunContext
     from types import SimpleNamespace
 
-    deps = SimpleNamespace(client=client, channel_id="C1", thread_ts="1.2", user_id="U_TEST")
+    deps = SimpleNamespace(
+        client=client, channel_id="C1", thread_ts="1.2", user_id="U_TEST",
+        last_screenshot_post_ts=0.0,
+    )
     return RunContext(model=None, usage=None, prompt="", deps=deps)
 
 
@@ -913,3 +918,66 @@ def test_agent_browser_stream_ensures_desktop_before_starting_stream(monkeypatch
     assert url == "https://x.e2b.app/vnc.html"
     assert [c[0] for c in calls] == ["ensure_desktop", "start_stream"]
     assert all(c[1] is fake_sandbox and c[2] is fake_proxy_info for c in calls)
+
+
+# ---------------------------------------------------------------------------
+# _maybe_post_screenshot — throttled screenshot posting to the thread (both
+# computer_use and a --headed agent-browser session share this desktop, so
+# this is the one hook that makes "frequent-ish screenshots" work for both).
+# ---------------------------------------------------------------------------
+
+
+def test_maybe_post_screenshot_uploads_and_posts_an_image_block(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr("agent.web64_client.upload_bytes", lambda *a, **k: "https://example.com/shot.png")
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod._maybe_post_screenshot(ctx, b"fake-png-bytes")
+    assert post.call_args.kwargs["json"]["channel"] == "C1"
+    assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
+    assert post.call_args.kwargs["json"]["blocks"][0] == {
+        "type": "image", "image_url": "https://example.com/shot.png", "alt_text": "desktop screenshot",
+    }
+    assert ctx.deps.last_screenshot_post_ts > 0
+
+
+def test_maybe_post_screenshot_throttles_rapid_calls(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr("agent.web64_client.upload_bytes", lambda *a, **k: "https://example.com/shot.png")
+    ctx = _run_ctx(Mock())
+    ctx.deps.last_screenshot_post_ts = time.time()  # "just posted"
+    with patch("agent.agent.requests.post") as post:
+        agent_mod._maybe_post_screenshot(ctx, b"fake-png-bytes")
+    post.assert_not_called()
+
+
+def test_maybe_post_screenshot_swallows_upload_errors(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+
+    def boom(*a, **k):
+        raise RuntimeError("upload failed")
+
+    monkeypatch.setattr("agent.web64_client.upload_bytes", boom)
+    ctx = _run_ctx(Mock())
+    agent_mod._maybe_post_screenshot(ctx, b"fake-png-bytes")  # must not raise
+    assert ctx.deps.last_screenshot_post_ts == 0.0  # not updated on failure
+
+
+def test_computer_use_screenshot_action_posts_to_thread(monkeypatch):
+    from pydantic_ai import RunContext
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod.provider_config, "is_vision_model", lambda name: True)
+    monkeypatch.setattr(agent_mod, "_computer_use_dispatch", lambda *a, **k: b"fake-png-bytes")
+
+    posted = []
+    monkeypatch.setattr(agent_mod, "_maybe_post_screenshot", lambda ctx, png: posted.append(png))
+
+    deps = SimpleNamespace(
+        channel_id="C1", thread_ts="1.2", keep_sandbox_warm=False, last_screenshot_post_ts=0.0,
+    )
+    ctx = RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
+    agent_mod.computer_use(ctx, action="screenshot")
+    assert posted == [b"fake-png-bytes"]
