@@ -74,7 +74,7 @@ def test_happy_path(mocks):
 
     mocks.client.assistant_threads_setStatus.assert_called_once()
     status_call = mocks.client.assistant_threads_setStatus.call_args.kwargs
-    assert status_call["status"] == "Thinking..."
+    assert status_call["status"] == "Working"
 
     pb.send_plan_message.assert_called_once()
     pb.finalize_plan_message.assert_called_once()
@@ -153,16 +153,16 @@ def test_error_path_reports_and_sets_plan_error(mocks):
     assert mocks.say.call_args.kwargs["thread_ts"] == "1.1"
 
 
-def test_status_failure_still_reports_error(mocks):
+def test_status_api_failure_does_not_block_the_turn(mocks):
+    """assistant_threads_setStatus is a cosmetic live-status pill (agent.thread_status) —
+    a flaky/erroring status API must not prevent the actual turn from running."""
     import agent.plan_block as pb
 
     mocks.client.assistant_threads_setStatus.side_effect = Exception("status api down")
-    turn.run_agent.side_effect = RuntimeError("boom")
     _run_turn(mocks)
 
-    # no deps were created yet, so no plan to mark as errored
-    pb.set_plan_error.assert_not_called()
-    mocks.say.assert_called_once()
+    mocks.say.assert_not_called()
+    pb.complete_plan_message.assert_called_once()
 
 
 def test_streaming_failure_falls_back_to_chat_post_message(mocks):

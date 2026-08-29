@@ -11,18 +11,11 @@ from logging import Logger
 from slack_bolt import Say, SayStream
 from slack_sdk import WebClient
 
+import agent.thread_status as thread_status
 from agent import AgentDeps, run_agent
 from agent.redact import redact as _redact
 from thread_context import conversation_store, conversation_trace_store
 from listeners.views.feedback_builder import build_feedback_blocks
-
-_LOADING_MESSAGES = [
-    "Teaching the hamsters to type faster…",
-    "Untangling the internet cables…",
-    "Consulting the office goldfish…",
-    "Polishing up the response just for you…",
-    "Convincing the AI to stop overthinking…",
-]
 
 # chat.postMessage hard-caps text at 40,000 chars; stay under it when chunking a
 # response that the streaming API rejected as msg_too_long.
@@ -108,12 +101,10 @@ def run_agent_turn(
             say(text=tag_error, thread_ts=thread_ts)
             return
 
-        client.assistant_threads_setStatus(
-            channel_id=channel_id,
-            thread_ts=thread_ts,
-            status="Thinking...",
-            loading_messages=_LOADING_MESSAGES,
-        )
+        # Live "what's coolton doing" status pill: starts at "Working", then tracks
+        # the last tool called (agent.plan_block's before_tool_execute hook) and
+        # refreshes every 30s in between — see agent.thread_status.
+        thread_status.start(client, channel_id, thread_ts)
 
         deps = AgentDeps(
             client=client,
@@ -213,3 +204,4 @@ def run_agent_turn(
         mark_run_finished(channel_id, thread_ts)
         from agent.steering_store import clear_steering_messages
         clear_steering_messages(channel_id, thread_ts)
+        thread_status.stop(channel_id, thread_ts)
