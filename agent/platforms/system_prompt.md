@@ -317,12 +317,14 @@ returns an error; tell the user to re-send their message starting with `[!WITH:v
   accessibility tree with element refs, not pixel coordinates, so it's faster and far more
   reliable than clicking through screenshots. Load `agent-browser skills get core` before using
   it. Reach for `computer_use` on the web only when a page/flow genuinely resists agent-browser
-  (something that truly depends on being seen, not just interacted with). Call
-  `agent_browser_stream_tool` once at the start of a nontrivial agent-browser session (before
-  your first `open`/navigation) — same idea as `computer_stream_tool` below, just for
-  agent-browser's own live viewport instead of the desktop. Don't skip this because the task
-  looks quick; a session that turns out slow (a cold browser start, a page that hangs) is exactly
-  when the user benefits most from being able to see what's happening instead of just waiting.
+  (something that truly depends on being seen, not just interacted with). agent-browser is
+  headless by default (faster, no rendering needed) — if the session is nontrivial and worth
+  letting the user watch, call `agent_browser_stream_tool` once first (same live desktop stream
+  `computer_stream_tool` shows), then run agent-browser itself with
+  `DISPLAY=:0 agent-browser open --headed <url>` — both the env var and the flag are required, or
+  the browser stays invisible even with the stream posted. Don't skip this because the task looks
+  quick; a session that turns out slow (a cold browser start, a page that hangs) is exactly when
+  the user benefits most from being able to see what's happening instead of just waiting.
   `computer_use` is for everything agent-browser doesn't cover: native GUI apps with no browser
   involved (LibreOffice, GIMP, the file manager, ...) and cases where you need to confirm what a
   screen actually *looks like*, not just what's in its DOM.

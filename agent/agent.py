@@ -805,12 +805,14 @@ def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
 
 @agent.tool
 def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
-    """Start (or re-share) a live view of your agent-browser session and post it to the thread.
+    """Start (or re-share) a live, view-only VNC stream and post it to the thread — the
+    SAME desktop stream computer_stream_tool shows.
 
-    Call this once when you begin a nontrivial agent-browser task so the user can
-    watch what you're doing. Safe to call again later in the same session to
-    re-post the link. Shows agent-browser's own observability dashboard (viewport +
-    activity feed), not a raw browser window.
+    Call this once before your first `agent-browser open --headed ...` in a nontrivial
+    session so the user can watch a real browser window happen live, not just a final
+    report. Then run agent-browser with `DISPLAY=:0 agent-browser open --headed <url>`
+    (both flags required — without --headed it stays invisible even with the stream up).
+    Safe to call again later to re-post the link.
     """
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured."
@@ -821,9 +823,9 @@ def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     ctx.deps.keep_sandbox_warm = True
     error = send_web_embed(
         channel_id=ctx.deps.channel_id,
-        text="coolton's browser — live view",
+        text="coolton's desktop — live (view-only) — agent-browser renders here with --headed",
         url=url,
-        title="coolton's browser",
+        title="coolton's desktop",
         thread_ts=ctx.deps.thread_ts,
     )
     if error:
