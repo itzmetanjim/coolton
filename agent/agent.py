@@ -27,6 +27,7 @@ from e2b import Sandbox
 from e2b.exceptions import FileNotFoundException
 from agent.sandbox_store import get_thread_sandbox_id
 from agent.sandbox_helpers import get_or_create_sandbox, _proxy_env
+from agent import sandbox_keepalive
 from agent.github_proxy_client import PUBLIC_PROXY_HOST
 from agent.tool_proxy import (
     build_sandbox_module,
@@ -340,7 +341,16 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str, timeout: int = _
         try:
             result = sandbox.commands.run(command, envs=_proxy_env(proxy_info), timeout=timeout)
         finally:
-            sandbox.pause()
+            # A VNC stream (deps.sandbox_keepalive_seconds > 0) needs the sandbox to
+            # survive between commands, not pause the instant this one returns — arm a
+            # countdown instead (agent.sandbox_keepalive), reset on every action, so it
+            # only actually pauses after real inactivity. Otherwise pause immediately,
+            # same as always.
+            if ctx.deps.sandbox_keepalive_seconds > 0:
+                ctx.deps.keep_sandbox_warm = True
+                sandbox_keepalive.arm(channel_id, thread_ts, ctx.deps.sandbox_keepalive_seconds)
+            else:
+                sandbox.pause()
         output = []
         if result.stdout:
             output.append(f"STDOUT:\n{result.stdout}")
@@ -706,6 +716,7 @@ _VISION_GATE_ERROR = (
 )
 
 _SCREENSHOT_POST_MIN_INTERVAL_SECONDS = 8
+_STREAM_KEEPALIVE_SECONDS = 120
 
 
 def _maybe_post_screenshot(ctx: RunContext[AgentDeps], png: bytes) -> None:
@@ -805,6 +816,10 @@ def computer_use(
     except Exception as e:
         return ToolReturn(f"Error: {e}")
     ctx.deps.keep_sandbox_warm = True
+    if ctx.deps.sandbox_keepalive_seconds > 0:
+        # Any action is "activity" — reset the auto-pause countdown so a stream stays
+        # live through a whole click/screenshot sequence, not just the first command.
+        sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, ctx.deps.sandbox_keepalive_seconds)
     if isinstance(result, bytes):
         _maybe_post_screenshot(ctx, result)
         return ToolReturn(
@@ -831,6 +846,8 @@ def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     except Exception as e:
         return f"Error starting desktop stream: {e}"
     ctx.deps.keep_sandbox_warm = True
+    ctx.deps.sandbox_keepalive_seconds = _STREAM_KEEPALIVE_SECONDS
+    sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, _STREAM_KEEPALIVE_SECONDS)
     error = send_web_embed(
         channel_id=ctx.deps.channel_id,
         text="coolton's desktop — live (view-only)",
@@ -861,6 +878,8 @@ def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     except Exception as e:
         return f"Error starting agent-browser stream: {e}"
     ctx.deps.keep_sandbox_warm = True
+    ctx.deps.sandbox_keepalive_seconds = _STREAM_KEEPALIVE_SECONDS
+    sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, _STREAM_KEEPALIVE_SECONDS)
     error = send_web_embed(
         channel_id=ctx.deps.channel_id,
         text="coolton's desktop — live (view-only) — agent-browser renders here with --headed",
@@ -871,6 +890,31 @@ def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     if error:
         return f"{error} | url: {url}"
     return "Live browser view posted to the thread."
+
+
+_SANDBOX_KEEPALIVE_MAX_SECONDS = 1800
+
+
+@agent.tool
+def set_sandbox_keepalive_tool(ctx: RunContext[AgentDeps], seconds: int) -> str:
+    """Manually control how long the sandbox stays up after your last action before
+    auto-pausing, while a VNC stream is running.
+
+    computer_stream_tool / agent_browser_stream_tool already set this to 120s when they
+    start a stream, and every sandbox action resets the countdown — you normally don't
+    need to touch this. Use it if 120s isn't enough (e.g. you expect a long gap with no
+    commands in between, like waiting on the user to look at something) by raising it,
+    or set it to 0 to go back to pausing immediately after each command. Clamped to
+    0-1800 seconds.
+    """
+    seconds = max(0, min(seconds, _SANDBOX_KEEPALIVE_MAX_SECONDS))
+    ctx.deps.sandbox_keepalive_seconds = seconds
+    if seconds > 0:
+        ctx.deps.keep_sandbox_warm = True
+        sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, seconds)
+        return f"Sandbox keepalive set to {seconds}s — it'll stay up that long after each action before auto-pausing."
+    sandbox_keepalive.cancel(ctx.deps.channel_id, ctx.deps.thread_ts)
+    return "Sandbox keepalive disabled — back to pausing immediately after each command."
 
 
 @agent.tool
@@ -2118,10 +2162,14 @@ def run_agent(text, deps, message_history=None, images=None):
             history = deps.halted_messages if deps.halted_messages is not None else message_history
             return _SkipResult(history)
     finally:
-        # computer_use / agent_browser_stream_tool don't pause the sandbox after
-        # every action (unlike run_linux_command) so a live stream survives the
-        # whole turn; pause it once here instead, however the turn ended.
+        # computer_use / agent_browser_stream_tool don't pause the sandbox after every
+        # action (unlike run_linux_command) so a live stream survives the whole turn,
+        # and run_linux_command itself skips its own pause whenever a keepalive
+        # countdown is active (agent.sandbox_keepalive) — pause it once here instead,
+        # however the turn ended. A turn never leaves the sandbox running past its own
+        # end regardless of any pending countdown, so cancel that first.
         if deps.keep_sandbox_warm:
+            sandbox_keepalive.cancel(deps.channel_id, deps.thread_ts)
             try:
                 sandbox_id = get_thread_sandbox_id(deps.channel_id, deps.thread_ts)
                 if sandbox_id:

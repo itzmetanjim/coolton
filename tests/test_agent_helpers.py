@@ -503,7 +503,7 @@ def _run_ctx(client):
 
     deps = SimpleNamespace(
         client=client, channel_id="C1", thread_ts="1.2", user_id="U_TEST",
-        last_screenshot_post_ts=0.0,
+        last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=0.0, keep_sandbox_warm=False,
     )
     return RunContext(model=None, usage=None, prompt="", deps=deps)
 
@@ -844,18 +844,19 @@ def _fake_sandbox_recording_timeout(monkeypatch):
     class _FakeSandbox:
         def __init__(self):
             self.commands = _FakeCommands()
+            self.paused = 0
 
         def pause(self):
-            pass
+            self.paused += 1
 
     fake_sandbox = _FakeSandbox()
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, None))
-    return _FakeCommands
+    return _FakeCommands, fake_sandbox
 
 
 def test_run_linux_command_defaults_to_a_60s_timeout(monkeypatch):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    fake_commands = _fake_sandbox_recording_timeout(monkeypatch)
+    fake_commands, fake_sandbox = _fake_sandbox_recording_timeout(monkeypatch)
     ctx = _run_ctx(Mock())
     agent_mod.run_linux_command(ctx, "echo hi")
     assert fake_commands.last_call["timeout"] == 60
@@ -863,7 +864,7 @@ def test_run_linux_command_defaults_to_a_60s_timeout(monkeypatch):
 
 def test_run_linux_command_lets_the_model_raise_the_timeout(monkeypatch):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    fake_commands = _fake_sandbox_recording_timeout(monkeypatch)
+    fake_commands, fake_sandbox = _fake_sandbox_recording_timeout(monkeypatch)
     ctx = _run_ctx(Mock())
     agent_mod.run_linux_command(ctx, "agent-browser open https://en.wikipedia.org/wiki/AI", timeout=1500)
     assert fake_commands.last_call["timeout"] == 1500
@@ -873,7 +874,7 @@ def test_run_linux_command_timeout_zero_disables_it(monkeypatch):
     """0 is the model's explicit opt-in to let a command run unbounded — matches
     commands.run()'s own SDK semantics (falsy timeout -> no deadline sent)."""
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    fake_commands = _fake_sandbox_recording_timeout(monkeypatch)
+    fake_commands, fake_sandbox = _fake_sandbox_recording_timeout(monkeypatch)
     ctx = _run_ctx(Mock())
     agent_mod.run_linux_command(ctx, "echo hi", timeout=0)
     assert fake_commands.last_call["timeout"] == 0
@@ -881,7 +882,7 @@ def test_run_linux_command_timeout_zero_disables_it(monkeypatch):
 
 def test_run_linux_command_clamps_an_out_of_range_positive_timeout(monkeypatch):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    fake_commands = _fake_sandbox_recording_timeout(monkeypatch)
+    fake_commands, fake_sandbox = _fake_sandbox_recording_timeout(monkeypatch)
     ctx = _run_ctx(Mock())
 
     agent_mod.run_linux_command(ctx, "echo hi", timeout=1)
@@ -889,6 +890,142 @@ def test_run_linux_command_clamps_an_out_of_range_positive_timeout(monkeypatch):
 
     agent_mod.run_linux_command(ctx, "echo hi", timeout=999999)
     assert fake_commands.last_call["timeout"] == 1800  # ceiling
+
+
+# ---------------------------------------------------------------------------
+# Sandbox keepalive (agent.sandbox_keepalive) — a VNC stream needs the sandbox
+# to survive between commands, not pause the instant each one returns.
+# ---------------------------------------------------------------------------
+
+
+def test_run_linux_command_pauses_immediately_when_keepalive_is_off(monkeypatch):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_commands, fake_sandbox = _fake_sandbox_recording_timeout(monkeypatch)
+    armed = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
+    ctx = _run_ctx(Mock())
+    ctx.deps.sandbox_keepalive_seconds = 0.0
+    agent_mod.run_linux_command(ctx, "echo hi")
+    assert fake_sandbox.paused == 1
+    assert armed == []
+
+
+def test_run_linux_command_arms_keepalive_instead_of_pausing_when_active(monkeypatch):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_commands, fake_sandbox = _fake_sandbox_recording_timeout(monkeypatch)
+    armed = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
+    ctx = _run_ctx(Mock())
+    ctx.deps.sandbox_keepalive_seconds = 120
+    agent_mod.run_linux_command(ctx, "echo hi")
+    assert fake_sandbox.paused == 0
+    assert armed == [("C1", "1.2", 120)]
+    assert ctx.deps.keep_sandbox_warm is True
+
+
+def test_computer_stream_tool_sets_keepalive_and_arms_it(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "_computer_stream_start", lambda c, t: "https://x.e2b.app/vnc.html")
+    armed = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod.computer_stream_tool(ctx)
+    assert ctx.deps.sandbox_keepalive_seconds == 120
+    assert armed == [("C1", "1.2", 120)]
+
+
+def test_agent_browser_stream_tool_sets_keepalive_and_arms_it(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "_agent_browser_stream_start", lambda c, t: "https://x.e2b.app/vnc.html")
+    armed = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
+    ctx = _run_ctx(Mock())
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod.agent_browser_stream_tool(ctx)
+    assert ctx.deps.sandbox_keepalive_seconds == 120
+    assert armed == [("C1", "1.2", 120)]
+
+
+def test_computer_use_action_resets_keepalive_when_active(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod.provider_config, "is_vision_model", lambda name: True)
+    monkeypatch.setattr(agent_mod, "_computer_use_dispatch", lambda *a, **k: "Clicked")
+    armed = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
+
+    from pydantic_ai import RunContext
+    deps = SimpleNamespace(
+        channel_id="C1", thread_ts="1.2", keep_sandbox_warm=False,
+        last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=120,
+    )
+    ctx = RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
+    agent_mod.computer_use(ctx, action="click", x=1, y=1)
+    assert armed == [("C1", "1.2", 120)]
+
+
+def test_computer_use_action_does_not_touch_keepalive_when_inactive(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod.provider_config, "is_vision_model", lambda name: True)
+    monkeypatch.setattr(agent_mod, "_computer_use_dispatch", lambda *a, **k: "Clicked")
+    armed = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
+
+    from pydantic_ai import RunContext
+    deps = SimpleNamespace(
+        channel_id="C1", thread_ts="1.2", keep_sandbox_warm=False,
+        last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=0.0,
+    )
+    ctx = RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
+    agent_mod.computer_use(ctx, action="click", x=1, y=1)
+    assert armed == []
+
+
+def test_set_sandbox_keepalive_tool_arms_a_positive_value(monkeypatch):
+    armed = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
+    ctx = _run_ctx(Mock())
+    result = agent_mod.set_sandbox_keepalive_tool(ctx, 300)
+    assert ctx.deps.sandbox_keepalive_seconds == 300
+    assert ctx.deps.keep_sandbox_warm is True
+    assert armed == [("C1", "1.2", 300)]
+    assert "300" in result
+
+
+def test_set_sandbox_keepalive_tool_clamps_to_the_max():
+    ctx = _run_ctx(Mock())
+    agent_mod.set_sandbox_keepalive_tool(ctx, 999999)
+    assert ctx.deps.sandbox_keepalive_seconds == 1800
+
+
+def test_set_sandbox_keepalive_tool_zero_cancels(monkeypatch):
+    canceled = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "cancel", lambda c, t: canceled.append((c, t)))
+    ctx = _run_ctx(Mock())
+    ctx.deps.sandbox_keepalive_seconds = 120
+    result = agent_mod.set_sandbox_keepalive_tool(ctx, 0)
+    assert ctx.deps.sandbox_keepalive_seconds == 0
+    assert canceled == [("C1", "1.2")]
+    assert "disabled" in result.lower()
+
+
+def test_run_agent_finally_cancels_keepalive_before_pausing():
+    """Whatever countdown was pending, a turn ending must always pause the sandbox —
+    never leave it running into the next turn on the strength of an old timer."""
+    import inspect
+
+    src = inspect.getsource(agent_mod.run_agent)
+    finally_block = src[src.index("finally:"):]
+    assert "sandbox_keepalive.cancel(" in finally_block
+    assert finally_block.index("sandbox_keepalive.cancel(") < finally_block.index(".pause()")
 
 
 # ---------------------------------------------------------------------------
@@ -977,6 +1114,7 @@ def test_computer_use_screenshot_action_posts_to_thread(monkeypatch):
 
     deps = SimpleNamespace(
         channel_id="C1", thread_ts="1.2", keep_sandbox_warm=False, last_screenshot_post_ts=0.0,
+        sandbox_keepalive_seconds=0.0,
     )
     ctx = RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
     agent_mod.computer_use(ctx, action="screenshot")
