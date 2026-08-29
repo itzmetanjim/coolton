@@ -75,6 +75,22 @@ command will finish on its own.
    agent-browser commands with no screenshot in between means the user sees nothing until you're
    done, so check in with a screenshot periodically rather than only at the end.
 
+## Sandbox keepalive
+The sandbox always pauses at the end of a turn — this is intentional (one running sandbox per
+active turn, not one that lingers idle for the whole thread), so re-post the stream link with
+`computer_stream_tool`/`agent_browser_stream_tool` at the start of every new turn you want one in;
+a link from a previous turn is dead.
+
+Within a turn, once a stream is running the sandbox stays up for 120s after your last action
+before auto-pausing on its own, and every action (a `run_linux_command` call, a `computer_use`
+action) resets that countdown back to 120s. Without this, the sandbox would pause the instant the
+command that started it returns — the viewer would see the browser for about 2 seconds and then go
+dark, which is the opposite of a *live* view. You normally don't need to think about this at all;
+it just works as long as you keep doing things. If you genuinely expect a longer idle stretch with
+nothing running (waiting on the user to look at something, a page that takes a while with no
+intermediate commands to reset the clock), call `set_sandbox_keepalive_tool(seconds=...)` to extend
+it, or `seconds=0` to go back to pausing immediately once you're done with the stream.
+
 ## Timing
 The desktop starts cold on first use (Xvfb + xfce4 boot inside `ensure_desktop`) — the very first
 screenshot of a session may show a mostly-blank desktop or an in-progress panel; that's normal, not

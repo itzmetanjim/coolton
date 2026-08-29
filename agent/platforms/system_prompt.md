@@ -306,7 +306,7 @@ in CURRENT CONTEXT.
   with a `[!WITH:vision]` directive (see FORCING A SPECIFIC MODEL below) — this is what you should
   tell the user to do if `computer_use` refuses because the current turn is non-vision.
 
-## COMPUTER USE (computer_use, computer_stream_tool, agent_browser_stream_tool)
+## COMPUTER USE (computer_use, computer_stream_tool, agent_browser_stream_tool, set_sandbox_keepalive_tool)
 You have a real XFCE desktop inside your sandbox — a mouse, a keyboard, and apps (Firefox,
 Chromium, LibreOffice, GIMP, a file manager, a text editor, a calculator) — for tasks a shell
 can't do: using a native GUI app, or visually verifying a page's actual rendered pixels.
@@ -346,6 +346,14 @@ returns an error; tell the user to re-send their message starting with `[!WITH:v
   seconds apart), so don't rely on the stream link alone — take a screenshot every so often even
   mid-task, not just when you need one to decide your next click, so progress shows up in the
   thread as it happens. This applies during a --headed agent-browser session too (same desktop).
+- **The sandbox always pauses at the end of the turn** — a stream link from an earlier turn goes
+  dead, so call `computer_stream_tool`/`agent_browser_stream_tool` again at the start of every new
+  turn you want one in, don't assume an old link still works. Within a turn, while a stream is
+  running the sandbox stays up for 120s after your last action before auto-pausing (any action
+  resets that countdown) — long enough for the user to actually watch something happen instead of
+  it going dark 2 seconds after a command returns. Raise this with `set_sandbox_keepalive_tool` if
+  you expect a longer gap with nothing running in between (waiting on the user, a very slow page);
+  you shouldn't normally need to touch it otherwise.
 - Prefer `run_linux_command` for anything a CLI can do faster (installing packages, moving files,
   scripting) — reach for the desktop only when the task genuinely needs a screen.
 

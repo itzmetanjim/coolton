@@ -258,6 +258,7 @@ TOOL_DISPLAY_NAMES = {
     "computer_use": "Using the computer",
     "computer_stream_tool": "Sharing desktop view",
     "agent_browser_stream_tool": "Sharing browser view",
+    "set_sandbox_keepalive_tool": "Adjusting sandbox keepalive",
     "generate_image_tool": "Generating image",
     "render_mermaid_tool": "Rendering diagram",
     "summarize_thread_tool": "Summarizing thread",

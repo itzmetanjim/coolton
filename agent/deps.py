@@ -29,13 +29,20 @@ class AgentDeps:
     # everything up to the halt (the user's message, any completed tool
     # round-trips) instead of reverting the thread to its pre-turn state.
     halted_messages: list | None = None
-    # Set by any tool that starts a live view the user is watching (the desktop's
-    # noVNC stream, shared by computer_use and a --headed agent-browser session)
-    # this turn. run_agent only pauses the sandbox (agent/desktop_helpers.py) once
-    # at the very end of the turn when this is set, instead of after every single
-    # action like run_linux_command does — a live stream would otherwise die
-    # mid-session.
+    # Set whenever something needs run_agent's finally block to pause the sandbox for
+    # it at the end of the turn, rather than pausing immediately after its own call:
+    # computer_use never pauses per-action (a live stream needs the desktop to survive
+    # between actions), and run_linux_command skips its own immediate pause whenever
+    # sandbox_keepalive_seconds > 0 (see agent.sandbox_keepalive) in favor of a
+    # countdown-based auto-pause instead.
     keep_sandbox_warm: bool = False
+    # How long (seconds) the sandbox stays up after the last action before
+    # agent.sandbox_keepalive auto-pauses it, while a VNC stream is being watched —
+    # 0 (the default, reset at the start of every turn) means "pause immediately after
+    # each command", the normal/cheap behavior. computer_stream_tool and
+    # agent_browser_stream_tool set this to 120 when they start a stream; the model can
+    # override it via set_sandbox_keepalive_tool.
+    sandbox_keepalive_seconds: float = 0.0
     # Last time (time.time()) a desktop screenshot was posted to the thread as its
     # own message (agent.agent._maybe_post_screenshot). Throttles computer_use's
     # "screenshot" action so a fast click/screenshot loop doesn't spam the channel.
