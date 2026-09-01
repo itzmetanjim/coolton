@@ -167,3 +167,66 @@ def test_provider_redacts_secret_in_error_message(monkeypatch):
     assert ok is False
     assert "sk-super-secret-123" not in detail
     assert "***" in detail
+
+
+def test_provider_includes_raw_http_body_on_failure(monkeypatch):
+    """A ChatCompletion validation error alone (e.g. "4 validation errors ...
+    input_value=None") only says the SDK couldn't parse a response — not what the
+    endpoint actually sent. Observed live against HCAI: a 200 status carrying an
+    error payload instead of a real ChatCompletion (HCAI/OpenRouter disguising a 429
+    rate limit as HTTP 200), which this test reproduces with a mock transport."""
+    import httpx
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-1788234631-fake",
+                "error": {"message": "some-model is temporarily rate-limited upstream", "code": 429},
+            },
+        )
+
+    # Patch AsyncClient's __init__ (not the class itself, which openai's SDK checks
+    # against via isinstance()) to force every real construction onto a mock
+    # transport, so the actual request never leaves the process.
+    real_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    ok, display, elapsed, detail = provider_probe.test_provider(
+        "hcai_0",
+        {
+            "model": "openai/some-model",
+            "base_url": "https://fake.example/v1",
+            "api_key": "k",
+            "display": "Fake Model",
+        },
+    )
+
+    assert ok is False
+    assert "raw HTTP 200 body" in detail
+    assert "temporarily rate-limited upstream" in detail
+    assert "validation errors for ChatCompletion" in detail
+
+
+def test_provider_no_raw_body_prefix_for_non_base_url_providers(monkeypatch):
+    """Providers without a custom base_url (anthropic, openai, google, ...) go
+    through pydantic_ai's own model resolution, not the http_client this codebase
+    constructs — there's no raw body to capture there, and detail must stay exactly
+    the plain redacted error, not gain a stray 'raw HTTP' prefix."""
+    def boom(provider_name, api_key):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("agent.provider_probe.provider_config.apply_provider_env", boom)
+
+    ok, display, elapsed, detail = provider_probe.test_provider(
+        "anthropic", {"model": "m", "api_key": "k"}
+    )
+
+    assert ok is False
+    assert "raw HTTP" not in detail
+    assert detail == "boom"

@@ -14,14 +14,36 @@ from agent.redact import redact
 logger = logging.getLogger(__name__)
 
 
+async def _capture_raw_response(holder: dict, response) -> None:
+    """httpx response event hook: eagerly buffer the raw body so it's captured even
+    when the OpenAI SDK's own (permissive) parsing produces a ChatCompletion with
+    every field None instead of raising on a malformed body — that's the shape
+    pydantic_ai's stricter re-validation then fails on, but by then the raw bytes are
+    gone. Reading via .aread() here just buffers the content on the Response object;
+    the SDK reading it again afterward gets the same cached bytes, not a second
+    network read, so this doesn't change what run_sync actually sees."""
+    try:
+        body = await response.aread()
+        holder["status"] = response.status_code
+        holder["body"] = body.decode("utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def test_provider(provider_name: str, config: dict) -> tuple[bool, str, float, str]:
     """Run one cheap completion against a single provider/model.
 
     Returns (ok, display_name, elapsed_seconds, detail) — detail is the model's
-    reply text on success, or a redacted error string on failure.
+    reply text on success, or a redacted error string on failure. On failure for a
+    custom-base_url provider (e.g. HCAI), detail is prefixed with the actual raw HTTP
+    response body when one was captured — a validation error alone (e.g. "4
+    validation errors for ChatCompletion ... input_value=None") only says the SDK
+    couldn't parse a ChatCompletion out of it, not what the endpoint actually sent
+    back (an empty body, an HTML error page, a truncated stream, etc.).
     """
     display = config.get("display", provider_name)
     start = time.time()
+    raw: dict = {}
 
     try:
         provider_config.apply_provider_env(provider_name, config["api_key"])
@@ -29,13 +51,24 @@ def test_provider(provider_name: str, config: dict) -> tuple[bool, str, float, s
         from pydantic_ai import Agent
 
         if config.get("base_url"):
+            import httpx
             from pydantic_ai.models.openai import OpenAIChatModel
             from pydantic_ai.providers.openai import OpenAIProvider
+            # No pooled keep-alive connections: this client is never explicitly closed
+            # (run_sync tears down its own event loop before we could safely await
+            # aclose() in it — closing from a different loop afterward is an httpx/anyio
+            # footgun), so nothing here should hold an open OS connection past this one
+            # request. The Python object itself is just normal garbage after this call.
+            http_client = httpx.AsyncClient(
+                event_hooks={"response": [lambda r: _capture_raw_response(raw, r)]},
+                limits=httpx.Limits(max_keepalive_connections=0),
+            )
             model = OpenAIChatModel(
                 config["model"],
                 provider=OpenAIProvider(
                     base_url=config["base_url"],
                     api_key=config["api_key"],
+                    http_client=http_client,
                 ),
             )
         else:
@@ -47,7 +80,11 @@ def test_provider(provider_name: str, config: dict) -> tuple[bool, str, float, s
         return True, display, elapsed, result.output
     except Exception as e:
         elapsed = time.time() - start
-        return False, display, elapsed, redact(str(e), context="provider_probe")
+        detail = redact(str(e), context="provider_probe")
+        if raw.get("body") is not None:
+            raw_body = redact(raw["body"], context="provider_probe raw response")[:500]
+            detail = f"raw HTTP {raw.get('status', '?')} body: {raw_body!r} | {detail}"
+        return False, display, elapsed, detail
 
 
 def _group_key(provider_name: str) -> str:
@@ -72,7 +109,7 @@ def _probe_group(entries: list[tuple[str, dict]]) -> list[tuple[str, bool, str, 
         else:
             logger.warning(
                 "Provider probe: %s (%s) FAILED in %.1fs: %s",
-                provider_name, display, elapsed, detail[:200],
+                provider_name, display, elapsed, detail[:700],
             )
     return results
 

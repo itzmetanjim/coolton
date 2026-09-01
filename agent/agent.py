@@ -2277,6 +2277,13 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
         "504",
         "timeout",
         "connection",
+        # HCAI (and other OpenAI-compatible proxies) occasionally return HTTP 200 with a
+        # blank/null body — pydantic then fails to validate it as a ChatCompletion (every
+        # required field is None). Observed live: this used to fall through to the
+        # `else: break` branch and downgrade to a worse model after a single bad
+        # response, burning none of the provider's configured retries, even though a
+        # plain retry of the SAME model succeeds virtually every time.
+        "validation errors for chatcompletion",
     ]
     hard_error_markers = [
         "401",
