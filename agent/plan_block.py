@@ -124,6 +124,14 @@ def _retrying(call, where: str, attempts: int = 3) -> None:
 def update_plan_message(deps) -> None:
     if not deps.plan_ts:
         return
+    # The initial "Thinking" placeholder must never coexist with real progress — once
+    # anything else has been added (a reasoning step, a tool call, the model task),
+    # something has clearly already superseded it, even on a code path that forgot to
+    # clean it up explicitly. Centralizing this here (rather than trusting every
+    # individual hook to remember) is what actually guarantees it, since this is the
+    # one function every mid-run mutation already routes through before rendering.
+    if _DEFAULT_THINKING_ID in deps.plan_tasks and len(deps.plan_tasks) > 1:
+        del deps.plan_tasks[_DEFAULT_THINKING_ID]
     tasks = list(deps.plan_tasks.values())
     blocks = build_plan_blocks("Thinking...", tasks)
     try:
@@ -137,13 +145,17 @@ def update_plan_message(deps) -> None:
         _log_slack_error("Failed to update plan message", e)
 
 
-def set_model_task(deps, model_used: str, status: str = "in_progress") -> None:
+def set_model_task(deps, model_used: str, status: str = "complete") -> None:
     """Show which model is currently being tried, live — as soon as an attempt
     starts, not just after the whole turn finishes (agent_dynamic.run_sync runs
     the entire tool-calling loop synchronously, so waiting for it to return was
     the only signal previously available). Reuses one fixed task id so a
     provider fallback updates this same line instead of stacking a new one each
     time, and keeps it first in the list (see build_plan_blocks ordering).
+
+    Always shown as "complete", never "in_progress" — it's a plain informational
+    line ("which model is this turn using"), not a step with a spinner; there's
+    nothing for the user to watch "in progress" about which model was picked.
     """
     if not deps.plan_ts:
         return

@@ -101,6 +101,30 @@ def test_message_mentions_are_handled_by_app_mentioned(monkeypatch):
         run_turn.assert_not_called()
 
 
+def test_message_dm_mention_is_not_dropped(monkeypatch):
+    """The "mentions are owned by app_mentioned" guard must not apply to DMs — Slack
+    never emits an app_mention event for a DM, so a DM containing "<@BOT_ID> ..."
+    would otherwise be silently dropped by both handlers (previously reported: !stop
+    and every other message ignored when the bot was pinged inside a DM)."""
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_thread_engaged", return_value=True), \
+         patch("os.environ.get", side_effect=lambda k, d=None: {"COOLTON_BOT_ID": "BOT1"}.get(k, d)):
+        client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
+        context.channel_id = "D123"
+        context.user_id = "U1"
+        context.user_token = "xoxp-user"
+        monkeypatch.setattr("agent.policy_consent.has_consent", lambda user_id: True)
+        monkeypatch.setattr("agent.policy_consent.user_is_in_policy_channel", lambda client, user_id: False)
+        event = {
+            "type": "message", "text": "<@BOT1> hi there", "ts": "111.111",
+            "channel_type": "im",
+        }
+        handle_message(client, context, event, logger, say, say_stream, None)
+        run_turn.assert_called_once()
+
+
 def test_message_ignores_bare_stop_in_channel(monkeypatch):
     from unittest.mock import patch
 
@@ -124,11 +148,31 @@ def test_message_stop_requests_halt_in_dm(monkeypatch):
         client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
         context.channel_id = "D123"
         context.user_id = "U1"
-        event = {"type": "message", "text": "please !stop now", "ts": "111.111", "channel_type": "im"}
+        event = {"type": "message", "text": "!stop", "ts": "111.111", "channel_type": "im"}
         handle_message(client, context, event, logger, say, say_stream, None)
         request_stop.assert_called_once_with("D123", "111.111")
         say.assert_called_once()
         run_turn.assert_not_called()
+
+
+def test_message_embedded_stop_word_in_dm_does_not_halt(monkeypatch):
+    """A normal prompt that merely contains the word "!stop" (not the whole
+    message) must never be treated as a stop command, even in a DM."""
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.request_stop") as request_stop, \
+         patch("listeners.events.message.is_thread_engaged", return_value=True):
+        client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
+        context.channel_id = "D123"
+        context.user_id = "U1"
+        context.user_token = "xoxp-user"
+        monkeypatch.setattr("agent.policy_consent.has_consent", lambda user_id: True)
+        monkeypatch.setattr("agent.policy_consent.user_is_in_policy_channel", lambda client, user_id: False)
+        event = {"type": "message", "text": "please !stop now", "ts": "111.111", "channel_type": "im"}
+        handle_message(client, context, event, logger, say, say_stream, None)
+        request_stop.assert_not_called()
+        run_turn.assert_called_once()
 
 
 def test_message_ignores_angle_brackets_without_mention(ctx, monkeypatch):
@@ -483,9 +527,10 @@ def test_message_double_hash_blocks_ping_group(ctx):
 # ---------------------------------------------------------------------------
 
 
-def test_app_mentioned_stop_in_thread(ctx):
+def test_app_mentioned_stop_in_thread(ctx, monkeypatch):
     from unittest.mock import patch
 
+    monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
          patch("listeners.events.app_mentioned.request_stop") as request_stop:
         _mention(ctx, text="<@BOT1> !stop", ts="111.111", thread_ts="1.1")
@@ -494,9 +539,24 @@ def test_app_mentioned_stop_in_thread(ctx):
         run_turn.assert_not_called()
 
 
+def test_app_mentioned_embedded_stop_word_does_not_halt(ctx, monkeypatch):
+    """A mention that merely mentions the word "!stop" mid-sentence must not halt —
+    only a mention whose remaining content, once the mention itself is stripped, is
+    exactly "!stop"."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+        _mention(ctx, text="<@BOT1> what does !stop do?", ts="111.111", thread_ts="1.1")
+        request_stop.assert_not_called()
+        run_turn.assert_called_once()
+
+
 def test_message_stop_in_dm_only(ctx, monkeypatch):
     from unittest.mock import patch
 
+    monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
          patch("listeners.events.message.request_stop") as request_stop:
         _msg(ctx, text="<@BOT1> !stop", channel_type="im")

@@ -1,3 +1,4 @@
+import os
 from logging import Logger
 
 from slack_bolt import BoltContext, Say, SayStream
@@ -7,7 +8,7 @@ from agent.active_runs import is_run_active
 from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import join_thread
 from agent.steering_store import queue_steering_message
-from agent.stop_store import request_stop
+from agent.stop_store import is_stop_command, request_stop
 from thread_context import conversation_store
 from listeners.events.turn import run_agent_turn
 
@@ -40,9 +41,13 @@ def handle_app_mentioned(
             return
         thread_ts = event.get("thread_ts") or event["ts"]
         user_id = context.user_id
+        bot_id = os.environ.get("COOLTON_BOT_ID", "")
 
-        # !stop: immediately halt every coolton run in this thread.
-        if "!stop" in text:
+        # !stop: immediately halt every coolton run in this thread. Must be the
+        # message's entire content aside from the mention (see is_stop_command) —
+        # a normal prompt that merely contains the word "!stop" must not halt
+        # anything.
+        if is_stop_command(text, bot_id):
             request_stop(channel_id, thread_ts)
             say(
                 text="⏹️ stopping all your running coolton instances…",

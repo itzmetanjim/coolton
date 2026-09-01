@@ -102,6 +102,28 @@ def test_update_plan_message_calls_chat_update():
     deps.client.chat_update.assert_called_once()
 
 
+def test_update_plan_message_supersedes_stale_thinking_placeholder():
+    """The initial 'Thinking' placeholder must never keep showing in_progress once
+    something else has actually happened — a defensive backstop here (every mid-run
+    mutation routes through this function) rather than trusting each individual hook
+    to remember to clean it up itself."""
+    deps = _deps(plan_ts="100.100", plan_tasks={
+        "task_thinking": {"task_id": "task_thinking", "title": "Thinking", "status": "in_progress"},
+        "task_1": {"task_id": "task_1", "title": "Fetching URL", "status": "in_progress"},
+    })
+    update_plan_message(deps)
+    assert "task_thinking" not in deps.plan_tasks
+    assert "task_1" in deps.plan_tasks
+
+
+def test_update_plan_message_keeps_thinking_placeholder_when_its_the_only_task():
+    deps = _deps(plan_ts="100.100", plan_tasks={
+        "task_thinking": {"task_id": "task_thinking", "title": "Thinking", "status": "in_progress"},
+    })
+    update_plan_message(deps)
+    assert "task_thinking" in deps.plan_tasks
+
+
 def test_set_plan_error_marks_tasks_and_clears_plan_ts():
     deps = _deps(plan_ts="100.100", plan_tasks={"task_thinking": {"task_id": "task_thinking", "title": "Thinking", "status": "in_progress"}})
     set_plan_error(deps, "boom")
@@ -164,7 +186,8 @@ def test_set_model_task_shows_model_immediately_first():
     set_model_task(deps, "hcai / gpt-5.6-luna")
     ordered_titles = [t["title"] for t in deps.plan_tasks.values()]
     assert ordered_titles[0] == "Model: hcai / gpt-5.6-luna"
-    assert deps.plan_tasks["task_model"]["status"] == "in_progress"
+    # Never shown in_progress — it's a plain info line, not a step with a spinner.
+    assert deps.plan_tasks["task_model"]["status"] == "complete"
     deps.client.chat_update.assert_called_once()
 
 
