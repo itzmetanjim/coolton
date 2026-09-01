@@ -33,3 +33,17 @@ def stop_requested_for(channel_id: str, thread_ts: str, run_started_at: float) -
     with _lock:
         ts = _stop_times.get((channel_id, thread_ts))
         return ts is not None and ts > run_started_at
+
+
+def is_stop_command(text: str, bot_id: str = "") -> bool:
+    """True if `text` IS a !stop command and nothing else — optionally preceded by an
+    @-mention of the bot, with only whitespace anywhere else. A prompt that merely
+    mentions "!stop" partway through a longer message (e.g. "what does !stop do?")
+    must never trigger a halt; only a message whose entire content, once any leading
+    mention is stripped, is exactly "!stop" counts."""
+    stripped = text.strip()
+    if bot_id:
+        mention = f"<@{bot_id}>"
+        if stripped.startswith(mention):
+            stripped = stripped[len(mention):].strip()
+    return stripped == "!stop"

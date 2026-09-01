@@ -10,7 +10,7 @@ from slack_sdk import WebClient
 from agent.active_runs import is_run_active
 from agent.leave_thread_store import is_thread_engaged
 from agent.steering_store import queue_steering_message
-from agent.stop_store import request_stop
+from agent.stop_store import is_stop_command, request_stop
 from thread_context import conversation_store
 from listeners.events.turn import run_agent_turn
 
@@ -49,12 +49,18 @@ def handle_message(
     if context.channel_id == "C06QV2T1P4G":
         return
 
-    # Mentions of the bot are owned by handle_app_mentioned (the app_mention event).
-    # Without this guard, a mention inside an engaged thread is picked up here too,
-    # launching a second coolton alongside the one from app_mention.
     text = event.get("text", "")
     bot_id = os.environ.get("COOLTON_BOT_ID", "")
-    if bot_id and f"<@{bot_id}>" in text:
+    is_dm = event.get("channel_type") == "im"
+
+    # Mentions of the bot in a CHANNEL are owned by handle_app_mentioned (the
+    # app_mention event) — without this guard, a mention inside an engaged thread is
+    # picked up here too, launching a second coolton alongside the one from
+    # app_mention. This must NOT apply to DMs: Slack never emits an app_mention event
+    # for a DM (there's no separate "mention" concept in a 1:1 conversation), so a DM
+    # containing "<@BOT_ID> ..." would otherwise be dropped by both handlers — owned
+    # by neither.
+    if not is_dm and bot_id and f"<@{bot_id}>" in text:
         return
 
     # ## double-hash: never process or respond to a message starting with "##",
@@ -67,14 +73,15 @@ def handle_message(
     channel_id = context.channel_id
     thread_ts = event.get("thread_ts") or event["ts"]
     user_id = context.user_id
-    is_dm = event.get("channel_type") == "im"
 
     # !stop: immediately halt every coolton run in this thread. Only honored
     # when the bot is explicitly @-mentioned (that path lives in
     # handle_app_mentioned) or in a DM, where every message is directed at the
     # bot. A bare "!stop" in a channel thread without a mention is ignored —
-    # it must never kill running coolton instances on its own.
-    if "!stop" in text:
+    # it must never kill running coolton instances on its own. Must be the
+    # message's entire content (see is_stop_command) — a normal prompt that
+    # merely contains the word "!stop" must not halt anything.
+    if is_stop_command(text, bot_id):
         if not is_dm:
             logger.info("Ignoring '!stop' without an @mention")
         else:
