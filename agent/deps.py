@@ -54,3 +54,17 @@ class AgentDeps:
     # wrong (e.g. an empty dict for a method that needs 'channel') can otherwise keep
     # retrying the exact same broken call instead of correcting it. Reset every turn.
     slack_api_call_failures: dict = field(default_factory=dict)
+    # Progressive checkpoint of "everything safe to resume from" for the CURRENT
+    # provider-chain attempt (agent.agent._run_with_provider_chain) — reassigned (a new
+    # list, never mutated in place) on every tool call by agent.plan_block's
+    # before_tool_execute hook via _messages_safe_for_resume. If one provider fails
+    # mid-turn AFTER real tool calls already ran (Slack messages posted, sandbox
+    # commands run, etc.), the next fallback attempt resumes from here instead of
+    # silently restarting from the turn's original pre-tool-call history — which
+    # otherwise looks to the user like the agent "randomly reset" mid-turn, since the
+    # new model has no memory of what the previous one already did. None (the default,
+    # reset at the start of every run_agent() call) means no progress has been
+    # checkpointed yet. Subagents and kevinton never wire up build_plan_hooks(), so this
+    # field is naturally inert (never reassigned) for their own _run_with_provider_chain
+    # calls even though they share this same AgentDeps type.
+    last_attempt_messages: list | None = None

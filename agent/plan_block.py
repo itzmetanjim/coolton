@@ -427,9 +427,15 @@ def build_plan_hooks():
         )
         display = _display_for_tool(call.tool_name)
         thread_status.set_status(deps.channel_id, deps.thread_ts, f"calling tool: {display}")
+        # Checkpoint how far this attempt has gotten (everything through the last
+        # completed tool round-trip) — if this attempt's provider fails later and
+        # falls back to a different one, agent.agent._run_with_provider_chain resumes
+        # from here instead of restarting the turn from scratch. See AgentDeps.last_attempt_messages.
+        safe_messages = _messages_safe_for_resume(ctx.messages)
+        deps.last_attempt_messages = safe_messages
         # If the user sent !stop in this thread after this run started, halt before the next tool.
         if stop_requested_for(deps.channel_id, deps.thread_ts, deps.run_started_at):
-            deps.halted_messages = _messages_safe_for_resume(ctx.messages)
+            deps.halted_messages = safe_messages
             raise HaltRun("!stop requested")
         if not deps.plan_ts:
             return args

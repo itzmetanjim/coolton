@@ -2105,6 +2105,10 @@ class _SkipResult:
 def run_agent(text, deps, message_history=None, images=None):
     _user_info_cache.clear()
     deps.run_started_at = time.time()
+    # Fresh per-turn checkpoint (see AgentDeps.last_attempt_messages) — a real Slack
+    # turn already gets a brand-new AgentDeps() so this is already None, but reset
+    # explicitly in case some other caller reuses a deps object across calls.
+    deps.last_attempt_messages = None
 
     # Attribute the incoming message to its sender so the model can tell users apart.
     platform = deps.platform or SlackPlatform(deps.client)
@@ -2308,6 +2312,12 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
         return any(p in error_str for p in fatal_patterns)
 
     all_errors = []
+    # Baseline to detect whether THIS call's own tool calls advanced the checkpoint
+    # (see AgentDeps.last_attempt_messages) — deps is shared with callers like
+    # subagents/kevinton that never wire up the hook that reassigns it, so comparing
+    # by identity here (not just "is it non-None") keeps this inert for them instead
+    # of picking up a stale checkpoint left over from some earlier, unrelated run.
+    checkpoint_baseline = deps.last_attempt_messages
 
     for provider_name, prov_config in provider_order:
         provider_max_retries = prov_config.get("max_retries", max_retries)
@@ -2357,6 +2367,24 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                     raise
                 err = _redact(str(e), context=f"provider {provider_name}")
                 all_errors.append(f"{provider_name}: {err}")
+                if deps.last_attempt_messages is not checkpoint_baseline:
+                    # This attempt got far enough to actually run tool(s) — real side
+                    # effects (a Slack message posted, a sandbox command run, etc.) may
+                    # already have happened. Resume the next attempt from that
+                    # checkpoint instead of restarting from the turn's original
+                    # pre-tool-call history, which otherwise makes the fallback model
+                    # act like the turn just "randomly reset" with no memory of any of
+                    # it. pydantic_ai resumes cleanly from message_history alone when
+                    # user_prompt is None (same mechanism thread continuation across
+                    # turns already relies on) — see UserPromptNode in pydantic_ai's
+                    # _agent_graph.py.
+                    logger.warning(
+                        f"{provider_name} failed after partial progress this turn — "
+                        f"next attempt resumes from the last checkpoint instead of restarting."
+                    )
+                    run_kwargs["message_history"] = deps.last_attempt_messages
+                    run_kwargs["user_prompt"] = None
+                    checkpoint_baseline = deps.last_attempt_messages
                 if is_hard_error(e):
                     if provider_name != "byok":
                         mark_dead(provider_name, err)
