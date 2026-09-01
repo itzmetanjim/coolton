@@ -744,7 +744,7 @@ def test_run_with_provider_chain_shows_model_before_run_sync_returns(monkeypatch
         return SimpleNamespace(output="ok")
 
     fake_agent = SimpleNamespace(run_sync=fake_run_sync)
-    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1")
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
 
     result, provider = agent_mod._run_with_provider_chain(fake_agent, {}, deps)
 
@@ -784,12 +784,98 @@ def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatc
         return SimpleNamespace(output="ok")
 
     fake_agent = SimpleNamespace(run_sync=fake_run_sync)
-    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1")
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
 
     result, provider = agent_mod._run_with_provider_chain(fake_agent, {}, deps)
 
     assert provider == "anthropic"
     assert shown_models == ["hcai_0 / openai/gpt-5.6-luna", "anthropic / anthropic:claude-sonnet-4-6"]
+
+
+def test_run_with_provider_chain_resumes_from_checkpoint_after_mid_turn_fallback(monkeypatch, clean_env):
+    """If a provider fails AFTER real tool calls already ran this turn (agent.plan_block's
+    before_tool_execute hook checkpoints progress into deps.last_attempt_messages on every
+    call), the next fallback attempt must resume from that checkpoint instead of silently
+    restarting the turn from its original pre-tool-call history — otherwise the fallback
+    model has no memory of what already happened and the turn looks like it "reset"."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_mod, "_resolve_provider_order",
+        lambda user_id, tag=None: [
+            ("hcai_0", {"model": "openai/gpt-5.6-luna", "api_key": "k"}),
+            ("anthropic", {"model": "anthropic:claude-sonnet-4-6", "api_key": "k"}),
+        ],
+    )
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.fallback_cache.mark_dead", lambda name, err: None)
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+
+    checkpoint = ["fake-partial-history-after-a-tool-call"]
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
+    seen_kwargs = []
+
+    def fake_run_sync(**kwargs):
+        seen_kwargs.append(dict(kwargs))
+        if len(seen_kwargs) == 1:
+            # Simulate the hook having fired for a tool call this attempt already made
+            # before the model then failed on its next completion.
+            deps.last_attempt_messages = checkpoint
+            raise RuntimeError("401 unauthorized")  # hard error, falls to next provider
+        return SimpleNamespace(output="ok")
+
+    fake_agent = SimpleNamespace(run_sync=fake_run_sync)
+    run_kwargs = {"user_prompt": "original prompt", "message_history": ["original history"]}
+
+    result, provider = agent_mod._run_with_provider_chain(fake_agent, run_kwargs, deps)
+
+    assert provider == "anthropic"
+    assert len(seen_kwargs) == 2
+    assert seen_kwargs[0]["message_history"] == ["original history"]
+    assert seen_kwargs[0]["user_prompt"] == "original prompt"
+    # The fallback attempt resumes from the checkpoint, not the turn's original history.
+    assert seen_kwargs[1]["message_history"] is checkpoint
+    assert seen_kwargs[1]["user_prompt"] is None
+
+
+def test_run_with_provider_chain_does_not_touch_history_without_progress(monkeypatch, clean_env):
+    """No tool call ran before the failure (deps.last_attempt_messages never got
+    reassigned, e.g. an immediate auth error, or a subagent/kevinton caller that never
+    wires up the hook at all) — the next attempt must use the original run_kwargs
+    unchanged, not silently swap in an unrelated/stale checkpoint."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_mod, "_resolve_provider_order",
+        lambda user_id, tag=None: [
+            ("hcai_0", {"model": "openai/gpt-5.6-luna", "api_key": "k"}),
+            ("anthropic", {"model": "anthropic:claude-sonnet-4-6", "api_key": "k"}),
+        ],
+    )
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.fallback_cache.mark_dead", lambda name, err: None)
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+
+    # A stale checkpoint left over from something unrelated (e.g. a prior subagent call
+    # sharing this same deps) must never leak into this attempt's fallback.
+    stale_checkpoint = ["stale, unrelated history"]
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=stale_checkpoint)
+    seen_kwargs = []
+
+    def fake_run_sync(**kwargs):
+        seen_kwargs.append(dict(kwargs))
+        if len(seen_kwargs) == 1:
+            raise RuntimeError("401 unauthorized")
+        return SimpleNamespace(output="ok")
+
+    fake_agent = SimpleNamespace(run_sync=fake_run_sync)
+    run_kwargs = {"user_prompt": "original prompt", "message_history": ["original history"]}
+
+    result, provider = agent_mod._run_with_provider_chain(fake_agent, run_kwargs, deps)
+
+    assert provider == "anthropic"
+    assert seen_kwargs[1]["message_history"] == ["original history"]
+    assert seen_kwargs[1]["user_prompt"] == "original prompt"
 
 
 # ---------------------------------------------------------------------------

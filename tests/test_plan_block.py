@@ -304,7 +304,7 @@ def _hook(hooks, name):
 def test_build_plan_hooks_tracks_tool_lifecycle():
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
     args = {"url": "https://example.com"}
 
@@ -331,7 +331,7 @@ def test_build_plan_hooks_after_tool_summarizes_binary_content_in_plan_card():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="computer_use", tool_call_id="shot1")
     result = ToolReturn(
         return_value="Screenshot of your desktop.",
@@ -356,7 +356,7 @@ def test_build_plan_hooks_folds_steering_message_into_next_tool_result():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100", channel_id="STEER1", thread_ts="1.1")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
     queue_steering_message("STEER1", "1.1", "also check the other thing", "U9")
 
@@ -383,7 +383,7 @@ def test_build_plan_hooks_clears_steering_queue_once_delivered():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100", channel_id="STEER2", thread_ts="1.1")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
     queue_steering_message("STEER2", "1.1", "hey", "U9")
 
@@ -408,7 +408,7 @@ def test_build_plan_hooks_leaves_steering_queued_when_result_is_not_a_string():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100", channel_id="STEER3", thread_ts="1.1")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="some_tool", tool_call_id="abc123")
     queue_steering_message("STEER3", "1.1", "hey", "U9")
 
@@ -428,7 +428,7 @@ def test_build_plan_hooks_leaves_steering_queued_when_result_is_not_a_string():
 def test_build_plan_hooks_no_steering_queued_leaves_result_untouched():
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100", channel_id="STEER4", thread_ts="1.1")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
 
     async def run():
@@ -443,7 +443,7 @@ def test_build_plan_hooks_no_steering_queued_leaves_result_untouched():
 def test_build_plan_hooks_does_not_track_when_plan_ts_unset():
     hooks = build_plan_hooks()
     deps = _deps()  # plan_ts None
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
 
     async def run():
@@ -462,7 +462,7 @@ def test_build_plan_hooks_updates_live_thread_status_on_tool_call():
     deps = _deps(plan_ts="100.100", channel_id="TS1", thread_ts="1.1")
     thread_status.start(deps.client, "TS1", "1.1")
     deps.client.assistant_threads_setStatus.reset_mock()
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="add_emoji_reaction", tool_call_id="abc123")
 
     async def run():
@@ -486,7 +486,7 @@ def test_build_plan_hooks_updates_live_thread_status_even_without_a_plan_message
     deps = _deps(channel_id="TS2", thread_ts="1.1")  # plan_ts None
     thread_status.start(deps.client, "TS2", "1.1")
     deps.client.assistant_threads_setStatus.reset_mock()
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="search_web_tool", tool_call_id="abc123")
 
     async def run():
@@ -504,7 +504,7 @@ def test_build_plan_hooks_updates_live_thread_status_even_without_a_plan_message
 def test_build_plan_hooks_tool_error_marks_error_and_reraises():
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
 
     async def run():
@@ -545,6 +545,29 @@ def test_before_tool_hook_snapshots_messages_and_halts_on_stop(monkeypatch):
     assert deps.halted_messages == messages[:1]
 
 
+def test_before_tool_hook_checkpoints_progress_on_every_call_not_just_stop():
+    """deps.last_attempt_messages must update on every tool call, not only when !stop is
+    requested — agent.agent._run_with_provider_chain relies on this to resume a mid-turn
+    provider fallback from where the turn actually got to, instead of restarting it."""
+    from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
+
+    hooks = build_plan_hooks()
+    deps = _deps(plan_ts="100.100", run_started_at=0.0)
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content="do the thing")]),
+        ModelResponse(parts=[ToolCallPart(tool_name="fetch_url_tool", args={})]),
+    ]
+    ctx = SimpleNamespace(deps=deps, messages=messages)
+    call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
+
+    async def run():
+        await _hook(hooks, "before_tool_execute")(ctx, call=call, tool_def=None, args={})
+
+    asyncio.run(run())
+
+    assert deps.last_attempt_messages == messages[:1]
+
+
 def test_messages_safe_for_resume_drops_trailing_pending_tool_call():
     from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
@@ -574,7 +597,7 @@ def test_build_plan_hooks_shows_reasoning_between_tool_calls():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100", plan_tasks={"task_thinking": {"task_id": "task_thinking", "title": "Thinking", "status": "in_progress"}})
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     response = ModelResponse(parts=[
         ThinkingPart(content="I should search the web for this."),
         ToolCallPart(tool_name="search_web_tool", args={"query": "x"}),
@@ -599,7 +622,7 @@ def test_build_plan_hooks_ignores_response_with_no_thinking_part():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     response = ModelResponse(parts=[TextPart(content="just a normal answer")])
 
     async def run():
@@ -614,7 +637,7 @@ def test_build_plan_hooks_reasoning_noop_when_plan_ts_unset():
 
     hooks = build_plan_hooks()
     deps = _deps()  # plan_ts None
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     response = ModelResponse(parts=[ThinkingPart(content="secret reasoning")])
 
     async def run():
@@ -629,7 +652,7 @@ def test_build_plan_hooks_posts_status_update_alongside_tool_call():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     response = ModelResponse(parts=[
         TextPart(content="→ _checking the deploy logs for the last restart_"),
         ToolCallPart(tool_name="search_web_tool", args={"query": "x"}),
@@ -655,7 +678,7 @@ def test_build_plan_hooks_does_not_repost_final_answer_as_status():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     response = ModelResponse(parts=[TextPart(content="here's the final answer")])
 
     async def run():
@@ -670,7 +693,7 @@ def test_build_plan_hooks_skips_status_post_when_tool_call_has_no_text():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     response = ModelResponse(parts=[ToolCallPart(tool_name="t", args={})])
 
     async def run():
@@ -686,7 +709,7 @@ def test_build_plan_hooks_status_post_survives_slack_error():
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
     deps.client.chat_postMessage.side_effect = RuntimeError("boom")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
     response = ModelResponse(parts=[
         TextPart(content="→ _trying again_"),
         ToolCallPart(tool_name="t", args={}),
@@ -706,7 +729,7 @@ def test_build_plan_hooks_multiple_reasoning_rounds_do_not_overwrite():
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
-    ctx = SimpleNamespace(deps=deps)
+    ctx = SimpleNamespace(deps=deps, messages=[])
 
     async def run():
         await _hook(hooks, "after_model_request")(
