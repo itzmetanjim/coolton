@@ -308,3 +308,67 @@ def test_steering_queue_cleared_when_run_finishes(mocks):
         assert peek_steering_messages("C1", "1.1") == []
     finally:
         clear_steering_messages("C1", "1.1")
+
+
+def test_stranded_steering_message_gets_a_fresh_turn(mocks):
+    """A message can land in the steering queue for a run that's about to end without
+    ever getting folded into a live tool result — most commonly the !stop race
+    (stop_requested_for is only checked at the next before_tool_execute call, so a
+    message sent right after !stop can still be queued for the dying run). The old
+    behavior silently discarded it here, so the thread just stopped answering
+    anything. It must now get a real, fresh turn instead."""
+    from agent.steering_store import clear_steering_messages, queue_steering_message
+
+    queue_steering_message("C1", "1.1", "are you still there?", "U2", "222.222")
+    try:
+        _run_turn(mocks)
+    finally:
+        clear_steering_messages("C1", "1.1")
+
+    assert turn.run_agent.call_count == 2
+    second_call = turn.run_agent.call_args_list[1]
+    assert second_call.args[0] == "are you still there?"
+    second_deps = second_call.args[1]
+    assert second_deps.user_id == "U2"
+    assert second_deps.message_ts == "222.222"
+
+
+def test_stopped_run_context_preserved_for_stranded_steering_message(mocks, monkeypatch):
+    """!stop halts a run that already made real tool-call progress (deps.halted_messages).
+    A message answered via the stranded-steering recovery must still see that progress
+    as history — not restart from a blank slate, losing everything the stopped run
+    already did."""
+    from agent.steering_store import clear_steering_messages, queue_steering_message
+
+    halted_messages = ["partial-progress-from-the-stopped-run"]
+    calls = {"n": 0}
+
+    def fake_run_agent(text, deps, message_history=None, images=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            deps.should_skip = True
+            deps.halt_reason = "!stop requested"
+            queue_steering_message("C1", "1.1", "try again", "U1", "333.333")
+
+        class _Result:
+            output = ""
+
+            def all_messages(self):
+                return halted_messages
+
+        return _Result()
+
+    turn.run_agent.side_effect = fake_run_agent
+
+    store = {}
+    monkeypatch.setattr(turn.conversation_store, "set_history", lambda ch, th, msgs: store.__setitem__((ch, th), msgs))
+    monkeypatch.setattr(turn.conversation_store, "get_history", lambda ch, th: store.get((ch, th)))
+
+    try:
+        _run_turn(mocks)
+    finally:
+        clear_steering_messages("C1", "1.1")
+
+    assert turn.run_agent.call_count == 2
+    second_call = turn.run_agent.call_args_list[1]
+    assert second_call.kwargs["message_history"] == halted_messages

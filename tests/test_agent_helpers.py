@@ -878,6 +878,54 @@ def test_run_with_provider_chain_does_not_touch_history_without_progress(monkeyp
     assert seen_kwargs[1]["user_prompt"] == "original prompt"
 
 
+def test_run_with_provider_chain_includes_raw_http_body_in_all_errors(monkeypatch, clean_env):
+    """A pydantic ValidationError on the response (e.g. "3 validation errors for
+    ChatCompletion ... input_value=None") only says the SDK couldn't parse a
+    ChatCompletion out of it — not what the base_url provider actually sent back.
+    Same raw-body capture as provider_probe.test_provider, now wired into the real
+    turn path too (observed live: HCAI/OpenRouter disguising a 429 as HTTP 200 with
+    an error payload instead of a real ChatCompletion)."""
+    import httpx
+    from pydantic_ai import Agent
+
+    monkeypatch.setenv("HCAI_API_KEY", "k")
+    monkeypatch.setattr(
+        agent_mod, "_resolve_provider_order",
+        lambda user_id, tag=None: [
+            ("hcai_0", {"model": "openai/gpt-5.6-luna", "api_key": "k", "base_url": "https://fake.example/v1"}),
+        ],
+    )
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.fallback_cache.mark_dead", lambda name, err: None)
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"id": "gen-fake", "error": {"message": "temporarily rate-limited upstream", "code": 429}},
+        )
+
+    real_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    from types import SimpleNamespace
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts=None, last_attempt_messages=None)
+    real_agent = Agent(deps_type=type(deps), system_prompt="test")
+    run_kwargs = {"user_prompt": "hi", "message_history": None}
+
+    with pytest.raises(RuntimeError) as exc_info:
+        agent_mod._run_with_provider_chain(real_agent, run_kwargs, deps)
+
+    message = str(exc_info.value)
+    assert "raw HTTP 200 body" in message
+    assert "temporarily rate-limited upstream" in message
+
+
 # ---------------------------------------------------------------------------
 # Embeds (whiteboard, HTML, computer_stream_tool) must reply in the current
 # thread, not post a new top-level message — send_web_embed's payload had no

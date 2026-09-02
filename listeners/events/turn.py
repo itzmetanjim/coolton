@@ -199,9 +199,33 @@ def run_agent_turn(
         # Whatever happened, this thread is no longer "actively running" —
         # any message.py/app_mentioned.py check from here on should start a
         # fresh turn rather than queuing as a steer for a run that's over.
-        # Anything left unconsumed in the steering queue belongs to this run
-        # and must not leak into a future, unrelated one.
         mark_run_finished(channel_id, thread_ts)
-        from agent.steering_store import clear_steering_messages
-        clear_steering_messages(channel_id, thread_ts)
         thread_status.stop(channel_id, thread_ts)
+
+        # A message can land in the steering queue for a run that's about to end
+        # without ever getting the chance to fold it into a live tool result — most
+        # commonly the !stop race (stop_requested_for is only checked at the next
+        # before_tool_execute call, so a message sent right after !stop can still be
+        # queued here for the run that's already dying) but also just a message
+        # arriving in the last moment before the run's own final response. Simply
+        # discarding it here (the old behavior) silently drops it — the thread then
+        # looks like it stopped answering anything at all. Drain and actually answer
+        # it with a fresh turn instead.
+        from agent.steering_store import clear_steering_messages, peek_steering_messages
+        stranded = peek_steering_messages(channel_id, thread_ts)
+        clear_steering_messages(channel_id, thread_ts)
+        if stranded:
+            last = stranded[-1]
+            run_agent_turn(
+                client=client,
+                say_stream=say_stream,
+                say=say,
+                logger=logger,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                message_ts=last["message_ts"] or thread_ts,
+                user_id=last["user_id"],
+                user_token=user_token,
+                text=last["text"],
+                history=conversation_store.get_history(channel_id, thread_ts),
+            )

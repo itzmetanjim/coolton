@@ -67,7 +67,7 @@ def handle_app_mentioned(
         # agent/steering_store.py + plan_block.after_tool for how the running
         # turn picks this up.
         if is_run_active(channel_id, thread_ts):
-            queue_steering_message(channel_id, thread_ts, text, user_id)
+            queue_steering_message(channel_id, thread_ts, text, user_id, event["ts"])
             try:
                 client.reactions_add(channel=channel_id, timestamp=event["ts"], name="white_check_mark")
             except Exception:
