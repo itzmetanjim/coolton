@@ -646,6 +646,66 @@ def test_slack_api_call_treats_blank_string_as_empty_parameters(monkeypatch):
     post.assert_called_once()
 
 
+# ---------------------------------------------------------------------------
+# create_slack_bot_tool / update_slack_bot_manifest_tool — manifest is now a
+# JSON string too, for the same reason as slack_api_call's api_parameters.
+# ---------------------------------------------------------------------------
+
+
+def test_create_slack_bot_tool_parses_json_string_manifest(monkeypatch):
+    seen = {}
+
+    def fake_create_slack_bot(manifest):
+        seen["manifest"] = manifest
+        return "Success: app created"
+
+    monkeypatch.setattr("agent.tools.slack_bot_deploy.create_slack_bot", fake_create_slack_bot)
+    result = agent_mod.create_slack_bot_tool(
+        _run_ctx(Mock()), manifest='{"display_information": {"name": "Test Bot"}}'
+    )
+    assert "Success" in result
+    assert seen["manifest"] == {"display_information": {"name": "Test Bot"}}
+
+
+def test_create_slack_bot_tool_rejects_malformed_json(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        "agent.tools.slack_bot_deploy.create_slack_bot",
+        lambda manifest: called.append(manifest) or "should not be called",
+    )
+    result = agent_mod.create_slack_bot_tool(_run_ctx(Mock()), manifest="{not valid json")
+    assert "must be valid JSON" in result
+    assert called == []
+
+
+def test_update_slack_bot_manifest_tool_parses_json_string_manifest(monkeypatch):
+    seen = {}
+
+    def fake_update(uuid, manifest):
+        seen["uuid"] = uuid
+        seen["manifest"] = manifest
+        return "Manifest updated for app A123."
+
+    monkeypatch.setattr("agent.tools.slack_bot_deploy.update_slack_bot_manifest", fake_update)
+    result = agent_mod.update_slack_bot_manifest_tool(
+        _run_ctx(Mock()), uuid="A123", manifest='{"display_information": {"name": "Test Bot"}}'
+    )
+    assert "Manifest updated" in result
+    assert seen["uuid"] == "A123"
+    assert seen["manifest"] == {"display_information": {"name": "Test Bot"}}
+
+
+def test_update_slack_bot_manifest_tool_rejects_a_json_array(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        "agent.tools.slack_bot_deploy.update_slack_bot_manifest",
+        lambda uuid, manifest: called.append(manifest) or "should not be called",
+    )
+    result = agent_mod.update_slack_bot_manifest_tool(_run_ctx(Mock()), uuid="A123", manifest="[1, 2]")
+    assert "must be a JSON object" in result
+    assert called == []
+
+
 def test_slack_api_call_allows_empty_params_for_other_methods(monkeypatch):
     monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
     with patch("agent.agent.requests.post") as post:
