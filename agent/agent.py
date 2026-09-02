@@ -758,7 +758,7 @@ def computer_use(
     x2: int | None = None,
     y2: int | None = None,
     text: str = "",
-    keys: list[str] | str = "",
+    keys: str = "",
     direction: str = "down",
     amount: int = 1,
     target: str = "",
@@ -786,8 +786,8 @@ def computer_use(
     - "scroll": direction ("up"/"down"), amount (number of notches).
     - "drag": x, y, x2, y2 (drag from one point to another).
     - "type": text (typed at the current text cursor/focus).
-    - "key": keys — a single key name ("enter", "escape", "tab") or a list for a
-      combo (["ctrl", "c"]).
+    - "key": keys — a single key name ("enter", "escape", "tab") or a "+"-joined combo
+      ("ctrl+c", "cmd+shift+t").
     - "wait": amount (milliseconds) — for a page/app to finish loading or animating.
     - "open_url": target (a URL, opened in the default browser).
     - "launch_app": target (an app's .desktop id, e.g. "firefox-esr", "org.gnome.gedit").
@@ -797,7 +797,7 @@ def computer_use(
         x, y: Primary coordinate (pixels, from the most recent screenshot).
         x2, y2: Second coordinate, for "drag".
         text: Text to type, for action="type".
-        keys: Key name or list of keys for a combo, for action="key".
+        keys: Key name, or a "+"-joined combo (e.g. "ctrl+c"), for action="key".
         direction: Scroll direction, for action="scroll".
         amount: Scroll notches or wait milliseconds, depending on action.
         target: URL or app name, for "open_url" / "launch_app".
@@ -806,11 +806,20 @@ def computer_use(
         return ToolReturn("Error: E2B_API_KEY not configured.")
     if not provider_config.is_vision_model(ctx.model.model_name):
         return ToolReturn(_VISION_GATE_ERROR.format(model=ctx.model.model_name))
+    # "ctrl+c" -> ["ctrl", "c"] for a combo; a bare "enter" stays a single string —
+    # press_key (agent/desktop_helpers.py) already handles both, and already rejoins a
+    # list with "+" for xdotool, so this is just moving the same split earlier: keys
+    # used to be typed `list[str] | str`, a compound/union shape a model has to
+    # correctly nest JSON for, now it's the same plain "+"-joined string a human would
+    # type — see api_parameters (slack_api_call) for the same fix and why it mattered.
+    parsed_keys: list[str] | str | None = None
+    if keys.strip():
+        parsed_keys = keys.split("+") if "+" in keys else keys
     try:
         result = _computer_use_dispatch(
             ctx.deps.channel_id, ctx.deps.thread_ts, action,
             x=x, y=y, x2=x2, y2=y2,
-            text=text or None, keys=keys or None,
+            text=text or None, keys=parsed_keys,
             direction=direction, amount=amount, target=target or None,
         )
     except Exception as e:
