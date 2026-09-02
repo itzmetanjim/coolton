@@ -1289,6 +1289,54 @@ def test_computer_use_action_does_not_touch_keepalive_when_inactive(monkeypatch)
     assert armed == []
 
 
+def _computer_use_ctx():
+    from types import SimpleNamespace
+    from pydantic_ai import RunContext
+
+    deps = SimpleNamespace(
+        channel_id="C1", thread_ts="1.2", keep_sandbox_warm=False,
+        last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=0.0,
+    )
+    return RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
+
+
+def test_computer_use_key_single_key_stays_a_plain_string(monkeypatch):
+    """keys used to be typed `list[str] | str` — a compound/union shape a model has to
+    correctly nest JSON for. It's now a plain string a model just types, "+"-joined
+    for a combo (see api_parameters on slack_api_call for the same fix and why it
+    mattered): a bare "enter" must reach press_key as a plain string, unsplit."""
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod.provider_config, "is_vision_model", lambda name: True)
+    seen = {}
+    monkeypatch.setattr(agent_mod, "_computer_use_dispatch", lambda *a, **k: seen.update(k) or "Pressed")
+
+    agent_mod.computer_use(_computer_use_ctx(), action="key", keys="enter")
+
+    assert seen["keys"] == "enter"
+
+
+def test_computer_use_key_combo_splits_on_plus(monkeypatch):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod.provider_config, "is_vision_model", lambda name: True)
+    seen = {}
+    monkeypatch.setattr(agent_mod, "_computer_use_dispatch", lambda *a, **k: seen.update(k) or "Pressed")
+
+    agent_mod.computer_use(_computer_use_ctx(), action="key", keys="ctrl+shift+t")
+
+    assert seen["keys"] == ["ctrl", "shift", "t"]
+
+
+def test_computer_use_key_blank_keys_passes_none(monkeypatch):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod.provider_config, "is_vision_model", lambda name: True)
+    seen = {}
+    monkeypatch.setattr(agent_mod, "_computer_use_dispatch", lambda *a, **k: seen.update(k) or "ok")
+
+    agent_mod.computer_use(_computer_use_ctx(), action="screenshot", keys="")
+
+    assert seen["keys"] is None
+
+
 def test_set_sandbox_keepalive_tool_arms_a_positive_value(monkeypatch):
     armed = []
     monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
