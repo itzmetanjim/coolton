@@ -1497,34 +1497,39 @@ def send_html_embed_tool(
 _SLACK_API_CALL_RETRY_LIMIT = 1  # identical failures allowed (shared across both tools) before refusing to repeat it
 
 
-def _parse_api_parameters(api_parameters: str) -> tuple[dict | None, str | None]:
-    """Parse api_parameters (a JSON-encoded object, e.g. '{"channel": "C0123456"}') into
-    a dict. Returns (parsed, None) on success, or (None, error_message) on failure.
+def _parse_json_object_param(param_name: str, value: str, example: str = '{"key": "value"}') -> tuple[dict | None, str | None]:
+    """Parse `value` (a JSON-encoded object) into a dict. Returns (parsed, None) on
+    success, or (None, error_message) on failure.
 
-    Second live experiment for the "params kept arriving empty even when the model
-    could correctly state what it should contain" bug: after renaming the field away
-    from `params` didn't resolve it, trying a plain JSON string instead of a
-    schema-less nested `object` parameter — the latter has no defined shape for the
-    model to fill in (no property names to anchor against, just `{"type": "object"}`),
-    which some models/providers handle far less reliably than a string they just need
-    to fill with valid JSON text, an ordinary language-model-native task.
+    Confirmed live: a schema-less nested `object` parameter (no defined properties,
+    just `{"type": "object"}`) gives the model nothing to anchor against, and at least
+    one model/provider combination reliably sent an empty `{}` for it even when it
+    could correctly state in plain English what the value should contain — renaming
+    the field alone didn't fix it, but switching to a plain string the model fills
+    with JSON text (an ordinary language-model-native task) did. Every tool that used
+    to take a schema-less `dict` parameter now takes a JSON-encoded string instead and
+    parses it here.
     """
-    text = (api_parameters or "").strip()
+    text = (value or "").strip()
     if not text:
         return {}, None
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as e:
         return None, (
-            "Error: api_parameters must be valid JSON (a plain object, e.g. "
-            f'\'{{"channel": "C0123456"}}\') — got invalid JSON: {e}'
+            f"Error: {param_name} must be valid JSON (a plain object, e.g. "
+            f"'{example}') — got invalid JSON: {e}"
         )
     if not isinstance(parsed, dict):
         return None, (
-            f"Error: api_parameters must be a JSON object (e.g. '{{\"channel\": \"C0123456\"}}'), "
+            f"Error: {param_name} must be a JSON object (e.g. '{example}'), "
             f"not a {type(parsed).__name__}."
         )
     return parsed, None
+
+
+def _parse_api_parameters(api_parameters: str) -> tuple[dict | None, str | None]:
+    return _parse_json_object_param("api_parameters", api_parameters, example='{"channel": "C0123456"}')
 
 
 def _slack_api_call_key(method: str, api_parameters: dict) -> str:
@@ -1663,18 +1668,22 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_para
 
 
 @agent.tool
-def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: dict) -> str:
+def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: str) -> str:
     """Create a Slack app from a manifest. Returns app_id and OAuth install URL.
-    
+
     Uses the xoxe config token. The manifest must include display_information.name.
     After creating, visit the oauth_authorize_url to install the app, then use
     register_bot_tokens to store the resulting bot/app tokens.
-    
+
     Args:
-        manifest: Slack app manifest dict with display_information, features, etc.
+        manifest: JSON-encoded Slack app manifest object, as a plain STRING (with
+            display_information, features, etc.) — not a nested object.
     """
+    parsed_manifest, parse_error = _parse_json_object_param("manifest", manifest)
+    if parse_error:
+        return parse_error
     from agent.tools.slack_bot_deploy import create_slack_bot
-    return create_slack_bot(manifest)
+    return create_slack_bot(parsed_manifest)
 
 
 @agent.tool
@@ -1709,7 +1718,7 @@ def wrangler_bot_deploy_tool(ctx: RunContext[AgentDeps], uuid: str, working_dir:
 
 
 @agent.tool
-def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manifest: dict) -> str:
+def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manifest: str) -> str:
     """Update an already-created Slack app's manifest (apps.manifest.update).
 
     Use this once the Worker is deployed and its real URL is known, to point
@@ -1721,10 +1730,14 @@ def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manife
 
     Args:
         uuid: The app_id from create_slack_bot.
-        manifest: The FULL, updated Slack app manifest dict.
+        manifest: JSON-encoded, FULL updated Slack app manifest object, as a plain
+            STRING — not a nested object.
     """
+    parsed_manifest, parse_error = _parse_json_object_param("manifest", manifest)
+    if parse_error:
+        return parse_error
     from agent.tools.slack_bot_deploy import update_slack_bot_manifest
-    return update_slack_bot_manifest(uuid, manifest)
+    return update_slack_bot_manifest(uuid, parsed_manifest)
 
 
 @agent.tool
