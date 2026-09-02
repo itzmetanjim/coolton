@@ -1497,101 +1497,107 @@ def send_html_embed_tool(
 _SLACK_API_CALL_RETRY_LIMIT = 1  # identical failures allowed (shared across both tools) before refusing to repeat it
 
 
-def _slack_api_call_key(method: str, params: dict) -> str:
+def _slack_api_call_key(method: str, api_parameters: dict) -> str:
     # Deliberately NOT keyed by which tool (slack_api_call vs. _as_bot_tool) made the
     # call — observed live: a model blocked on one tool immediately just switched to
-    # the other with the exact same broken (method, params) and got a fresh budget.
-    # conversations.join with an empty params dict fails the same structural way
-    # regardless of which identity attempts it, so both tools share one budget here.
+    # the other with the exact same broken (method, api_parameters) and got a fresh
+    # budget. conversations.join with an empty params dict fails the same structural
+    # way regardless of which identity attempts it, so both tools share one budget here.
     try:
-        params_repr = json.dumps(params, sort_keys=True, default=str)
+        params_repr = json.dumps(api_parameters, sort_keys=True, default=str)
     except Exception:
-        params_repr = str(params)
+        params_repr = str(api_parameters)
     return f"{method}:{params_repr}"
 
 
-def _blocked_by_repeated_slack_failure(ctx: RunContext[AgentDeps], method: str, params: dict) -> str | None:
+def _blocked_by_repeated_slack_failure(ctx: RunContext[AgentDeps], method: str, api_parameters: dict) -> str | None:
     """Refuse a call once it's failed with these exact args too many times already this
     turn, instead of letting a model that can't self-correct retry it forever.
 
-    slack_api_call/slack_api_call_as_bot_tool take an untyped `params: dict` — the tool
-    schema itself carries no hint about what keys a given Slack method needs, only the
-    docstring does, so a model that gets one wrong has nothing structural stopping it
-    from retrying the identical broken call instead of fixing it. Observed live: even
-    an explicit "stop retrying this" error in the tool result didn't stop a model from
-    trying the exact same broken call again right after — so the limit is tight (1) and
-    shared across both tools, not just a strongly-worded message hoping it's heeded.
+    slack_api_call/slack_api_call_as_bot_tool take an untyped `api_parameters: dict` —
+    the tool schema itself carries no hint about what keys a given Slack method needs,
+    only the docstring does, so a model that gets one wrong has nothing structural
+    stopping it from retrying the identical broken call instead of fixing it. Observed
+    live: even an explicit "stop retrying this" error in the tool result didn't stop a
+    model from trying the exact same broken call again right after — so the limit is
+    tight (1) and shared across both tools, not just a strongly-worded message hoping
+    it's heeded.
+
+    The parameter (and JSON schema field) is deliberately named `api_parameters`, not
+    `params` — renamed live to test whether the field name `params` itself was somehow
+    involved in a model/provider bug where this dict kept arriving empty even when the
+    model could correctly state what it should contain.
     """
-    key = _slack_api_call_key(method, params)
+    key = _slack_api_call_key(method, api_parameters)
     count = ctx.deps.slack_api_call_failures.get(key, 0)
     if count < _SLACK_API_CALL_RETRY_LIMIT:
         return None
     hint = (
-        " params was empty — almost every Slack method needs at least one (e.g. 'channel' "
-        "for most conversations.* methods); check what this method actually requires."
-        if not params else ""
+        " api_parameters was empty — almost every Slack method needs at least one (e.g. "
+        "'channel' for most conversations.* methods); check what this method actually requires."
+        if not api_parameters else ""
     )
     return (
-        f"Error: {method} with these exact params has already failed {count} time(s) "
+        f"Error: {method} with these exact api_parameters has already failed {count} time(s) "
         f"this turn (across both slack_api_call and slack_api_call_as_bot_tool — they "
-        f"share this limit) — stop retrying it unchanged.{hint} Fix the params, use a "
+        f"share this limit) — stop retrying it unchanged.{hint} Fix api_parameters, use a "
         f"more specific tool if one exists for this, or give up on this approach entirely."
     )
 
 
-def _record_slack_api_call_failure(ctx: RunContext[AgentDeps], method: str, params: dict) -> None:
-    key = _slack_api_call_key(method, params)
+def _record_slack_api_call_failure(ctx: RunContext[AgentDeps], method: str, api_parameters: dict) -> None:
+    key = _slack_api_call_key(method, api_parameters)
     ctx.deps.slack_api_call_failures[key] = ctx.deps.slack_api_call_failures.get(key, 0) + 1
 
 
 @agent.tool
-def slack_api_call(ctx: RunContext[AgentDeps], method: str, params: dict) -> str:
+def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: dict) -> str:
     """Make an arbitrary Slack API call as cooltonUser.
 
     Use for any Slack Web API method not covered by other tools. Most methods need at
     least one param — don't guess with an empty dict, check what the method actually
     requires first.
 
-    Example: slack_api_call(method="conversations.join", params={"channel": "C0123456"})
+    Example: slack_api_call(method="conversations.join", api_parameters={"channel": "C0123456"})
 
     Args:
         method: Slack API method (e.g., 'chat.postMessage', 'conversations.list').
-        params: Dictionary of parameters for the method (e.g. {"channel": "C0123456"}).
+        api_parameters: Dictionary of parameters for the method (e.g. {"channel": "C0123456"}).
     """
     user_token = os.environ.get("SLACK_USER_TOKEN")
     if not user_token:
         return "Error: SLACK_USER_TOKEN not configured"
-    blocked = _blocked_by_repeated_slack_failure(ctx, method, params)
+    blocked = _blocked_by_repeated_slack_failure(ctx, method, api_parameters)
     if blocked:
         return blocked
     if method.startswith("apps.manifest."):
         return f"Error: {method} requires a Slack App Configuration Token (xoxe), not a user token. Use the create_slack_bot tool instead."
     if method == "chat.postMessage":
-        if not params.get("channel"):
+        if not api_parameters.get("channel"):
             return "Error: chat.postMessage requires a 'channel' (channel id or user id for a DM) param — use the chat_postMessage tool instead."
-        if not params.get("text"):
+        if not api_parameters.get("text"):
             return "Error: chat.postMessage requires a 'text' param — use the chat_postMessage tool instead."
-        params = _inject_poster(dict(params), ctx.deps.user_id)
+        api_parameters = _inject_poster(dict(api_parameters), ctx.deps.user_id)
     url = f"https://slack.com/api/{method}"
     headers = {"Authorization": f"Bearer {user_token}"}
     form = {
         k: json.dumps(v) if isinstance(v, (dict, list)) else v
-        for k, v in params.items()
+        for k, v in api_parameters.items()
     }
     try:
         response = requests.post(url, data=form, headers=headers)
         res_json = _strip_secret_keys(response.json())
         if res_json.get("ok"):
             return f"Success: {_redact(str(res_json), context='slack_api_call')}"
-        _record_slack_api_call_failure(ctx, method, params)
+        _record_slack_api_call_failure(ctx, method, api_parameters)
         return f"Slack API error: {_redact(str(res_json), context='slack_api_call')}"
     except Exception as e:
-        _record_slack_api_call_failure(ctx, method, params)
+        _record_slack_api_call_failure(ctx, method, api_parameters)
         return f"Error: {_redact(str(e), context='slack_api_call')}"
 
 
 @agent.tool
-def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, params: dict) -> str:
+def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_parameters: dict) -> str:
     """Make an arbitrary Slack API call as the BOT (not cooltonUser).
 
     Uses SLACK_BOT_TOKEN. Use for bot-level actions like posting messages as the bot,
@@ -1599,21 +1605,21 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, params: 
     least one param — don't guess with an empty dict, check what the method actually
     requires first.
 
-    Example: slack_api_call_as_bot_tool(method="conversations.join", params={"channel": "C0123456"})
+    Example: slack_api_call_as_bot_tool(method="conversations.join", api_parameters={"channel": "C0123456"})
 
     Args:
         method: Slack API method (e.g., 'chat.postMessage', 'chat.update', 'reactions.add').
-        params: Dictionary of parameters for the method (e.g. {"channel": "C0123456"}).
+        api_parameters: Dictionary of parameters for the method (e.g. {"channel": "C0123456"}).
     """
-    blocked = _blocked_by_repeated_slack_failure(ctx, method, params)
+    blocked = _blocked_by_repeated_slack_failure(ctx, method, api_parameters)
     if blocked:
         return blocked
     if method == "chat.postMessage":
-        params = _inject_poster(dict(params), ctx.deps.user_id)
+        api_parameters = _inject_poster(dict(api_parameters), ctx.deps.user_id)
     from agent.tools.slack_bot_api import slack_api_call_as_bot
-    result = slack_api_call_as_bot(method, params)
+    result = slack_api_call_as_bot(method, api_parameters)
     if not result.startswith("Success"):
-        _record_slack_api_call_failure(ctx, method, params)
+        _record_slack_api_call_failure(ctx, method, api_parameters)
     return result
 
 

@@ -478,7 +478,7 @@ connected it; point them to App Home > "Add MCP Server".
 ## SLACK API CALL (slack_api_call)
 Use `slack_api_call` when you need to do something in Slack that has no built-in tool or MCP capability.
 - Runs as cooltonUser (SLACK_USER_TOKEN)
-- Pass the Slack Web API method name and a params dict
+- Pass the Slack Web API method name and an `api_parameters` dict
 
 ## SKILLS
 You have access to on-demand **skills** (reusable playbooks with instructions and scripts). When a request matches a skill's description, call `list_skills` to see what's available, then `load_skill` to pull in its instructions before doing the work. Skills live in the repo's `skills/` directory — only load one when it's actually relevant.

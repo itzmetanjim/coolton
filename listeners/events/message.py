@@ -136,6 +136,7 @@ def handle_message(
     # agent/steering_store.py + plan_block.after_tool for how the running
     # turn picks this up.
     if is_run_active(channel_id, thread_ts):
+        logger.info(f"Steering: queuing message into active run {channel_id}/{thread_ts}: {text[:200]}")
         queue_steering_message(channel_id, thread_ts, text, user_id, event["ts"])
         try:
             client.reactions_add(channel=channel_id, timestamp=event["ts"], name="white_check_mark")
