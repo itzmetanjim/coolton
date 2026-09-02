@@ -10,14 +10,16 @@ _queued: dict[tuple[str, str], list[dict]] = {}
 _STALE_AFTER_SECONDS = 30 * 60
 
 
-def queue_steering_message(channel_id: str, thread_ts: str, text: str, user_id: str) -> None:
+def queue_steering_message(
+    channel_id: str, thread_ts: str, text: str, user_id: str, message_ts: str = ""
+) -> None:
     """Record a message sent into a thread coolton is already working in, so the
     in-flight run can pick it up and factor it in instead of a whole separate
     turn racing (or queuing behind) the one already running."""
     with _lock:
         key = (channel_id, thread_ts)
         _queued.setdefault(key, []).append({
-            "text": text, "user_id": user_id, "queued_at": time.time(),
+            "text": text, "user_id": user_id, "message_ts": message_ts, "queued_at": time.time(),
         })
 
 

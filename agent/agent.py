@@ -2336,17 +2336,30 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
         # again if it falls back to a different one.
         set_model_task(deps, f"{provider_name} / {model_name}")
         for attempt in range(provider_max_retries):
+            raw_response: dict = {}
             try:
                 # Create model object if custom base_url (BYOK, HCAI)
                 model_obj = None
                 if prov_config.get("base_url"):
+                    import httpx
                     from pydantic_ai.models.openai import OpenAIChatModel
                     from pydantic_ai.providers.openai import OpenAIProvider
+                    from agent.provider_probe import _capture_raw_response
+                    # Same raw-body capture as provider_probe.test_provider — a
+                    # pydantic ValidationError on the response (e.g. "3 validation
+                    # errors for ChatCompletion ... input_value=None") only says the
+                    # SDK couldn't parse a ChatCompletion out of it, not what the
+                    # endpoint actually sent back. See raw_response used below.
+                    http_client = httpx.AsyncClient(
+                        event_hooks={"response": [lambda r: _capture_raw_response(raw_response, r)]},
+                        limits=httpx.Limits(max_keepalive_connections=0),
+                    )
                     model_obj = OpenAIChatModel(
                         prov_config["model"],
                         provider=OpenAIProvider(
                             base_url=prov_config["base_url"],
                             api_key=prov_config["api_key"],
+                            http_client=http_client,
                         ),
                     )
 
@@ -2373,6 +2386,9 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                     logger.critical(f"Fatal error in {provider_name}: {_redact(str(e), context='provider {provider_name}')}")
                     raise
                 err = _redact(str(e), context=f"provider {provider_name}")
+                if raw_response.get("body") is not None:
+                    raw_body = _redact(raw_response["body"], context="provider raw response")[:500]
+                    err = f"raw HTTP {raw_response.get('status', '?')} body: {raw_body!r} | {err}"
                 all_errors.append(f"{provider_name}: {err}")
                 if deps.last_attempt_messages is not checkpoint_baseline:
                     # This attempt got far enough to actually run tool(s) — real side

@@ -241,7 +241,7 @@ def test_message_steers_into_active_run_instead_of_starting_a_new_one(ctx):
         _msg(ctx, channel_type="im", text="also check the other thing")
 
         run_turn.assert_not_called()
-        queue_steering.assert_called_once_with("C123", "111.111", "also check the other thing", "U1")
+        queue_steering.assert_called_once_with("C123", "111.111", "also check the other thing", "U1", "111.111")
         ctx.client.reactions_add.assert_called_once_with(
             channel="C123", timestamp="111.111", name="white_check_mark"
         )
@@ -314,7 +314,7 @@ def test_app_mentioned_steers_into_active_run_instead_of_starting_a_new_one(ctx)
         _mention(ctx, text="<@BOT1> also check the other thing", ts="1.1", thread_ts="1.1")
 
         run_turn.assert_not_called()
-        queue_steering.assert_called_once_with("C123", "1.1", "<@BOT1> also check the other thing", "U1")
+        queue_steering.assert_called_once_with("C123", "1.1", "<@BOT1> also check the other thing", "U1", "1.1")
         ctx.client.reactions_add.assert_called_once_with(
             channel="C123", timestamp="1.1", name="white_check_mark"
         )
