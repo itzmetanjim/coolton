@@ -168,6 +168,20 @@ def _is_allowed_upstream(url: str) -> bool:
     return False
 
 
+def _needs_auth(url: str) -> bool:
+    """False for GitHub Pages hosts (github.io / *.github.io) — unlike every other
+    allowed upstream, which is fixed GitHub-operated infrastructure, github.io is
+    literally any GitHub user's own free static site: an attacker can stand one up
+    trivially. Attaching the real PAT to a request there — even one only reachable
+    via a spoofed Host header on an incoming request, not real DNS — would hand it
+    straight to whoever controls that page. Pages content is always public and
+    never needs authentication anyway, so no functionality is lost by withholding
+    it. Every other allowed host keeps the existing authenticated behavior (e.g.
+    raw.githubusercontent.com fetches from private repos still need it)."""
+    host = urlparse(url).netloc.split(":")[0].lower()
+    return host != "github.io" and not host.endswith(".github.io")
+
+
 class _Allowlist:
     def __init__(self):
         self._set = set()
@@ -382,10 +396,11 @@ class _Handler(BaseHTTPRequestHandler):
             body = self.rfile.read(length) if length else None
 
         fwd = {
-            "Authorization": _real_auth(upstream),
             "User-Agent": self.headers.get("User-Agent", "coolton-sandbox"),
             "Accept": self.headers.get("Accept", "*/*"),
         }
+        if _needs_auth(upstream):
+            fwd["Authorization"] = _real_auth(upstream)
         if "Content-Type" in self.headers:
             fwd["Content-Type"] = self.headers["Content-Type"]
 

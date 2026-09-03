@@ -6,6 +6,7 @@ at /<encoded>. Used by coolton to host sandbox outputs and rendered HTML.
 
 import base64
 import hashlib
+import hmac
 import logging
 import mimetypes
 import os
@@ -32,6 +33,20 @@ def _api_key() -> str:
         return ""
 
 
+def _authorized(request: Request) -> bool:
+    """Constant-time Bearer-token check. If the token file is missing/unreadable/empty,
+    _api_key() returns "" — the required header would then just be "Bearer ", which is
+    trivially satisfiable by anyone. Fail closed instead: no configured key means no
+    request is ever authorized, not that auth is skipped."""
+    key = _api_key()
+    if not key:
+        return False
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return False
+    return hmac.compare_digest(auth[len("Bearer "):], key)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     return """
@@ -47,8 +62,7 @@ async def root():
 
 @app.post("/upload")
 async def upload(request: Request, filename: str = ""):
-    auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {_api_key()}":
+    if not _authorized(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     content = await request.body()

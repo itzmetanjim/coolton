@@ -116,9 +116,27 @@ def test_list_scheduled_tasks_scoped_by_user(tmp_files):
     assert "mine" in own_listing
     assert "theirs" not in own_listing
 
-    admin_listing = scheduler.list_scheduled_tasks("U0B2VTYER33")
+    # An admin who doesn't ask to see everyone's tasks still only sees their own
+    # (per the tool's own docstring: "Only admins CAN view everyone's tasks" —
+    # view_all is what opts into that, not implicit admin status alone).
+    admin_default_listing = scheduler.list_scheduled_tasks("U0B2VTYER33")
+    assert "theirs" not in admin_default_listing
+
+    admin_listing = scheduler.list_scheduled_tasks("U0B2VTYER33", view_all=True)
     assert "mine" in admin_listing
     assert "theirs" in admin_listing
+
+
+def test_list_scheduled_tasks_view_all_ignored_for_non_admins(tmp_files):
+    """view_all must not let a non-admin see other users' tasks — the docstring
+    promises "non-admins are ignored", but the check used to be `or` instead of
+    `and`, so any caller could pass view_all=True to bypass the per-user scoping."""
+    scheduler.create_scheduled_task(OWNER, "C1", "1.1", "mine", "0 9 * * *")
+    scheduler.create_scheduled_task(OTHER, "C2", "2.2", "theirs", "0 9 * * *")
+
+    listing = scheduler.list_scheduled_tasks(OWNER, view_all=True)
+    assert "mine" in listing
+    assert "theirs" not in listing
 
 
 def test_get_owned_task_permissions(tmp_files):

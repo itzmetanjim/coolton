@@ -73,13 +73,17 @@ def create_slack_bot(manifest: dict) -> str:
     store = _load()
     store[app_id] = {"app_id": app_id, "credentials": creds}
     _save(store)
+    # signing_secret is intentionally NOT included here: it's already persisted in
+    # `store` above, and wrangler_bot_deploy already falls back to reading it from
+    # there (record["credentials"]["signing_secret"]) if register_bot_tokens never
+    # sets it directly. Returning it here would put it in the model's context —
+    # from where it could end up in a Slack message or a conversation trace — for
+    # no functional benefit.
     result = {
         "uuid": app_id,
         "app_id": app_id,
         "oauth_authorize_url": created.get("oauth_authorize_url", ""),
     }
-    if creds.get("signing_secret"):
-        result["signing_secret"] = creds["signing_secret"]
     return json.dumps(result)
 
 

@@ -274,7 +274,7 @@ def list_scheduled_tasks(user_id: str, view_all: bool = False) -> str:
     """List scheduled tasks. Non-admins only see their own."""
     with scheduled_tasks_lock:
         data = _load_tasks()
-        if view_all or user_id in ADMIN_USER_IDS:
+        if view_all and user_id in ADMIN_USER_IDS:
             tasks = data["tasks"]
         else:
             tasks = [t for t in data["tasks"] if t["user_id"] == user_id]

@@ -4,8 +4,8 @@ import random
 import re
 import time
 import json
+import shlex
 import shutil
-import subprocess
 import threading
 import requests
 from pydantic_ai import RunContext
@@ -33,6 +33,7 @@ from agent.tool_proxy import (
     build_sandbox_module,
     format_signatures,
     register_sandbox,
+    unregister_sandbox,
     start as start_tool_proxy,
 )
 
@@ -291,7 +292,7 @@ def invite_coolton_user_to_channel(ctx: RunContext[AgentDeps]) -> str:
     data = {"channel": channel_id, "users": coolton_user_id}
     
     try:
-        response = requests.post(url, json=data, headers=headers)
+        response = requests.post(url, json=data, headers=headers, timeout=30)
         res_json = response.json()
         if res_json.get("ok"):
             return f"Success: Invited cooltonUser ({coolton_user_id}) to channel {channel_id}."
@@ -455,6 +456,15 @@ def code_mode(ctx: RunContext[AgentDeps], code: str) -> str:
                 "cd /home/user && python3 code_mode_run.py", timeout=600, envs=envs
             )
         finally:
+            # The tool-proxy registration only needs to live for this one run — the
+            # sandboxed script has already exited by the time commands.run() returns,
+            # so nothing can call back into /agent_tools/* with this token again.
+            # Leaving it registered would let a leaked/replayed sandbox token keep
+            # executing tools with THIS call's deps (this turn's WebClient, user_id,
+            # user_token) indefinitely, and would grow _registrations without bound
+            # across every code_mode call ever made. A later code_mode call on the
+            # same (paused, not killed) sandbox re-registers fresh deps anyway.
+            unregister_sandbox(sandbox.sandbox_id)
             sandbox.pause()
         output = []
         if result.stdout:
@@ -490,7 +500,7 @@ def download_slack_attachments(
             params = {"channel": channel_id, "ts": thread_ts, "limit": 200}
             if cursor:
                 params["cursor"] = cursor
-            response = requests.get(url, headers=headers, params=params)
+            response = requests.get(url, headers=headers, params=params, timeout=30)
             res_json = response.json()
             if not res_json.get("ok"):
                 return f"Slack API error: {res_json}"
@@ -513,7 +523,7 @@ def download_slack_attachments(
             file_url = f.get("url_private_download") or f.get("url_private")
             if not file_url:
                 continue
-            file_resp = requests.get(file_url, headers={"Authorization": f"Bearer {token}"})
+            file_resp = requests.get(file_url, headers={"Authorization": f"Bearer {token}"}, timeout=60)
             if file_resp.status_code != 200:
                 results.append(f"✗ {f.get('name')}: failed to download")
                 continue
@@ -1400,7 +1410,7 @@ def send_web_embed(
         payload["thread_ts"] = thread_ts
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
     try:
-        response = requests.post("https://slack.com/api/chat.postMessage", json=payload, headers=headers)
+        response = requests.post("https://slack.com/api/chat.postMessage", json=payload, headers=headers, timeout=30)
         res_json = response.json()
         if res_json.get("ok"):
             return f"Success: Embed sent to {channel_id}"
@@ -1634,7 +1644,7 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str)
         for k, v in parsed_parameters.items()
     }
     try:
-        response = requests.post(url, data=form, headers=headers)
+        response = requests.post(url, data=form, headers=headers, timeout=30)
         res_json = _strip_secret_keys(response.json())
         if res_json.get("ok"):
             return f"Success: {_redact(str(res_json), context='slack_api_call')}"
@@ -1846,29 +1856,74 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
         skill: Optional specific skill name inside a multi-skill repo. Leave empty
             to install all skills in the package.
     """
-    cmd = ["npx", "-y", "skills@latest", "add", package, "-y"]
+    # `package` names an arbitrary npm-fetched CLI + package payload; running it
+    # directly on the host (the old behavior) would execute untrusted code as the
+    # coolton service user, right next to .env's Slack/GitHub/E2B secrets. It runs
+    # in the disposable sandbox instead, same as any other untrusted code coolton
+    # touches. Nothing that ran there is trusted merely for having run — only the
+    # resulting SKILL.md text is brought back to the host, and only after it
+    # passes the exact same frontmatter validation create_skill enforces (see
+    # _validate_skill_md). Any other files the package wrote (scripts, assets)
+    # never leave the sandbox, so a malicious package can waste a turn but can't
+    # get anything executable onto the host.
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured."
+    channel_id = ctx.deps.channel_id
+    thread_ts = ctx.deps.thread_ts
+    cmd = f"cd /home/user && rm -rf .agents_skills_install && mkdir -p .agents_skills_install && cd .agents_skills_install && npx -y skills@latest add {shlex.quote(package)} -y"
     if skill:
-        cmd += ["-s", skill]
+        cmd += f" -s {shlex.quote(skill)}"
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-    except subprocess.TimeoutExpired:
-        return "Error: skill install timed out after 180s."
-    except FileNotFoundError:
-        return "Error: npx/node not found on this system."
+        sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
+        try:
+            result = sandbox.commands.run(cmd, timeout=180, envs=_proxy_env(proxy_info))
+        finally:
+            sandbox.pause()
+    except Exception as e:
+        return f"Error: {str(e)}"
 
-    if proc.returncode != 0:
-        out = (proc.stdout or "") + (proc.stderr or "")
-        return f"Failed to install skill (exit {proc.returncode}):\n{out[-1500:]}"
+    if result.exit_code != 0:
+        out = (result.stdout or "") + (result.stderr or "")
+        return f"Failed to install skill (exit {result.exit_code}):\n{out[-1500:]}"
 
-    # The CLI installs into .agents/skills/<name>; make sure it's picked up.
-    out = proc.stdout or ""
-    return f"Skill install complete.\n{out[-1200:]}"
+    from e2b import FileType
+
+    imported, rejected = [], []
+    try:
+        entries = sandbox.files.list("/home/user/.agents_skills_install/.agents/skills")
+    except Exception:
+        entries = []
+    for entry in entries:
+        if entry.type != FileType.DIR:
+            continue
+        slug = _safe_name(entry.name)
+        if not slug or slug != entry.name:
+            rejected.append(entry.name)
+            continue
+        try:
+            content = sandbox.files.read(f"/home/user/.agents_skills_install/.agents/skills/{entry.name}/SKILL.md")
+        except Exception:
+            continue
+        ok, err = _validate_skill_md(content)
+        if not ok:
+            rejected.append(f"{entry.name} ({err})")
+            continue
+        target_dir = os.path.join(_repo_root(), ".agents", "skills", slug)
+        if not _is_within(target_dir, os.path.join(_repo_root(), ".agents", "skills")):
+            rejected.append(entry.name)
+            continue
+        os.makedirs(target_dir, exist_ok=True)
+        with open(os.path.join(target_dir, "SKILL.md"), "w") as f:
+            f.write(content)
+        imported.append(slug)
+
+    if not imported:
+        detail = f" Rejected entries: {', '.join(rejected)}." if rejected else ""
+        return f"No valid skill found in '{package}' (the installer ran but produced nothing usable).{detail}"
+    msg = f"Installed skill(s): {', '.join(imported)}. Available now via list_skills / load_skill."
+    if rejected:
+        msg += f" Skipped invalid entries: {', '.join(rejected)}."
+    return msg
 
 
 @agent.tool
@@ -2392,6 +2447,7 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
     # by identity here (not just "is it non-None") keeps this inert for them instead
     # of picking up a stale checkpoint left over from some earlier, unrelated run.
     checkpoint_baseline = deps.last_attempt_messages
+    base_model_settings = run_kwargs.get("model_settings") or {}
 
     for provider_name, prov_config in provider_order:
         provider_max_retries = prov_config.get("max_retries", max_retries)
@@ -2439,6 +2495,19 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                     enforce_rate_limit()
 
                 run_kwargs["model"] = model_obj if model_obj else model_name
+                # MiniMax models served through OpenAI-compatible gateways (kilocode,
+                # OpenRouter) have been observed live leaking a broken multi-tool-call
+                # attempt as raw XML-ish text (see
+                # agent.plan_block._looks_like_tool_call_leakage) instead of proper
+                # structured tool_calls when they try to request more than one tool in
+                # the same turn — the extra tool calls in that burst never actually
+                # execute. Forcing one tool call per turn for these models avoids the
+                # batching path that triggers it; the model still gets to call every
+                # tool it needs, just across separate turns instead of one batch.
+                if "minimax" in model_name.lower():
+                    run_kwargs["model_settings"] = {**base_model_settings, "parallel_tool_calls": False}
+                else:
+                    run_kwargs["model_settings"] = base_model_settings
                 result = agent_dynamic.run_sync(**run_kwargs)
                 if provider_name != "byok":
                     set_working_provider(provider_name)

@@ -3,6 +3,7 @@ sandboxed code and calling arbitrary/non-allowlisted tools with another thread's
 credentials. Spins up the real (singleton) server and hits it over HTTP, since the
 auth logic lives inside _Handler.do_POST, not in a unit-testable helper."""
 
+import json
 import time
 import uuid
 
@@ -110,6 +111,63 @@ def test_unregistered_sandbox_token_no_longer_works():
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# SANDBOX_MODULE_TEMPLATE / build_sandbox_module — the code written into the
+# sandbox itself. Every real tool parameter is now a plain string (see
+# agent.agent._parse_json_object_param), but code_mode's own docstring shows
+# calling agent_tools.slack_api_call_as_bot_tool(method, {"channel": "..."})
+# with a literal dict — that must still work, by JSON-encoding compound args
+# transparently before they go over the wire.
+# ---------------------------------------------------------------------------
+
+
+def _exec_sandbox_module(monkeypatch, allowlist, signatures):
+    import os
+    import types
+
+    monkeypatch.setenv("AGENT_TOOLS_BASE", "http://fake-base/agent_tools")
+    monkeypatch.setenv("AGENT_TOOLS_TOKEN", "fake-token")
+    monkeypatch.setenv("AGENT_TOOLS_SANDBOX", "fake-sandbox")
+
+    code = tool_proxy.build_sandbox_module(allowlist, signatures)
+    module = types.ModuleType("agent_tools")
+    module.__dict__["os"] = os
+    exec(compile(code, "agent_tools.py", "exec"), module.__dict__)
+    return module
+
+
+def test_sandbox_module_json_encodes_a_dict_argument_before_sending(monkeypatch):
+    module = _exec_sandbox_module(
+        monkeypatch, ["slack_api_call_as_bot_tool"], {"slack_api_call_as_bot_tool": "(method, api_parameters)"}
+    )
+
+    captured = {}
+
+    class _FakeResp:
+        def read(self):
+            return json.dumps({"ok": True, "result": "Success: {}"}).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResp()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    # Exactly the pattern shown in code_mode's own docstring: a literal dict.
+    module.slack_api_call_as_bot_tool("conversations.members", {"channel": "C0B7QEK0MQB"})
+
+    sent_args = captured["body"]["args"]
+    assert sent_args[0] == "conversations.members"
+    assert sent_args[1] == '{"channel": "C0B7QEK0MQB"}'
+    assert isinstance(sent_args[1], str)
 
 
 def test_tool_exception_returns_200_with_ok_false():

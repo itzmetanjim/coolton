@@ -19,7 +19,7 @@ import threading
 from e2b import Sandbox
 from e2b.exceptions import SandboxNotFoundException
 
-from agent.github_proxy_client import PUBLIC_PROXY_HOST, issue_sandbox_token
+from agent.github_proxy_client import PUBLIC_PROXY_HOST, issue_sandbox_token, revoke_sandbox_token
 from agent.sandbox_store import (
     delete_thread_sandbox_id,
     get_thread_sandbox_id,
@@ -120,6 +120,16 @@ def _recycle_dead_sandbox(channel_id: str, thread_ts: str, sandbox_id: str, erro
     except Exception:
         pass
     delete_thread_sandbox_id(channel_id, thread_ts)
+    # This sandbox is gone for good — its github_proxy token (github_proxy.py's
+    # allowlist maps it to the real PAT for as long as it's authorized) must not
+    # keep working after the sandbox it was issued for no longer exists. Without
+    # this, every sandbox E2B ever recycles leaves a permanently-valid token
+    # behind, with no code path that ever revokes it.
+    proxy_info = _proxy_cache_get(sandbox_id)
+    if proxy_info and proxy_info.get("token"):
+        revoke_sandbox_token(proxy_info["token"])
+    with _proxy_cache_lock:
+        _proxy_cache.pop(sandbox_id, None)
 
 
 def get_or_create_sandbox(channel_id: str, thread_ts: str):

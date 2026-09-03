@@ -164,7 +164,23 @@ __ALLOWED__ = __ALLOWED__
 __SIGNATURES__ = __SIGNATURES__
 
 
+def _encode_compound(v):
+    # Every real tool parameter is now a plain scalar (str/int/bool/float) — the
+    # tools that used to take a schema-less dict param (e.g. slack_api_call's
+    # api_parameters) take a JSON-encoded string instead, since models constructing
+    # a JSON-schema tool call struggled with an untyped nested object. That
+    # weakness doesn't apply here: this is ordinary Python code the model wrote
+    # itself, where a dict/list literal is completely natural — encode it to the
+    # JSON string the tool actually expects, transparently, instead of making
+    # every call site spell out json.dumps(...) by hand.
+    if isinstance(v, (dict, list)):
+        return json.dumps(v)
+    return v
+
+
 def _call(name, args, kwargs):
+    args = [_encode_compound(a) for a in args]
+    kwargs = {k: _encode_compound(v) for k, v in kwargs.items()}
     body = json.dumps({"name": name, "args": args, "kwargs": kwargs}).encode("utf-8")
     req = urllib.request.Request(
         _BASE + "/" + _SANDBOX + "/" + name,
