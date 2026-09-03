@@ -1841,6 +1841,11 @@ def skip(ctx: RunContext[AgentDeps]) -> str:
     raise HaltRun("skip")
 
 
+_SKILL_INSTALL_MAX_DEPTH = 6
+_SKILL_INSTALL_MAX_FILE_BYTES = 2 * 1024 * 1024  # 2MB per file
+_SKILL_INSTALL_MAX_TOTAL_BYTES = 20 * 1024 * 1024  # 20MB per skill
+
+
 @agent.tool
 def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> str:
     """Install a new agent skill from the skills.sh marketplace (Vercel's Agent Skills CLI).
@@ -1860,12 +1865,14 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
     # directly on the host (the old behavior) would execute untrusted code as the
     # coolton service user, right next to .env's Slack/GitHub/E2B secrets. It runs
     # in the disposable sandbox instead, same as any other untrusted code coolton
-    # touches. Nothing that ran there is trusted merely for having run — only the
-    # resulting SKILL.md text is brought back to the host, and only after it
-    # passes the exact same frontmatter validation create_skill enforces (see
-    # _validate_skill_md). Any other files the package wrote (scripts, assets)
-    # never leave the sandbox, so a malicious package can waste a turn but can't
-    # get anything executable onto the host.
+    # touches. Nothing that ran there is trusted merely for having run: SKILL.md
+    # must pass the exact same frontmatter validation create_skill enforces (see
+    # _validate_skill_md), and every other file the skill shipped (references,
+    # scripts, resources — most real skills have more than one file) is copied
+    # over too, bounded and guarded against path traversal, but never executed
+    # here — a script only ever runs later, inside a sandbox again, via
+    # run_skill_script (see _run_skill_script_in_sandbox), and a resource is only
+    # ever read as text into model context (read_skill_resource), never executed.
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured."
     channel_id = ctx.deps.channel_id
@@ -1915,6 +1922,38 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
         os.makedirs(target_dir, exist_ok=True)
         with open(os.path.join(target_dir, "SKILL.md"), "w") as f:
             f.write(content)
+
+        skill_root = f"/home/user/.agents_skills_install/.agents/skills/{entry.name}"
+        try:
+            file_entries = sandbox.files.list(skill_root, depth=_SKILL_INSTALL_MAX_DEPTH)
+        except Exception:
+            file_entries = []
+        copied_bytes = 0
+        for fe in file_entries:
+            if fe.type != FileType.FILE:
+                continue
+            rel = fe.path[len(skill_root):].lstrip("/")
+            if not rel or rel == "SKILL.md":
+                continue
+            dest = os.path.join(target_dir, *rel.split("/"))
+            if not _is_within(dest, target_dir):
+                rejected.append(f"{entry.name}/{rel} (path escapes skill directory)")
+                continue
+            if copied_bytes >= _SKILL_INSTALL_MAX_TOTAL_BYTES:
+                rejected.append(f"{entry.name}/{rel} (skill exceeds {_SKILL_INSTALL_MAX_TOTAL_BYTES}-byte total)")
+                continue
+            try:
+                data = bytes(sandbox.files.read(fe.path, format="bytes"))
+            except Exception:
+                continue
+            if len(data) > _SKILL_INSTALL_MAX_FILE_BYTES:
+                rejected.append(f"{entry.name}/{rel} (file exceeds {_SKILL_INSTALL_MAX_FILE_BYTES}-byte limit)")
+                continue
+            copied_bytes += len(data)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as f:
+                f.write(data)
+
         imported.append(slug)
 
     if not imported:
