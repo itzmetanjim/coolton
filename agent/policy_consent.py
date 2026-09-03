@@ -33,10 +33,19 @@ def _save(data: dict) -> None:
 
 def user_is_in_policy_channel(client, user_id: str) -> bool:
     try:
-        response = client.conversations_members(channel=POLICY_CHANNEL_ID, limit=1000)
-        if not isinstance(response, dict):
-            return False
-        return user_id in response.get("members", [])
+        cursor = None
+        while True:
+            kwargs = {"channel": POLICY_CHANNEL_ID, "limit": 1000}
+            if cursor:
+                kwargs["cursor"] = cursor
+            response = client.conversations_members(**kwargs)
+            if not isinstance(response, dict):
+                return False
+            if user_id in response.get("members", []):
+                return True
+            cursor = (response.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                return False
     except Exception:
         return False
 
@@ -110,11 +119,18 @@ def ensure_consent(
     False if an opt-in prompt was sent instead (the caller must return without
     processing). Opting in does not replay the message that triggered the prompt —
     the user just gets a confirmation and can ask again (see handle_policy_opt_in).
+
+    Checks the cheap, file-based has_consent() first: this runs on EVERY message,
+    and a real-time membership-change listener (listeners/events/policy_membership.py)
+    already keeps recorded consent in sync with channel membership, so re-fetching
+    the whole channel's member list from Slack on every single message (only to
+    then throw the result away for anyone who already has consent recorded) would
+    be pure waste for the overwhelmingly common case.
     """
+    if has_consent(user_id):
+        return True
     if user_is_in_policy_channel(client, user_id):
         record_consent(user_id, joined_policy_channel=True)
-        return True
-    if has_consent(user_id):
         return True
     pending_id = save_pending({
         "user_id": user_id, "channel_id": channel_id, "thread_ts": thread_ts,

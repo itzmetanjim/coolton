@@ -73,6 +73,33 @@ def test_create_slack_bot_does_not_send_app_id_to_create(monkeypatch, tmp_path):
     assert "app_id" not in create_call[1]
 
 
+def test_create_slack_bot_does_not_return_signing_secret(monkeypatch, tmp_path):
+    """The signing secret must never reach the model's context — it's already
+    persisted to disk (and wrangler_bot_deploy falls back to reading it from
+    there), so returning it here would only risk it landing in a Slack message
+    or conversation trace for no functional benefit."""
+    store_path = tmp_path / "bots.json"
+    monkeypatch.setattr(sbd, "STORE", store_path)
+
+    def fake_api(method, data):
+        if method == "apps.manifest.validate":
+            return {"ok": True}
+        if method == "apps.manifest.create":
+            return {"ok": True, "app_id": "A123", "credentials": {"signing_secret": "very-secret"}}
+        return {"ok": False, "error": "unexpected"}
+
+    monkeypatch.setattr(sbd, "_api", fake_api)
+    manifest = {"display_information": {"name": "Test Bot"}}
+    result = sbd.create_slack_bot(manifest)
+
+    assert "very-secret" not in result
+    assert "signing_secret" not in result
+
+    # ...but it's still persisted to disk for wrangler_bot_deploy to fall back to.
+    stored = sbd._load()
+    assert stored["A123"]["credentials"]["signing_secret"] == "very-secret"
+
+
 # ---------------------------------------------------------------------------
 # update_slack_bot_manifest — apps.manifest.update, scoped to bots we created
 # ---------------------------------------------------------------------------

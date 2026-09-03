@@ -119,6 +119,25 @@ def test_recreates_when_stored_sandbox_is_dead(sandbox_env):
     assert tokens[-1] == ("save", "C1", "1.1", sb.sandbox_id)
 
 
+def test_recycling_dead_sandbox_revokes_its_github_proxy_token(sandbox_env, monkeypatch):
+    """A sandbox E2B has already recycled must not leave its github_proxy token
+    (which the proxy maps straight to the real PAT) valid forever — nothing else
+    ever calls revoke_sandbox_token, so this is the only place a dead sandbox's
+    token gets cleaned up."""
+    revoked = []
+    monkeypatch.setattr(helpers_mod, "revoke_sandbox_token", lambda tok: revoked.append(tok))
+    monkeypatch.setattr(helpers_mod, "_proxy_cache", {})
+
+    dead = _FakeSandbox("sbx-dead-revoke", exc=RuntimeError(_STALE))
+    api = _FakeSandboxAPI(existing={"sbx-dead-revoke": dead})
+    sandbox_env(store_id="sbx-dead-revoke", api=api)
+
+    helpers_mod.get_or_create_sandbox("C1", "1.1")
+
+    assert revoked == ["tok-sbx-dead-revoke"]
+    assert "sbx-dead-revoke" not in helpers_mod._proxy_cache
+
+
 def test_non_stale_error_propagates(sandbox_env):
     bad = _FakeSandbox("sbx-bad", exc=RuntimeError("command failed: no space left on device"))
     api = _FakeSandboxAPI(existing={"sbx-bad": bad})

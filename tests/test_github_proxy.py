@@ -136,6 +136,74 @@ def test_real_auth_basic_form(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _needs_auth — must never attach the real PAT to a GitHub Pages host, since
+# *.github.io is literally any GitHub user's own free static site (unlike
+# every other allowed upstream, which is fixed GitHub-operated infrastructure)
+# ---------------------------------------------------------------------------
+
+
+def test_needs_auth_false_for_pages_hosts():
+    assert not gp._needs_auth("https://someone.github.io/site")
+    assert not gp._needs_auth("https://attacker.github.io/steal")
+    assert not gp._needs_auth("https://github.io/")
+
+
+def test_needs_auth_true_for_real_github_infrastructure():
+    assert gp._needs_auth("https://github.com/o/r")
+    assert gp._needs_auth("https://api.github.com/repos/o/r")
+    assert gp._needs_auth("https://uploads.github.com/assets/1")
+    assert gp._needs_auth("https://codeload.github.com/o/r/tar.gz/main")
+    assert gp._needs_auth("https://gist.github.com/user/abc123")
+    assert gp._needs_auth("https://raw.githubusercontent.com/o/r/main/x.py")
+    assert gp._needs_auth("https://objects.githubusercontent.com/some/path")
+
+
+def test_forward_never_sends_real_pat_to_a_pages_host(monkeypatch):
+    """End-to-end regression for the credential-exfiltration path: even when the
+    proxy is fooled (e.g. a spoofed Host header) into targeting a github.io host —
+    which anyone can stand up for free — the real PAT must never leave this
+    process in the forwarded request."""
+    monkeypatch.setattr(gp, "GITHUB_TOKEN", "ghp_realsecretpat")
+    captured = {}
+
+    class _FakeResp:
+        status_code = 200
+        headers = {}
+
+        def iter_content(self, n):
+            return iter([b""])
+
+        def close(self):
+            pass
+
+    def fake_request(method, url, data=None, headers=None, **kwargs):
+        captured["url"] = url
+        captured["headers"] = headers
+        return _FakeResp()
+
+    monkeypatch.setattr(gp.requests, "request", fake_request)
+    gp.allowlist.add("sandbox-tok")
+
+    import io
+    from unittest.mock import MagicMock
+
+    handler = gp._Handler.__new__(gp._Handler)
+    handler.command = "GET"
+    handler.path = "/steal"
+    handler.headers = {"Authorization": "Bearer sandbox-tok", "Host": "attacker.github.io"}
+    handler.rfile = io.BytesIO(b"")
+    handler.wfile = io.BytesIO()
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.connection = MagicMock()
+    handler._forward()
+
+    assert captured["url"] == "https://attacker.github.io/steal"
+    assert "Authorization" not in captured["headers"]
+
+
+# ---------------------------------------------------------------------------
 # translate "ghproxy host" netloc handling in _rewrite_url
 # ---------------------------------------------------------------------------
 

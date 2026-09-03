@@ -893,6 +893,60 @@ def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatc
     assert shown_models == ["hcai_0 / openai/gpt-5.6-luna", "anthropic / anthropic:claude-sonnet-4-6"]
 
 
+def test_run_with_provider_chain_forces_single_tool_call_for_minimax(monkeypatch, clean_env):
+    """MiniMax models served via OpenAI-compatible gateways (kilocode, OpenRouter) have
+    been observed live leaking a broken multi-tool-call attempt as raw text instead of
+    proper structured tool_calls when asked for more than one tool in a turn (see
+    agent.plan_block._looks_like_tool_call_leakage). Forcing parallel_tool_calls=False
+    for these models specifically avoids the batching path that triggers it, without
+    changing behavior for any other provider."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_mod, "_resolve_provider_order",
+        lambda user_id, tag=None: [("kilocode_0", {"model": "minimax/minimax-m3:free", "api_key": "k"})],
+    )
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+
+    seen_settings = []
+
+    def fake_run_sync(**kwargs):
+        seen_settings.append(kwargs.get("model_settings"))
+        return SimpleNamespace(output="ok")
+
+    fake_agent = SimpleNamespace(run_sync=fake_run_sync)
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
+
+    agent_mod._run_with_provider_chain(fake_agent, {"model_settings": {"temperature": 0.5}}, deps)
+
+    assert seen_settings == [{"temperature": 0.5, "parallel_tool_calls": False}]
+
+
+def test_run_with_provider_chain_leaves_other_models_settings_untouched(monkeypatch, clean_env):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_mod, "_resolve_provider_order",
+        lambda user_id, tag=None: [("anthropic", {"model": "anthropic:claude-sonnet-4-6", "api_key": "k"})],
+    )
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+
+    seen_settings = []
+
+    def fake_run_sync(**kwargs):
+        seen_settings.append(kwargs.get("model_settings"))
+        return SimpleNamespace(output="ok")
+
+    fake_agent = SimpleNamespace(run_sync=fake_run_sync)
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
+
+    agent_mod._run_with_provider_chain(fake_agent, {"model_settings": {"temperature": 0.5}}, deps)
+
+    assert seen_settings == [{"temperature": 0.5}]
+
+
 def test_run_with_provider_chain_resumes_from_checkpoint_after_mid_turn_fallback(monkeypatch, clean_env):
     """If a provider fails AFTER real tool calls already ran this turn (agent.plan_block's
     before_tool_execute hook checkpoints progress into deps.last_attempt_messages on every
@@ -1249,6 +1303,239 @@ def test_agent_browser_stream_tool_sets_keepalive_and_arms_it(monkeypatch):
         agent_mod.agent_browser_stream_tool(ctx)
     assert ctx.deps.sandbox_keepalive_seconds == 120
     assert armed == [("C1", "1.2", 120)]
+
+
+# ---------------------------------------------------------------------------
+# install_skill — must run the untrusted `npx skills@latest add <package>`
+# install inside the disposable E2B sandbox, never on the host, and must only
+# ever bring back validated SKILL.md text (never arbitrary files the package
+# wrote) — see the RCE concern this replaced.
+# ---------------------------------------------------------------------------
+
+
+class _FakeSkillFiles:
+    def __init__(self, entries, contents):
+        self._entries = entries
+        self._contents = contents
+
+    def list(self, path):
+        return self._entries
+
+    def read(self, path):
+        for entry in self._entries:
+            if path == f"/home/user/.agents_skills_install/.agents/skills/{entry.name}/SKILL.md":
+                if entry.name in self._contents:
+                    return self._contents[entry.name]
+        raise FileNotFoundError(path)
+
+
+class _FakeSkillSandbox:
+    def __init__(self, entries, contents, exit_code=0):
+        from types import SimpleNamespace
+        self.files = _FakeSkillFiles(entries, contents)
+        self.paused = 0
+        self.last_cmd = None
+        self._exit_code = exit_code
+        self._commands = SimpleNamespace(run=self._run)
+
+    @property
+    def commands(self):
+        return self._commands
+
+    def _run(self, cmd, envs=None, timeout=None):
+        from types import SimpleNamespace
+        self.last_cmd = cmd
+        return SimpleNamespace(stdout="installed", stderr="", exit_code=self._exit_code)
+
+    def pause(self):
+        self.paused += 1
+
+
+def _skill_entry(name):
+    from types import SimpleNamespace
+    from e2b import FileType
+    return SimpleNamespace(name=name, type=FileType.DIR)
+
+
+def _valid_skill_md(name="cool-skill"):
+    return f"---\nname: {name}\ndescription: 'does a thing'\n---\n\n# Cool Skill\n\nBody.\n"
+
+
+def test_install_skill_requires_e2b_api_key(monkeypatch):
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    ctx = _run_ctx(Mock())
+    result = agent_mod.install_skill(ctx, "vercel-labs/agent-skills")
+    assert "E2B_API_KEY" in result
+
+
+def test_install_skill_never_runs_npx_on_the_host(monkeypatch, tmp_path):
+    """The old implementation shelled out to `npx skills@latest add <package>` with
+    subprocess.run directly on the host — an arbitrary npm package name is attacker/
+    model-controlled, so that was unsandboxed code execution as the coolton service
+    user. It must now go through get_or_create_sandbox instead."""
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    fake_sandbox = _FakeSkillSandbox(entries=[], contents={})
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    agent_mod.install_skill(ctx, "vercel-labs/agent-skills")
+
+    assert "npx" in fake_sandbox.last_cmd
+    assert "vercel-labs/agent-skills" in fake_sandbox.last_cmd
+    assert fake_sandbox.paused == 1
+
+
+def test_install_skill_imports_only_validated_skill_md(monkeypatch, tmp_path):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    entries = [_skill_entry("cool-skill")]
+    contents = {"cool-skill": _valid_skill_md("cool-skill")}
+    fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents)
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    result = agent_mod.install_skill(ctx, "someone/skills-repo")
+
+    assert "Installed skill(s): cool-skill" in result
+    written = tmp_path / ".agents" / "skills" / "cool-skill" / "SKILL.md"
+    assert written.read_text() == contents["cool-skill"]
+
+
+def test_install_skill_rejects_malformed_skill_md_and_writes_nothing(monkeypatch, tmp_path):
+    """A malicious or broken package must not be able to get invalid/dangerous
+    frontmatter (or anything else) written to the host — only content that passes
+    the exact same validation create_skill enforces is ever persisted."""
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    entries = [_skill_entry("bad-skill")]
+    contents = {"bad-skill": "not even frontmatter"}
+    fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents)
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    result = agent_mod.install_skill(ctx, "someone/bad-repo")
+
+    assert "No valid skill found" in result
+    assert not (tmp_path / ".agents" / "skills").exists()
+
+
+def test_install_skill_never_copies_files_other_than_skill_md(monkeypatch, tmp_path):
+    """Whatever else the installed package wrote in the sandbox (scripts, binaries,
+    postinstall artifacts) must never reach the host — only the SKILL.md text that
+    passed validation. This test's fake sandbox.files.read only ever answers for
+    SKILL.md paths, so any attempt to read a different path raises — proving
+    install_skill never asks for one."""
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    entries = [_skill_entry("cool-skill")]
+    contents = {"cool-skill": _valid_skill_md("cool-skill")}
+    fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents)
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    agent_mod.install_skill(ctx, "someone/skills-repo")
+
+    written_files = list((tmp_path / ".agents" / "skills" / "cool-skill").iterdir())
+    assert [f.name for f in written_files] == ["SKILL.md"]
+
+
+def test_install_skill_reports_command_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    fake_sandbox = _FakeSkillSandbox(entries=[], contents={}, exit_code=1)
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    result = agent_mod.install_skill(ctx, "someone/broken-repo")
+
+    assert "Failed to install skill" in result
+    assert fake_sandbox.paused == 1
+
+
+# ---------------------------------------------------------------------------
+# code_mode — must unregister its tool-proxy registration once the sandboxed
+# script exits, so a leaked/replayed sandbox token can't keep executing tools
+# with a stale turn's deps, and _registrations doesn't grow without bound.
+# ---------------------------------------------------------------------------
+
+
+def test_code_mode_unregisters_sandbox_after_running(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "start_tool_proxy", lambda: None)
+    monkeypatch.setattr(agent_mod, "register_sandbox", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(agent_mod, "unregister_sandbox", lambda sid: calls.append(sid))
+
+    class _FakeFiles:
+        def write(self, path, content):
+            pass
+
+    class _FakeCommands:
+        def run(self, cmd, envs=None, timeout=None):
+            return SimpleNamespace(stdout="ok", stderr="", exit_code=0)
+
+    class _FakeSandbox:
+        sandbox_id = "sbx-code-mode-1"
+        files = _FakeFiles()
+        commands = _FakeCommands()
+
+        def pause(self):
+            calls.append("paused")
+
+    monkeypatch.setattr(
+        agent_mod, "get_or_create_sandbox",
+        lambda c, t: (_FakeSandbox(), {"token": "tok", "proxy_host": "ghproxy.tanjim.org"}),
+    )
+
+    ctx = _run_ctx(Mock())
+    agent_mod.code_mode(ctx, "print('hi')")
+
+    # unregister must happen before pause (both in the finally block, but
+    # unregister first) — order doesn't functionally matter here, just that
+    # both actually ran exactly once.
+    assert calls.count("sbx-code-mode-1") == 1
+    assert calls.count("paused") == 1
+
+
+def test_code_mode_unregisters_sandbox_even_when_the_script_errors(monkeypatch):
+    """The unregister must happen in a finally, not only on the happy path —
+    otherwise a crashing sandboxed script would leave the registration (and its
+    captured deps: this turn's WebClient, user_id, user_token) alive forever."""
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "start_tool_proxy", lambda: None)
+    monkeypatch.setattr(agent_mod, "register_sandbox", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(agent_mod, "unregister_sandbox", lambda sid: calls.append(sid))
+
+    class _FakeFiles:
+        def write(self, path, content):
+            pass
+
+    class _FakeCommands:
+        def run(self, cmd, envs=None, timeout=None):
+            raise RuntimeError("sandbox blew up")
+
+    class _FakeSandbox:
+        sandbox_id = "sbx-code-mode-2"
+        files = _FakeFiles()
+        commands = _FakeCommands()
+
+        def pause(self):
+            calls.append("paused")
+
+    monkeypatch.setattr(
+        agent_mod, "get_or_create_sandbox",
+        lambda c, t: (_FakeSandbox(), {"token": "tok", "proxy_host": "ghproxy.tanjim.org"}),
+    )
+
+    ctx = _run_ctx(Mock())
+    result = agent_mod.code_mode(ctx, "raise ValueError()")
+
+    assert "Error" in result
+    assert calls == ["sbx-code-mode-2", "paused"]
 
 
 def test_computer_use_action_resets_keepalive_when_active(monkeypatch):
