@@ -1308,31 +1308,52 @@ def test_agent_browser_stream_tool_sets_keepalive_and_arms_it(monkeypatch):
 # ---------------------------------------------------------------------------
 # install_skill — must run the untrusted `npx skills@latest add <package>`
 # install inside the disposable E2B sandbox, never on the host, and must only
-# ever bring back validated SKILL.md text (never arbitrary files the package
-# wrote) — see the RCE concern this replaced.
+# ever bring a skill's files back after SKILL.md passes validation — see the
+# RCE concern this replaced. Non-SKILL.md files (references, scripts,
+# resources — most real skills have more than one file) are copied too, since
+# script execution itself is separately sandboxed (see
+# _run_skill_script_in_sandbox) regardless of where a script came from — but
+# still bounded and guarded against path traversal.
 # ---------------------------------------------------------------------------
+
+_SKILL_INSTALL_ROOT = "/home/user/.agents_skills_install/.agents/skills"
 
 
 class _FakeSkillFiles:
-    def __init__(self, entries, contents):
+    def __init__(self, entries, contents, file_entries=None):
         self._entries = entries
+        # contents: {skill_name: SKILL.md text}
         self._contents = contents
+        # file_entries: {skill_name: [(rel_path, bytes_content), ...]} — everything
+        # under the skill's directory OTHER than SKILL.md.
+        self._file_entries = file_entries or {}
 
-    def list(self, path):
-        return self._entries
+    def list(self, path, depth=1):
+        if path == _SKILL_INSTALL_ROOT:
+            return self._entries
+        name = path.rsplit("/", 1)[-1]
+        from types import SimpleNamespace
+        from e2b import FileType
+        return [
+            SimpleNamespace(path=f"{path}/{rel}", name=rel.rsplit("/", 1)[-1], type=FileType.FILE)
+            for rel, _content in self._file_entries.get(name, [])
+        ]
 
-    def read(self, path):
+    def read(self, path, format=None):
         for entry in self._entries:
-            if path == f"/home/user/.agents_skills_install/.agents/skills/{entry.name}/SKILL.md":
-                if entry.name in self._contents:
-                    return self._contents[entry.name]
+            skill_root = f"{_SKILL_INSTALL_ROOT}/{entry.name}"
+            if path == f"{skill_root}/SKILL.md" and entry.name in self._contents:
+                return self._contents[entry.name]
+            for rel, content in self._file_entries.get(entry.name, []):
+                if path == f"{skill_root}/{rel}":
+                    return content if format == "bytes" else content.decode()
         raise FileNotFoundError(path)
 
 
 class _FakeSkillSandbox:
-    def __init__(self, entries, contents, exit_code=0):
+    def __init__(self, entries, contents, exit_code=0, file_entries=None):
         from types import SimpleNamespace
-        self.files = _FakeSkillFiles(entries, contents)
+        self.files = _FakeSkillFiles(entries, contents, file_entries)
         self.paused = 0
         self.last_cmd = None
         self._exit_code = exit_code
@@ -1420,24 +1441,71 @@ def test_install_skill_rejects_malformed_skill_md_and_writes_nothing(monkeypatch
     assert not (tmp_path / ".agents" / "skills").exists()
 
 
-def test_install_skill_never_copies_files_other_than_skill_md(monkeypatch, tmp_path):
-    """Whatever else the installed package wrote in the sandbox (scripts, binaries,
-    postinstall artifacts) must never reach the host — only the SKILL.md text that
-    passed validation. This test's fake sandbox.files.read only ever answers for
-    SKILL.md paths, so any attempt to read a different path raises — proving
-    install_skill never asks for one."""
+def test_install_skill_copies_reference_and_script_files_too(monkeypatch, tmp_path):
+    """Most real skills ship more than one file (references/, scripts/,
+    resources/). Since run_skill_script now always executes any skill's script
+    inside a sandbox regardless of where it came from (see
+    _run_skill_script_in_sandbox), and a resource is only ever read as text into
+    model context, there's no reason to withhold those files from a skill
+    install_skill fetches — only SKILL.md's frontmatter needs validating."""
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
     entries = [_skill_entry("cool-skill")]
     contents = {"cool-skill": _valid_skill_md("cool-skill")}
-    fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents)
+    file_entries = {
+        "cool-skill": [
+            ("references/gotchas.md", b"# Gotchas\nwatch out for X"),
+            ("scripts/deploy.sh", b"#!/bin/sh\necho deploying\n"),
+        ]
+    }
+    fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents, file_entries=file_entries)
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _run_ctx(Mock())
-    agent_mod.install_skill(ctx, "someone/skills-repo")
+    result = agent_mod.install_skill(ctx, "someone/skills-repo")
 
-    written_files = list((tmp_path / ".agents" / "skills" / "cool-skill").iterdir())
-    assert [f.name for f in written_files] == ["SKILL.md"]
+    assert "Installed skill(s): cool-skill" in result
+    skill_dir = tmp_path / ".agents" / "skills" / "cool-skill"
+    assert (skill_dir / "SKILL.md").exists()
+    assert (skill_dir / "references" / "gotchas.md").read_bytes() == b"# Gotchas\nwatch out for X"
+    assert (skill_dir / "scripts" / "deploy.sh").read_bytes() == b"#!/bin/sh\necho deploying\n"
+
+
+def test_install_skill_rejects_path_traversal_in_a_shipped_file(monkeypatch, tmp_path):
+    """A malicious package's file listing must not be able to write outside the
+    skill's own directory on the host, e.g. via a `../../` relative path."""
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    entries = [_skill_entry("cool-skill")]
+    contents = {"cool-skill": _valid_skill_md("cool-skill")}
+    file_entries = {"cool-skill": [("../../../etc/evil.conf", b"malicious")]}
+    fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents, file_entries=file_entries)
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    result = agent_mod.install_skill(ctx, "someone/skills-repo")
+
+    assert "Installed skill(s): cool-skill" in result
+    assert "escapes skill directory" in result
+    assert not (tmp_path / "etc" / "evil.conf").exists()
+    assert not (tmp_path.parent / "etc" / "evil.conf").exists()
+
+
+def test_install_skill_rejects_an_oversized_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    entries = [_skill_entry("cool-skill")]
+    contents = {"cool-skill": _valid_skill_md("cool-skill")}
+    huge = b"x" * (agent_mod._SKILL_INSTALL_MAX_FILE_BYTES + 1)
+    file_entries = {"cool-skill": [("data/huge.bin", huge)]}
+    fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents, file_entries=file_entries)
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    result = agent_mod.install_skill(ctx, "someone/skills-repo")
+
+    assert "exceeds" in result
+    assert not (tmp_path / ".agents" / "skills" / "cool-skill" / "data" / "huge.bin").exists()
 
 
 def test_install_skill_reports_command_failure(monkeypatch, tmp_path):
