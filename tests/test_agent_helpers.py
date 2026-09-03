@@ -1538,6 +1538,127 @@ def test_code_mode_unregisters_sandbox_even_when_the_script_errors(monkeypatch):
     assert calls == ["sbx-code-mode-2", "paused"]
 
 
+# ---------------------------------------------------------------------------
+# _run_skill_script_in_sandbox — pydantic_ai_skills' run_skill_script tool
+# defaults to executing skill scripts as a HOST subprocess with the full host
+# environment (every secret in os.environ) merged in. This is coolton's
+# replacement executor, wired in via CallableSkillScriptExecutor, that routes
+# skill script execution into the disposable E2B sandbox instead — same as
+# every other untrusted-code path (run_linux_command, code_mode, install_skill).
+# ---------------------------------------------------------------------------
+
+
+class _FakeSkillScriptSandbox:
+    def __init__(self, exit_code=0):
+        from types import SimpleNamespace
+        self.paused = 0
+        self.written = {}
+        self.last_cmd = None
+        self._exit_code = exit_code
+        self.files = SimpleNamespace(write=self._write)
+        self.commands = SimpleNamespace(run=self._run)
+
+    def _write(self, path, content):
+        self.written[path] = content
+
+    def _run(self, cmd, envs=None, timeout=None):
+        from types import SimpleNamespace
+        self.last_cmd = cmd
+        return SimpleNamespace(stdout="script output", stderr="", exit_code=self._exit_code)
+
+    def pause(self):
+        self.paused += 1
+
+
+def _fake_skill_script(tmp_path, name="deploy.sh", content=b"#!/bin/sh\necho hi\n"):
+    from types import SimpleNamespace
+    path = tmp_path / name
+    path.write_bytes(content)
+    return SimpleNamespace(uri=str(path), name=name)
+
+
+def test_run_skill_script_in_sandbox_requires_e2b_api_key(monkeypatch, tmp_path):
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    ctx = _run_ctx(Mock())
+    script = _fake_skill_script(tmp_path)
+    result = agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
+    assert "E2B_API_KEY" in result
+
+
+def test_run_skill_script_in_sandbox_requires_a_run_context():
+    from types import SimpleNamespace
+    script = SimpleNamespace(uri="/tmp/x.sh", name="x.sh")
+    result = agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=None)
+    assert "no run context" in result
+
+
+def test_run_skill_script_in_sandbox_never_shells_out_on_the_host(monkeypatch, tmp_path):
+    """The whole point of this executor: no subprocess ever runs on the host for
+    a skill script. subprocess.run/Popen must never be called."""
+    import subprocess as real_subprocess
+
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_sandbox = _FakeSkillScriptSandbox()
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    host_subprocess_calls = []
+    monkeypatch.setattr(real_subprocess, "Popen", lambda *a, **k: host_subprocess_calls.append((a, k)) or Mock())
+
+    ctx = _run_ctx(Mock())
+    script = _fake_skill_script(tmp_path)
+    result = agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
+
+    assert host_subprocess_calls == []
+    assert "script output" in result
+    assert fake_sandbox.paused == 1
+    written_content = list(fake_sandbox.written.values())[0]
+    assert written_content == (tmp_path / "deploy.sh").read_bytes()
+
+
+def test_run_skill_script_in_sandbox_picks_interpreter_by_extension(monkeypatch, tmp_path):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_sandbox = _FakeSkillScriptSandbox()
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    script = _fake_skill_script(tmp_path, name="analyze.py", content=b"print('hi')\n")
+    agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
+
+    assert "python3" in fake_sandbox.last_cmd
+    assert "skill_script_analyze.py" in fake_sandbox.last_cmd
+
+
+def test_run_skill_script_in_sandbox_builds_named_args(monkeypatch, tmp_path):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_sandbox = _FakeSkillScriptSandbox()
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    script = _fake_skill_script(tmp_path)
+    agent_mod._run_skill_script_in_sandbox(
+        script, args={"verbose": True, "quiet": False, "tag": ["a", "b"], "name": "coolton"}, ctx=ctx,
+    )
+
+    cmd = fake_sandbox.last_cmd
+    assert "--verbose" in cmd
+    assert "--quiet" not in cmd
+    assert cmd.count("--tag") == 2
+    assert "a" in cmd and "b" in cmd
+    assert "--name coolton" in cmd
+
+
+def test_run_skill_script_in_sandbox_reports_exit_code(monkeypatch, tmp_path):
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_sandbox = _FakeSkillScriptSandbox(exit_code=1)
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    script = _fake_skill_script(tmp_path)
+    result = agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
+
+    assert "Exit Code: 1" in result
+    assert fake_sandbox.paused == 1
+
+
 def test_computer_use_action_resets_keepalive_when_active(monkeypatch):
     from types import SimpleNamespace
 
