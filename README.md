@@ -42,9 +42,14 @@ two things only: bare social replies & one-line factual lookups ("hi", "what is 
 
 ### self-improvement
 
-- **kevinton** — a silent background agent that reads every completed turn and decides whether
-  it's worth turning into a reusable skill. runs in a daemon thread after coolton answers; if it
-  errors, only kevinton fails — the user-facing answer is unaffected.
+- **kevinton** — a silent background agent that reads every completed turn and has two jobs:
+  decide whether it's worth turning into a reusable skill, and watch for signs coolton just hit a
+  bug in its own code. for the latter, it fixes the bug in its own disposable sandbox and opens a
+  real pull request against the repo (branch, commit, push to the `coolton-agent` fork, PR, then a
+  DM to the owner) — it has the full coolton toolset, not just the skill tools. the code on the
+  live server only ever changes via a human merging that PR and pulling it there. runs in a daemon
+  thread after coolton answers; if it errors, only kevinton fails — the user-facing answer is
+  unaffected.
 - **skills system** — curated skills in `skills/` (committed) plus CLI-installed skills in
   `.agents/skills/` (gitignored, still scanned). skills are markdown files with YAML frontmatter
   (name, description) plus instructions, and can bundle their own scripts, reference docs, and
@@ -346,8 +351,11 @@ automatically (`agent/sandbox_helpers.py`). if a specific command hangs, raise o
 
 - **never** add prompt enforcement telling coolton to "self-improve" — that was tried & didn't
   work. self-improvement lives only in kevinton.
-- **never** let kevinton edit app code or the repo. it's restricted to `skills/` via the hardened
-  skill tools.
+- **never** let anything change code files directly on the server. kevinton edits the coolton
+  repo freely, but only inside its own disposable sandbox, and only ever ships a change as a PR
+  (`pr-and-notify` skill, pushed to the `coolton-agent` fork — that account has no access to push
+  to `itzmetanjim/coolton` at all, let alone `main`). the live host's repo only ever changes via a
+  human merging a PR and pulling it there.
 - **never** run untrusted or model-supplied code on the host. it belongs in the E2B sandbox —
   same rule that applies to `run_linux_command`, `code_mode`, `install_skill`, and skill scripts.
 - **never** commit `.env`, runtime JSON (`conversations.json`, etc.), or `byok_key.bin`. they're
