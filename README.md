@@ -8,10 +8,10 @@ this isn't a prompt trick. the main agent stays calm & only touches skills when 
 self-improvement lives entirely in kevinton, running in a background thread that can't block or
 break the answer.
 
-beyond self-improvement, coolton is also a full agent platform: a persistent per-thread E2B
-sandbox for shell commands, code, a browser, and a GUI desktop, a multi-provider LLM fallback
-chain that keeps answering when one provider is down, the ability to build & deploy other Slack
-bots on request, scheduling, email, vision, image generation, and more.
+beyond self-improvement, coolton runs a persistent per-thread E2B sandbox for shell commands,
+code, a browser, and a GUI desktop, ties together a multi-provider LLM fallback chain that keeps
+answering when one provider is down, builds & deploys other Slack bots on request, and handles
+scheduling, email, vision, and image generation. the full list is below.
 
 ## how it works
 
