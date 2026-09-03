@@ -20,6 +20,8 @@ agent_mod = importlib.import_module("agent.agent")
 if "pydantic_ai_skills" not in sys.modules:
     _stub = types.ModuleType("pydantic_ai_skills")
     _stub.SkillsCapability = lambda **kwargs: Mock()
+    _stub.CallableSkillScriptExecutor = lambda **kwargs: Mock()
+    _stub.SkillsDirectory = lambda **kwargs: Mock()
     sys.modules["pydantic_ai_skills"] = _stub
 
 

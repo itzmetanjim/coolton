@@ -2027,6 +2027,78 @@ def _skill_dirs() -> list[str]:
     return [os.path.join(root, "skills"), os.path.join(root, ".agents", "skills")]
 
 
+def _run_skill_script_in_sandbox(script, args=None, ctx=None) -> str:
+    """Execute a skill's bundled script (the `run_skill_script` tool) inside the
+    thread's E2B sandbox instead of as a host subprocess.
+
+    pydantic_ai_skills' default executor (LocalSkillScriptExecutor) runs every
+    skill script as a real subprocess ON THIS HOST, with the full host
+    environment merged in — every secret in os.environ (SLACK_BOT_TOKEN,
+    COOLTON_GH_TOKEN, E2B_API_KEY, BYOK/MCP encryption keys, all of it).
+    Scripts ship with skills from anywhere — install_skill fetches them from
+    arbitrary npm packages, and several skills already checked into this repo
+    (deploy-to-vercel, marimo-pair, ...) carry their own — so `run_skill_script`
+    was a direct, always-available host-RCE-with-secrets primitive regardless
+    of how a given skill's script got there. Route it through the same
+    disposable sandbox every other untrusted-code path already uses
+    (run_linux_command, code_mode, install_skill) instead.
+    """
+    if ctx is None or getattr(ctx, "deps", None) is None:
+        return "Error: no run context available to route this into a sandbox."
+    deps = ctx.deps
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured."
+    if not script.uri:
+        return f"Error: script '{script.name}' has no file to execute."
+    try:
+        with open(script.uri, "rb") as f:
+            content = f.read()
+    except OSError as e:
+        return f"Error reading script '{script.name}': {e}"
+
+    remote_name = os.path.basename(script.uri)
+    remote_path = f"/home/user/skill_script_{remote_name}"
+
+    # Mirrors pydantic_ai_skills' own LocalSkillScriptExecutor._build_args: every
+    # script takes named (--flag value) arguments, never positional ones.
+    cmd_args: list[str] = []
+    for key, value in (args or {}).items():
+        if isinstance(value, bool):
+            if value:
+                cmd_args.append(f"--{key}")
+        elif isinstance(value, list):
+            for item in value:
+                cmd_args += [f"--{key}", shlex.quote(str(item))]
+        elif value is not None:
+            cmd_args += [f"--{key}", shlex.quote(str(value))]
+
+    suffix = os.path.splitext(remote_name)[1].lower()
+    interpreter = {".py": "python3", ".sh": "sh", ".bash": "bash"}.get(suffix)
+    quoted_path = shlex.quote(remote_path)
+    run_cmd = f"chmod +x {quoted_path} && "
+    run_cmd += f"{interpreter} {quoted_path}" if interpreter else quoted_path
+    if cmd_args:
+        run_cmd += " " + " ".join(cmd_args)
+
+    try:
+        sandbox, proxy_info = get_or_create_sandbox(deps.channel_id, deps.thread_ts)
+        try:
+            sandbox.files.write(remote_path, content)
+            result = sandbox.commands.run(run_cmd, envs=_proxy_env(proxy_info), timeout=120)
+        finally:
+            sandbox.pause()
+    except Exception as e:
+        return f"Error running skill script in sandbox: {e}"
+
+    output = []
+    if result.stdout:
+        output.append(f"STDOUT:\n{result.stdout}")
+    if result.stderr:
+        output.append(f"STDERR:\n{result.stderr}")
+    output.append(f"Exit Code: {result.exit_code}")
+    return "\n\n".join(output)
+
+
 def _is_within(path: str, parent: str) -> bool:
     """True only if `path` is the same as or nested under `parent` (no traversal)."""
     path = os.path.abspath(path)
@@ -2279,10 +2351,14 @@ def run_agent(text, deps, message_history=None, images=None):
         from agent.plan_block import build_plan_hooks
         capabilities.append(build_plan_hooks())
 
-    from pydantic_ai_skills import SkillsCapability
+    from pydantic_ai_skills import CallableSkillScriptExecutor, SkillsCapability, SkillsDirectory
+    skill_script_executor = CallableSkillScriptExecutor(func=_run_skill_script_in_sandbox)
     capabilities.append(
         SkillsCapability(
-            directories=["skills", ".agents/skills"],
+            directories=[
+                SkillsDirectory(path=d, script_executor=skill_script_executor)
+                for d in _skill_dirs()
+            ],
             auto_reload=True,
         )
     )
