@@ -184,7 +184,7 @@
     userFooterEl.append(img, name, logout);
   }
 
-  async function loadConversations(selectId) {
+  async function loadConversations(selectId, selectOpts) {
     const rows = await apiJson('/api/conversations');
     convoListEl.innerHTML = '';
 
@@ -199,16 +199,22 @@
       convoListEl.appendChild(buildSessionItem(row));
     }
 
-    if (selectId) {
-      await selectConversation(selectId);
+    if (selectId && rows.some((r) => r.id === selectId)) {
+      await selectConversation(selectId, selectOpts);
+    } else if (selectId) {
+      // The URL (bookmark, reload, back/forward) pointed at a session that no
+      // longer exists or isn't ours — draft, not a silent 404. Scrub the
+      // stale id out of the address bar rather than leaving it pointed at
+      // something that isn't actually what's on screen.
+      showDraftState({ skipHistory: true });
+      history.replaceState(null, '', location.pathname);
     } else if (currentConversationId && rows.some((r) => r.id === currentConversationId)) {
       markSidebarActive(currentConversationId);
-    } else if (rows.length) {
-      await selectConversation(rows[0].id);
-    } else {
-      currentConversationId = null;
-      statusTitleEl.textContent = 'Select a session';
-      showEmptyState();
+    } else if (!currentConversationId) {
+      // No id in the URL and nothing already open: this is "/" itself, which
+      // is the same starting point as clicking New session, not a jump into
+      // whatever session happens to be most recent.
+      showDraftState({ skipHistory: true });
     }
   }
 
@@ -321,12 +327,7 @@
       console.error('Failed to delete session', err);
       return;
     }
-    if (id === currentConversationId) {
-      if (eventSource) { eventSource.close(); eventSource = null; }
-      currentConversationId = null;
-      isWorking = false;
-      updateComposerState();
-    }
+    if (id === currentConversationId) showDraftState();
     await loadConversations();
   }
 
@@ -334,6 +335,26 @@
     transcriptEl.innerHTML = '';
     transcriptEl.appendChild(emptyStateEl);
     emptyStateEl.hidden = false;
+  }
+
+  // The state "/" and New session both land on: nothing is created (and
+  // nothing hits the network) until the first message actually sends — see
+  // the composer submit handler, the only place that calls createConversation.
+  function showDraftState(opts) {
+    if (eventSource) { eventSource.close(); eventSource = null; }
+    currentConversationId = null;
+    activeTurnEl = null;
+    spineNodeByStepId = new Map();
+    stepStartTs = new Map();
+    messageElBySeq = new Map();
+    isWorking = false;
+    isStopping = false;
+    updateComposerState();
+    updateStatusBar();
+    markSidebarActive(null);
+    statusTitleEl.textContent = 'New session';
+    showEmptyState();
+    if (!opts || !opts.skipHistory) history.pushState(null, '', location.pathname);
   }
 
   // A real link, not a script-driven redirect — clicking it is the deliberate
@@ -351,7 +372,7 @@
     document.body.appendChild(screen);
   }
 
-  async function selectConversation(id) {
+  async function selectConversation(id, opts) {
     if (eventSource) { eventSource.close(); eventSource = null; }
     currentConversationId = id;
     activeTurnEl = null;
@@ -363,6 +384,12 @@
     updateComposerState();
     updateStatusBar();
     markSidebarActive(id);
+    // Bookmarkable, reloadable, and back/forward-able — reloading this exact
+    // URL later re-opens this same session (see loadConversations reading it
+    // back on init, and the popstate handler for back/forward).
+    if (!opts || !opts.skipHistory) {
+      history.pushState(null, '', `${location.pathname}?c=${encodeURIComponent(id)}`);
+    }
 
     transcriptEl.innerHTML = '';
     const data = await apiJson(`/api/conversations/${id}`);
@@ -960,7 +987,28 @@
   // Init
   // ---------------------------------------------------------------------
 
-  newConvoBtn.addEventListener('click', createConversation);
+  // Doesn't create anything — see showDraftState's own comment. Only the
+  // composer's first send (createConversation, below) actually POSTs one.
+  newConvoBtn.addEventListener('click', () => {
+    showDraftState();
+    closeDrawer();
+    composerInput.focus();
+  });
+
+  window.addEventListener('popstate', async () => {
+    const id = new URLSearchParams(location.search).get('c');
+    if (id) {
+      if (id === currentConversationId) return;
+      try {
+        await selectConversation(id, { skipHistory: true });
+      } catch (err) {
+        console.error('Failed to open conversation from history', err);
+        showDraftState({ skipHistory: true });
+      }
+    } else if (currentConversationId) {
+      showDraftState({ skipHistory: true });
+    }
+  });
 
   async function init() {
     const params = new URLSearchParams(location.search);
@@ -976,7 +1024,10 @@
     try {
       await emojiMapReady;
       await loadMe();
-      await loadConversations();
+      // "/" on its own (no ?c=) is the same starting point as New session,
+      // not a jump into whichever conversation was updated most recently —
+      // only a URL that actually names one opens it.
+      await loadConversations(params.get('c') || undefined, { skipHistory: true });
     } catch (err) {
       console.error('Failed to initialize coolton web UI', err);
     }
