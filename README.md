@@ -120,6 +120,28 @@ two things only: bare social replies & one-line factual lookups ("hi", "what is 
 - **feedback buttons**: every response carries thumbs up/down feedback.
 - **policy consent gate**: first-time users are prompted to opt in before coolton responds.
 
+### web UI
+
+coolton at [coolton.tanjim.org](https://coolton.tanjim.org), gated behind Hack Club Auth. it's the
+exact same agent as coolton on Slack, same tools, same sandbox, same Slack MCP access, just
+reached through a browser instead of chat. a few things underpin that:
+
+- **`agent/surface.py`**: the "current conversation" operations (post text, react, show progress)
+  are split out from Slack itself behind a small `Surface` interface. every genuinely-Slack tool
+  (posting to another channel, Slack search, the Slack MCP toolset) still talks to real Slack
+  directly and unchanged, on both platforms, since `deps.client` stays a real Slack `WebClient`
+  either way.
+- **background-safe turns**: a turn runs on a thread pool, decoupled from the HTTP request that
+  started it. closing the tab doesn't stop it; reopening the conversation replays the whole thing
+  from an append-only per-conversation event log (`web_conversations/<id>.jsonl`), live updates
+  arrive over SSE.
+- **the same steering and `!stop` semantics as Slack**: a message sent into a conversation
+  coolton's already working on folds into that run instead of racing a second one
+  (`agent.active_runs` / `agent.steering_store`, shared in-memory with the Slack side since the
+  web UI runs in the same process, not a separate one).
+- **a real progress view, not `{key=value}`**: tool calls, args, and results stream as structured
+  JSON events instead of a truncated flattened string, rendered as an expandable step timeline.
+
 ### vision & media
 
 - **image analysis**: attached Slack images and sandbox screenshots are both understood by
@@ -174,6 +196,13 @@ account or OAuth needed on the user's end. See the `slack-bot-deploy` and `cf-wr
 | `agent/redact.py` | strips known secret values out of anything before it can leak. |
 | `agent/policy_consent.py` | first-use opt-in gate. |
 | `agent/tools/` | individual tool implementations (web search, vision, image gen, reminders, Slack info/search, AgentMail, computer_use, agent-browser stream, mermaid, data analysis, etc.). |
+| `agent/surface.py`, `agent/surfaces/` | the current-conversation transport split (`SlackSurface`, `WebSurface`) that lets the web UI reuse every non-Slack-specific tool unchanged. |
+| `agent/platforms/web.py`, `agent/platforms/web_prompt.md` | the web UI's `PlatformAdapter` — same base system prompt as Slack, plus a short delta. |
+| `web/server.py` | the web UI's FastAPI app (routes, static files), started on a daemon thread by `app.py`. |
+| `web/auth.py` | Hack Club Auth sign-in + the signed session cookie. |
+| `web/conversation_log.py` | the append-only per-conversation event log (JSONL) SSE streams from. |
+| `web/conversations.py`, `web/runner.py` | conversation CRUD/attachments/SSE routes, and background-thread turn execution. |
+| `web/static/` | the web UI itself (no build step: plain HTML/CSS/JS). |
 | `listeners/` | Slack event/action/view handlers (`events/`, `actions/`, `views/`). |
 | `thread_context/` | conversation history store + training-log trace persistence. |
 | `skills/` | curated, version-controlled skills (kevinton writes here). |

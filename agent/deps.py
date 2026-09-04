@@ -12,6 +12,14 @@ class AgentDeps:
     message_ts: str
     # Platform adapter is optional for backwards-compatible Slack callers.
     platform: object | None = None
+    # Current-conversation transport (agent.surface.Surface) — how tools talk about
+    # THIS thread (post text/images/files, react, show progress), as opposed to
+    # deps.client, which every genuinely-Slack tool (posting to another channel,
+    # Slack search, the Slack MCP toolset) keeps using directly. None for every
+    # caller that predates this (kevinton, subagents, the scheduler, summarize_thread's
+    # direct call) — get_surface() lazily builds a SlackSurface from deps.client for
+    # them, so they need zero changes.
+    surface: object | None = None
     user_token: str | None = None
     custom_instructions: str = ""
     plan_ts: str | None = None
@@ -68,3 +76,8 @@ class AgentDeps:
     # field is naturally inert (never reassigned) for their own _run_with_provider_chain
     # calls even though they share this same AgentDeps type.
     last_attempt_messages: list | None = None
+
+    def get_surface(self):
+        """The current-conversation Surface for this turn — see agent.surface.get_surface."""
+        from agent.surface import get_surface as _get_surface
+        return _get_surface(self)

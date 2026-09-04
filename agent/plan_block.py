@@ -198,7 +198,21 @@ def set_model_task(deps, model_used: str, status: str = "complete") -> None:
     Always shown as "complete", never "in_progress" — it's a plain informational
     line ("which model is this turn using"), not a step with a spinner; there's
     nothing for the user to watch "in progress" about which model was picked.
+
+    A non-Slack surface (deps.surface, if the caller set one — see agent.surface)
+    gets notified too, via its own set_model, so this stays the single call site
+    every platform's "which model is this" display goes through. getattr'd
+    defensively: most callers of _run_with_provider_chain (subagents, kevinton,
+    and a chunk of the test suite) pass a deps that never set `.surface` at all,
+    and that must stay a harmless no-op here exactly as it always has been.
     """
+    surface = getattr(deps, "surface", None)
+    if surface is not None and getattr(surface, "name", "slack") != "slack":
+        try:
+            surface.set_model(deps, model_used)
+        except Exception:
+            logger.warning("Failed to notify surface of model selection", exc_info=True)
+
     if not deps.plan_ts:
         return
     deps.plan_tasks.pop(_MODEL_TASK_ID, None)
