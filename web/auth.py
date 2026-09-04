@@ -226,6 +226,12 @@ def callback(request: Request, code: str = "", state: str = ""):
 
 @router.get("/oauth/logout")
 def logout():
-    response = RedirectResponse("/", status_code=302)
+    # Not "/" — the frontend calls /api/me on load and bounces any 401 straight
+    # to /oauth/login, and Hack Club Auth itself stays signed in across that
+    # round trip (it's a separate SSO session coolton has no way to end), so
+    # landing on "/" re-authorizes silently and undoes the sign-out before the
+    # user ever sees it. "/?signed_out=1" tells the frontend to show a plain
+    # "signed out" screen instead of calling any authenticated endpoint.
+    response = RedirectResponse("/?signed_out=1", status_code=302)
     response.delete_cookie(SESSION_COOKIE)
     return response
