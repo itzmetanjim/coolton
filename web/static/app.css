@@ -1,0 +1,624 @@
+@font-face {
+  font-family: 'Atkinson Hyperlegible Next';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('/static/fonts/AtkinsonHyperlegibleNext.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Atkinson Hyperlegible Mono';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('/static/fonts/AtkinsonHyperlegibleMono.woff2') format('woff2');
+}
+
+/* ---------------------------------------------------------------------- */
+/* Tokens                                                                  */
+/*                                                                         */
+/* coolton's own colors, sampled straight off the apple logo: #731e1f is   */
+/* the skin, #063827 the leaf. Red is the chrome — the app's own wine-black */
+/* ground — because it's the apple's dominant color; green stays reserved  */
+/* for coolton specifically: its rail, its working-state pulse, its send   */
+/* button, so the one color means "coolton is here / coolton did this."    */
+/*                                                                         */
+/* The "neutral" scale isn't neutral: ground/panel/raise/line/line-lit,    */
+/* bone-2/bone-3 and rail-idle are the same lightness ladder a plain slate */
+/* UI would use, just rotated onto the skin's hue instead of blue-gray —   */
+/* a wine-black chrome instead of the generic dark-mode default. Desaturated */
+/* enough that it never reads as an alert next to the vivid red-deep/live  */
+/* used for actual stop/error state. bone stays a warm cream (it already   */
+/* wasn't neutral — that's the logo's own off-white).                     */
+/* ---------------------------------------------------------------------- */
+
+:root {
+  --ground: #161010;
+  --panel: #1e1616;
+  --raise: #271b1c;
+  --line: #342223;
+  --line-lit: #4a2f30;
+
+  --green-deep: #063827;
+  --green-mid: #17624a;
+  --green-live: #35a377;
+  --green-glow: rgba(53, 163, 119, 0.12);
+
+  --red-deep: #731e1f;
+  --red-live: #d4696a;
+  --amber: #c9954a;
+
+  --bone: #e8e6e0;
+  --bone-2: #a99898;
+  --bone-3: #715a5b;
+  --rail-idle: #553435;
+
+  --font-ui: 'Atkinson Hyperlegible Next', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Atkinson Hyperlegible Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --r: 3px;
+  --sidebar-w: 252px;
+  --gutter-w: 66px;
+  --measure: 74ch;
+  --shell: calc(var(--gutter-w) + var(--measure) + 56px);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+/* Several elements below are display:flex, which outranks the [hidden]
+   attribute's UA default — so hidden has to win explicitly. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--ground);
+  color: var(--bone);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+body { overflow: hidden; }
+a { color: var(--green-live); text-decoration-color: rgba(53, 163, 119, 0.4); }
+a:hover { text-decoration-color: var(--green-live); }
+::selection { background: var(--green-mid); color: var(--bone); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--green-live); outline-offset: 2px; }
+
+/* Timestamps and other aligned figures get even columns without a mono face —
+   mono is reserved for code. */
+.tnum { font-variant-numeric: tabular-nums; }
+
+.icon {
+  width: 1em; height: 1em; display: block;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Sidebar                                                                 */
+/* ---------------------------------------------------------------------- */
+
+.sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 15px 14px 13px;
+}
+.brand-mark { width: 22px; height: 22px; border-radius: var(--r); object-fit: cover; }
+.brand-name { font-weight: 800; font-size: 15px; letter-spacing: -0.01em; }
+
+.new-session {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 10px 6px;
+  padding: 8px 10px;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  color: var(--bone-2);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.new-session .icon { font-size: 15px; color: var(--green-live); }
+.new-session:hover { color: var(--bone); border-color: var(--green-mid); background: var(--green-glow); }
+
+.session-list { flex: 1; overflow-y: auto; padding: 4px 10px 10px; min-height: 0; }
+
+.session-item {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  color: var(--bone-2);
+}
+.session-open {
+  display: block; width: 100%;
+  padding: 8px 30px 8px 11px;
+  background: none; border: none; border-radius: var(--r);
+  color: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+}
+.session-item:hover { background: var(--raise); color: var(--bone); }
+.session-item.active {
+  background: var(--green-glow);
+  border-color: rgba(53, 163, 119, 0.28);
+  color: var(--bone);
+}
+.session-item-title {
+  display: block;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 600;
+}
+.session-item.untitled .session-item-title { font-weight: 400; color: var(--bone-3); }
+.session-item-time { display: block; font-size: 11.5px; color: var(--bone-3); margin-top: 1px; }
+
+/* A session still running shows it in the list, so closing the tab and coming
+   back tells you what's still in flight. */
+.session-item-live {
+  display: none;
+  position: absolute; right: 10px; top: 11px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green-live);
+  box-shadow: 0 0 0 0 rgba(53, 163, 119, 0.6);
+  animation: pulse 1.8s ease-out infinite;
+}
+.session-item.working .session-item-live { display: block; }
+@keyframes pulse {
+  70% { box-shadow: 0 0 0 6px rgba(53, 163, 119, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(53, 163, 119, 0); }
+}
+
+.session-delete {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  display: none; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  background: none; border: none; border-radius: var(--r);
+  color: var(--bone-3); cursor: pointer;
+}
+.session-delete .icon { font-size: 15px; }
+.session-item:hover .session-delete, .session-delete:focus-visible { display: flex; }
+.session-delete:hover { color: var(--red-live); background: rgba(116, 30, 31, 0.35); }
+/* The live dot sits top-right; drop delete below it instead of shifting it
+   left, so the two never overlap or fight for the same corner. */
+.session-item.working .session-delete { top: auto; bottom: 4px; transform: none; }
+.session-item.confirming .session-delete { display: none; }
+
+.session-confirm {
+  position: absolute; inset: -1px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 7px 0 10px;
+  background: #2a1416;
+  border: 1px solid var(--red-deep); border-radius: var(--r);
+  font-size: 12.5px; font-weight: 600; color: #f0bcbc;
+}
+.session-confirm span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-confirm button {
+  flex-shrink: 0; padding: 3px 7px; font-size: 12px; font-weight: 700;
+  border-radius: var(--r); cursor: pointer; line-height: 1.35;
+}
+.confirm-yes { background: var(--red-deep); border: 1px solid #94302f; color: #ffe3e3; }
+.confirm-yes:hover { background: #94302f; }
+.confirm-no { background: none; border: 1px solid var(--line-lit); color: var(--bone-2); }
+.confirm-no:hover { color: var(--bone); border-color: var(--bone-3); }
+
+.session-empty { padding: 14px 11px; font-size: 13px; color: var(--bone-3); }
+
+.user-footer {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--bone-2);
+}
+.user-footer img { width: 20px; height: 20px; border-radius: var(--r); object-fit: cover; }
+.user-footer span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-footer a { margin-left: auto; color: var(--bone-3); font-size: 12.5px; flex-shrink: 0; text-decoration: none; }
+.user-footer a:hover { color: var(--red-live); }
+
+/* ---------------------------------------------------------------------- */
+/* Main + status bar                                                       */
+/* ---------------------------------------------------------------------- */
+
+.main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+
+.status-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 0 20px; height: 46px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.status-title {
+  background: none; border: none; padding: 4px 6px; margin-left: -6px;
+  border-radius: var(--r);
+  font-size: 14px; font-weight: 700; color: var(--bone);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: text; text-align: left; min-width: 0;
+}
+.status-title:hover { background: var(--raise); }
+.title-input {
+  font: inherit; font-size: 14px; font-weight: 700; font-family: var(--font-ui);
+  background: var(--ground); color: var(--bone);
+  border: 1px solid var(--green-mid); border-radius: var(--r);
+  padding: 4px 6px; margin-left: -6px; min-width: 0; flex: 1; max-width: 420px;
+}
+
+.status-state {
+  display: flex; align-items: center; gap: 7px; flex-shrink: 0;
+  font-size: 12.5px; font-weight: 600; color: var(--bone-3);
+}
+.state-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bone-3); flex-shrink: 0; }
+.status-state.working { color: var(--green-live); }
+.status-state.working .state-dot { background: var(--green-live); animation: pulse 1.8s ease-out infinite; }
+.status-state.stopping { color: var(--amber); }
+.status-state.stopping .state-dot { background: var(--amber); animation: none; }
+
+/* Lives at the right of the message box (#composer) on desktop, where there's
+   room without narrowing the input; the header copy only shows on mobile,
+   where the composer's hint row (and this with it) is hidden to save space. */
+.status-state--header { display: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Transcript                                                              */
+/* ---------------------------------------------------------------------- */
+
+.transcript { flex: 1; overflow-y: auto; padding: 12px 0 18px; }
+
+.empty-state { max-width: 400px; margin: 15vh auto; text-align: center; color: var(--bone-2); padding: 0 24px; }
+.empty-state img { width: 46px; height: 46px; border-radius: 10px; margin-bottom: 18px; }
+.empty-state p { font-size: 14.5px; line-height: 1.65; }
+
+.row {
+  display: flex;
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 7px 20px;
+  gap: 0;
+}
+
+.row-gutter { width: var(--gutter-w); flex-shrink: 0; padding: 3px 12px 0 0; text-align: right; }
+.row-time { font-size: 11.5px; color: var(--bone-3); font-variant-numeric: tabular-nums; }
+
+/* The rail: one element that is the speaker's identity, the turn's live state,
+   and the spine the steps hang off. Green travels while coolton is working,
+   settles solid when it lands, goes red when it doesn't. */
+.row-main { position: relative; min-width: 0; flex: 1; padding-left: 16px; }
+.row-main::before {
+  content: '';
+  position: absolute; left: 0; top: 3px; bottom: 1px;
+  width: 3px; border-radius: 3px;
+  background: var(--rail-idle);
+}
+.row-agent .row-main::before { background: var(--green-mid); }
+.row-agent.working .row-main::before {
+  background: linear-gradient(180deg, var(--green-deep) 0%, var(--green-live) 45%, var(--green-deep) 90%);
+  background-size: 100% 260%;
+  animation: rail 2.6s linear infinite;
+}
+.row-agent.failed .row-main::before { background: var(--red-deep); }
+@keyframes rail { from { background-position: 0 120%; } to { background-position: 0 -140%; } }
+
+.row-actor { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.actor-avatar { width: 17px; height: 17px; border-radius: var(--r); object-fit: cover; background: var(--raise); }
+.actor-name { font-size: 12.5px; font-weight: 800; letter-spacing: 0.01em; color: var(--bone-2); }
+.row-agent .actor-name { color: var(--green-live); }
+
+/* Both speakers read at the same weight — who said it is the rail's job, not
+   a contrast difference that makes one of them look like a caption. */
+.row-text {
+  color: var(--bone);
+  font-size: 15px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.row-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.attachment-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; color: var(--bone-2);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 5px 9px; overflow: hidden;
+}
+.attachment-chip img { max-height: 64px; display: block; border-radius: 2px; }
+
+.row-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.reaction-badge {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 20px;
+  padding: 1px 8px; font-size: 13px; line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Step log — collapsible, with real JSON args, not flattened key=value     */
+/* ---------------------------------------------------------------------- */
+
+.spine-group { margin-bottom: 8px; }
+
+.spine-head {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: none; border: none; border-radius: var(--r);
+  padding: 3px 8px 3px 6px; margin-bottom: 2px;
+  color: var(--bone-3); font-size: 12.5px; font-weight: 700;
+  cursor: pointer;
+}
+.spine-head:hover { color: var(--bone-2); background: var(--raise); }
+
+/* Drawn, not typed: the triangle glyphs Atkinson doesn't carry fall back to
+   whatever the system has, at whatever size it feels like. */
+.caret {
+  width: 0; height: 0; flex-shrink: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transform: rotate(90deg);
+  transition: transform 0.12s;
+}
+.turn.steps-collapsed .spine-head .caret { transform: rotate(0deg); }
+.turn.steps-collapsed .spine { display: none; }
+
+.spine { display: flex; flex-direction: column; align-items: flex-start; }
+
+.spine-line {
+  display: flex; align-items: center; gap: 8px;
+  max-width: 100%;
+  background: none; border: none; border-radius: var(--r);
+  color: var(--bone-2); font-size: 13px;
+  padding: 3px 9px 3px 6px;
+  cursor: pointer; text-align: left;
+}
+.spine-line:hover { background: var(--raise); color: var(--bone); }
+.spine-line[disabled] { cursor: default; }
+.spine-line[disabled] .caret { visibility: hidden; }
+.spine-line .caret { transform: rotate(0deg); color: var(--bone-3); }
+.spine-node.open > .spine-line .caret { transform: rotate(90deg); }
+
+.spine-marker { font-size: 12px; line-height: 1; flex-shrink: 0; color: var(--bone-3); }
+.spine-node[data-status="in_progress"] .spine-marker { color: var(--green-live); }
+.spine-node[data-status="complete"] .spine-marker { color: var(--green-mid); }
+.spine-node[data-status="error"] .spine-marker { color: var(--red-live); }
+.spine-node[data-status="error"] .spine-title { color: var(--red-live); }
+
+.spine-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spine-time { color: var(--bone-3); font-size: 11px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+.spine-detail {
+  margin: 3px 0 8px 21px;
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--panel);
+  max-width: 100%; overflow: hidden;
+}
+.spine-args, .spine-result { padding: 8px 10px; }
+.spine-args:empty, .spine-result:empty { display: none; }
+.spine-args + .spine-result { border-top: 1px solid var(--line); }
+
+/* Tool inputs and outputs are data — this is the one place besides code that
+   earns the mono face. */
+.kv-table { border-collapse: collapse; width: 100%; font-family: var(--font-mono); font-size: 12px; }
+.kv-table td { padding: 2px 0; vertical-align: top; }
+.kv-table td:first-child { color: var(--green-live); white-space: nowrap; padding-right: 14px; }
+.kv-table td:last-child { color: var(--bone-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+
+.spine-result {
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--bone-2); white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 300px; overflow-y: auto;
+}
+
+/* Reasoning is prose, so it is set as prose. */
+.spine-node[data-kind="reasoning"] .spine-detail { background: none; border-color: var(--line); }
+.spine-node[data-kind="reasoning"] .spine-result {
+  font-family: var(--font-ui); font-size: 13.5px; line-height: 1.6;
+  color: var(--bone-2); white-space: pre-wrap; max-height: 460px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Turn body                                                               */
+/* ---------------------------------------------------------------------- */
+
+.turn-content { color: var(--bone); font-size: 15px; line-height: 1.65; max-width: var(--measure); }
+.turn-content:empty { display: none; }
+.turn-content > *:first-child { margin-top: 0; }
+.turn-content > *:last-child { margin-bottom: 0; }
+.turn-content p { margin: 0.65em 0; }
+.turn-content ul, .turn-content ol { margin: 0.55em 0; padding-left: 1.35em; }
+.turn-content li { margin: 0.22em 0; }
+.turn-content li::marker { color: var(--bone-3); }
+.turn-content h1, .turn-content h2, .turn-content h3 {
+  font-size: 15px; font-weight: 800; margin: 1.1em 0 0.35em; color: var(--bone);
+}
+.turn-content hr { border: none; border-top: 1px solid var(--line); margin: 1.1em 0; }
+.turn-content blockquote {
+  border-left: 2px solid var(--green-mid); margin: 0.7em 0; padding-left: 13px; color: var(--bone-2);
+}
+.turn-content code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--raise); border-radius: 2px; padding: 0.08em 0.32em; color: #cfd8d3;
+}
+.turn-content pre {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 12px 14px; overflow-x: auto; margin: 0.8em 0;
+}
+.turn-content pre code { background: none; padding: 0; color: var(--bone); font-size: 12.5px; line-height: 1.55; }
+.turn-content table {
+  border-collapse: collapse; margin: 0.8em 0; font-size: 14px; display: block; overflow-x: auto;
+}
+.turn-content th, .turn-content td { border: 1px solid var(--line); padding: 6px 11px; text-align: left; }
+.turn-content th { background: var(--panel); font-weight: 800; }
+
+/* coolton's own running commentary ("→ pulling the repo") between tool calls. */
+.status-line {
+  color: var(--bone-2); font-size: 14px; margin: 5px 0;
+}
+.status-line > :first-child { margin-top: 0; }
+.status-line > :last-child { margin-bottom: 0; }
+.status-line code { font-family: var(--font-mono); font-size: 0.9em; }
+
+.turn-end-note {
+  display: inline-block; margin-bottom: 7px;
+  font-size: 13px; padding: 4px 10px; border-radius: var(--r);
+}
+.turn-end-note.state-error, .turn-end-note.state-stopped {
+  color: #f0a9a9; background: rgba(116, 30, 31, 0.4); border: 1px solid var(--red-deep);
+}
+.turn-end-note.state-skipped { color: var(--bone-3); border: 1px solid var(--line); }
+
+.image-card, .file-card {
+  margin: 9px 0; border: 1px solid var(--line); border-radius: var(--r);
+  overflow: hidden; background: var(--panel); max-width: 440px;
+}
+.image-card img { width: 100%; display: block; }
+
+/* Live embeds (desktop/browser stream, rendered HTML, a whiteboard) get the
+   full message width, not the same small card a link gets — a cropped
+   desktop stream is worse than no preview at all. */
+.embed-card {
+  margin: 9px 0; border: 1px solid var(--line); border-radius: var(--r);
+  overflow: hidden; background: var(--panel);
+}
+.embed-head { padding: 8px 11px; border-bottom: 1px solid var(--line); }
+.embed-label { color: var(--bone); text-decoration: none; font-size: 13px; font-weight: 600; }
+.embed-label:hover { color: var(--green-live); }
+.embed-frame {
+  display: block; width: 100%; height: 560px;
+  border: none; background: var(--ground);
+}
+.embed-caption {
+  padding: 7px 11px; font-size: 12.5px; color: var(--bone-2);
+  border-top: 1px solid var(--line);
+}
+
+.file-preview { width: 100%; max-height: 280px; object-fit: cover; display: block; }
+.file-row { display: flex; align-items: stretch; }
+.file-card .file-label {
+  flex: 1; min-width: 0; padding: 9px 11px; font-size: 13px; font-weight: 600;
+  color: var(--bone); text-decoration: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.file-card .file-label:hover { color: var(--green-live); }
+.file-download {
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; flex-shrink: 0; color: var(--bone-2);
+  border-left: 1px solid var(--line); text-decoration: none;
+}
+.file-download .icon { font-size: 15px; }
+.file-download:hover { color: var(--green-live); background: var(--raise); }
+
+/* ---------------------------------------------------------------------- */
+/* Composer                                                                */
+/* ---------------------------------------------------------------------- */
+
+.composer { border-top: 1px solid var(--line); background: var(--panel); padding: 12px 20px 10px; flex-shrink: 0; }
+
+.attachment-tray { display: flex; flex-wrap: wrap; gap: 6px; max-width: var(--shell); margin: 0 auto 8px; }
+.attachment-tray .attachment-chip { position: relative; padding-right: 26px; background: var(--raise); }
+.remove-attachment {
+  position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--bone-3); cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 2px;
+}
+.remove-attachment:hover { color: var(--red-live); }
+
+.composer-row {
+  max-width: var(--shell); margin: 0 auto;
+  display: flex; align-items: flex-end; gap: 8px;
+  background: var(--ground);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 8px 7px 13px;
+  transition: border-color 0.12s;
+}
+.composer-row:focus-within { border-color: var(--line-lit); }
+
+.composer-input {
+  flex: 1; min-width: 0;
+  background: none; border: none; color: var(--bone);
+  font-family: var(--font-ui); font-size: 15px; line-height: 1.5;
+  resize: none; max-height: 200px; padding: 6px 0;
+}
+.composer-input:focus { outline: none; }
+.composer-input::placeholder { color: var(--bone-3); }
+
+.composer-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.icon-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  background: none; border: 1px solid transparent; border-radius: var(--r);
+  color: var(--bone-2); cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.icon-btn .icon { font-size: 18px; }
+.icon-btn:hover { color: var(--bone); background: var(--raise); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+.icon-btn:disabled:hover { background: none; color: var(--bone-2); }
+
+.icon-btn-send { background: var(--green-deep); border-color: var(--green-mid); color: #7fd8b0; }
+.icon-btn-send:hover:not(:disabled) { background: var(--green-mid); border-color: var(--green-live); color: #fff; }
+.icon-btn-stop { background: var(--red-deep); border-color: #8f2a2b; color: #f3c3c3; }
+.icon-btn-stop:hover:not(:disabled) { background: #8f2a2b; border-color: var(--red-live); color: #fff; }
+
+.composer-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  max-width: var(--shell); margin: 7px auto 0;
+}
+.composer-hint { margin: 0; font-size: 11.5px; color: var(--bone-3); }
+.status-state--composer { margin-left: auto; }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+.drawer-toggle {
+  display: none; position: fixed; top: 7px; left: 10px; z-index: 20;
+  align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--panel); color: var(--bone); cursor: pointer;
+}
+.drawer-toggle .icon { font-size: 18px; }
+.backdrop { display: none; }
+
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .drawer-toggle { display: flex; }
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0; width: min(84vw, 290px); z-index: 30;
+    transform: translateX(-100%); transition: transform 0.2s ease;
+  }
+  .app.drawer-open .sidebar { transform: translateX(0); }
+  .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); z-index: 25; }
+  .app.drawer-open .backdrop { display: block; }
+  .status-bar { padding: 0 16px 0 52px; }
+  .row-gutter { display: none; }
+  .row { padding: 7px 14px; }
+  .composer { padding: 10px 14px 8px; }
+  .composer-foot { display: none; }
+  .status-state--header { display: flex; }
+  /* The session delete control has no hover on touch, so it always shows. */
+  .session-delete { display: flex; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-agent.working .row-main::before {
+    animation: none;
+    background: var(--green-live);
+  }
+  .state-dot, .session-item-live { animation: none !important; }
+  .sidebar, .caret { transition: none; }
+}

@@ -1,9 +1,9 @@
 import random
 
 from pydantic_ai import RunContext
-from slack_sdk.errors import SlackApiError
 
 from agent.deps import AgentDeps
+from agent.surface import get_surface as _surface
 
 EMOJI_DESCRIPTION = """\
 Add an emoji reaction to the user's current message to acknowledge the topic.
@@ -49,24 +49,10 @@ async def add_emoji_reaction(
         emoji_name: The Slack emoji name without colons (e.g. 'tada', 'wrench', 'pray').
         force: If True, disables the 15% chance to not react to avoid over-reacting.
     """
-    deps = ctx.deps
-
     # Skip ~15% of reactions to feel more natural
     if random.random() < 0.15 and not force:
         return (
             f"Skipped :{emoji_name}: reaction (randomly omitted to avoid over-reacting)"
         )
 
-    try:
-        deps.client.reactions_add(
-            channel=deps.channel_id,
-            timestamp=deps.message_ts,
-            name=emoji_name,
-        )
-        return f"Reacted with :{emoji_name}:"
-    except SlackApiError as e:
-        return f"Could not add reaction: {e.response['error']}"
-    except Exception as e:
-        # A timeout/connection error has no .response — fall back to str(e)
-        # instead of propagating uncaught, matching every sibling tool.
-        return f"Could not add reaction: {e}"
+    return _surface(ctx.deps).react(emoji_name)

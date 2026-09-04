@@ -77,5 +77,21 @@ start_token_rotation()
 register_listeners(app)
 start_scheduler(app)
 
+
+def _start_web_ui() -> None:
+    """coolton's web UI (coolton.tanjim.org), on a daemon thread in this same
+    process — NOT a second process. It shares agent.active_runs,
+    agent.steering_store, and thread_context.conversation_store in memory with
+    the Slack side (see web/runner.py), and thread_context's own store persists
+    by writing a snapshot of the ENTIRE conversation store to disk, which a
+    second process would race and clobber.
+    """
+    from web.server import run as run_web_server
+
+    threading.Thread(target=run_web_server, daemon=True, name="coolton-web-ui").start()
+
+
+_start_web_ui()
+
 if __name__ == "__main__":
     SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN")).start()

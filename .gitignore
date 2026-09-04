@@ -72,6 +72,8 @@ scheduled_tasks.json
 thread_sandboxes.json
 byok_key.bin
 mcp_server_store.json
+web_conversations/
+web_attachments/
 mcp_server_key.bin
 
 # Local Slack CLI project metadata (team IDs, local paths)
@@ -98,3 +100,6 @@ xoxe_tokens.json.tmp
 # Secure Slack bot credential store (created by agent/tools/slack_bot_deploy.py)
 coolton_bots.json
 ~/.coolton_bots.json
+
+# Local-dev web64 helper: token + uploaded files (prod uses /home/tanjim/web64_*)
+.local/

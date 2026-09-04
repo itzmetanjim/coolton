@@ -14,6 +14,7 @@ from pydantic_ai.messages import BinaryContent, ToolReturn
 from pydantic_ai.capabilities import Hooks, PrepareTools
 from dataclasses import replace
 from agent.deps import AgentDeps
+from agent.surface import get_surface as _surface
 from agent.platforms.slack import SlackPlatform
 from agent.stop_store import HaltRun
 from agent.tools import add_emoji_reaction
@@ -540,12 +541,11 @@ def download_attachments_to_sandbox(ctx: RunContext[AgentDeps]) -> str:
     """Download Slack file attachments from the current thread to sandbox's ~/attachments/."""
     channel_id = ctx.deps.channel_id
     thread_ts = ctx.deps.thread_ts
-    user_token = ctx.deps.user_token or os.environ.get("SLACK_USER_TOKEN")
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured"
     try:
         sandbox, _ = get_or_create_sandbox(channel_id, thread_ts)
-        return download_slack_attachments(channel_id, thread_ts, sandbox, user_token)
+        return _surface(ctx.deps).download_attachments(sandbox)
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -607,15 +607,7 @@ def upload_file_from_sandbox(
         from agent.web64_client import upload_bytes
 
         url = upload_bytes(file_content, filename)
-        label = title or filename
-        message = f"{initial_comment}\n\n📄 *{label}*: {url}" if initial_comment else f"📄 *{label}*: {url}"
-        post_kwargs = {"channel": channel_id, "text": message}
-        if thread_ts:
-            post_kwargs["thread_ts"] = thread_ts
-        post_resp = ctx.deps.client.chat_postMessage(**post_kwargs)
-        if not post_resp.get("ok"):
-            return f"File hosted at {url}, but posting the link failed: {post_resp}"
-        return f"Uploaded {filename} and posted the link in the thread."
+        return _surface(ctx.deps).post_file_link(url, filename, title=title, comment=initial_comment)
     except Exception as e:
         return f"Error uploading file: {str(e)}"
 
@@ -740,20 +732,10 @@ def _maybe_post_screenshot(ctx: RunContext[AgentDeps], png: bytes) -> None:
     now = time.time()
     if now - ctx.deps.last_screenshot_post_ts < _SCREENSHOT_POST_MIN_INTERVAL_SECONDS:
         return
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    if not token:
-        return
     try:
         from agent.web64_client import upload_bytes
         url = upload_bytes(png, "screenshot.png", mime="image/png")
-        payload = {
-            "channel": ctx.deps.channel_id,
-            "text": "desktop screenshot",
-            "thread_ts": ctx.deps.thread_ts,
-            "blocks": [{"type": "image", "image_url": url, "alt_text": "desktop screenshot"}],
-        }
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
-        requests.post("https://slack.com/api/chat.postMessage", json=payload, headers=headers, timeout=15)
+        _surface(ctx.deps).post_image(url, "desktop screenshot")
         ctx.deps.last_screenshot_post_ts = now
     except Exception as e:
         logger.warning(f"Failed to post desktop screenshot to thread: {e}")
@@ -867,12 +849,8 @@ def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     ctx.deps.keep_sandbox_warm = True
     ctx.deps.sandbox_keepalive_seconds = _STREAM_KEEPALIVE_SECONDS
     sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, _STREAM_KEEPALIVE_SECONDS)
-    error = send_web_embed(
-        channel_id=ctx.deps.channel_id,
-        text="coolton's desktop — live (view-only)",
-        url=url,
-        title="coolton's desktop",
-        thread_ts=ctx.deps.thread_ts,
+    error = _surface(ctx.deps).post_embed(
+        url, "coolton's desktop", "coolton's desktop — live (view-only)",
     )
     if error:
         return f"{error} | url: {url}"
@@ -899,12 +877,8 @@ def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     ctx.deps.keep_sandbox_warm = True
     ctx.deps.sandbox_keepalive_seconds = _STREAM_KEEPALIVE_SECONDS
     sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, _STREAM_KEEPALIVE_SECONDS)
-    error = send_web_embed(
-        channel_id=ctx.deps.channel_id,
-        text="coolton's desktop — live (view-only) — agent-browser renders here with --headed",
-        url=url,
-        title="coolton's desktop",
-        thread_ts=ctx.deps.thread_ts,
+    error = _surface(ctx.deps).post_embed(
+        url, "coolton's desktop", "coolton's desktop — live (view-only) — agent-browser renders here with --headed",
     )
     if error:
         return f"{error} | url: {url}"
@@ -1023,7 +997,7 @@ def render_mermaid_tool(ctx: RunContext[AgentDeps], diagram_code: str, theme: st
     url = render_mermaid(diagram_code, theme)
     if not url.startswith("http"):
         return url
-    error = _post_image_to_channel(ctx.deps.channel_id, ctx.deps.thread_ts, url, "Mermaid diagram")
+    error = _surface(ctx.deps).post_image(url, "Mermaid diagram")
     if error:
         return f"{error} | url: {url}"
     return f"Diagram rendered and posted to the thread: {url}"
@@ -1039,6 +1013,12 @@ def summarize_thread_tool(ctx: RunContext[AgentDeps], channel_id: str = "", thre
         channel_id: Channel ID (default: current channel).
         thread_ts: Thread timestamp (default: current thread).
     """
+    # No explicit channel/thread given: summarize THIS conversation, through the
+    # surface (works the same on Slack and web). An explicit channel_id/thread_ts
+    # always means "summarize that other Slack thread", which is inherently
+    # Slack-specific regardless of what platform is running this turn.
+    if not channel_id and not thread_ts:
+        return _surface(ctx.deps).summarize()
     if not channel_id:
         channel_id = ctx.deps.channel_id
     if not thread_ts:
@@ -1221,8 +1201,7 @@ def remove_reaction_tool(ctx: RunContext[AgentDeps], emoji_name: str, timestamp:
         emoji_name: Emoji name without colons (e.g. 'tada').
         timestamp: Message ts to remove the reaction from (defaults to the current message).
     """
-    from agent.tools.slack_info import remove_emoji_reaction
-    return remove_emoji_reaction(ctx.deps.channel_id, timestamp or ctx.deps.message_ts, emoji_name)
+    return _surface(ctx.deps).remove_reaction(emoji_name, timestamp)
 
 
 @agent.tool
@@ -1421,24 +1400,20 @@ def send_web_embed(
         return f"Error sending web embed: {str(e)}"
 
 
+_EMBED_THUMBNAIL_URL = "https://placehold.co/1280x720?text=click%20to%20open%20the%20\\ncoolton%20embed"
+
+
 def send_whiteboard_embed(
-    channel_id: str, text: str = "whiteboard", title: str = "whiteboard",
-    whiteboard_id: str | None = None, user_token: str | None = None,
-    thread_ts: str | None = None,
-) -> str:
+    text: str = "whiteboard", title: str = "whiteboard", whiteboard_id: str | None = None,
+) -> tuple[str, str, str, str]:
+    """Build a Felix (tldraw) whiteboard's url/title/text/id. Posting it into the
+    current conversation is the caller's job, via Surface.post_embed — the one
+    call site that already knows how to show a live embed on Slack vs. the web
+    UI, same as computer_stream_tool/agent_browser_stream_tool."""
     if whiteboard_id is None:
         whiteboard_id = f"{random.randint(0, 0xFFFFFF):06X}"
     url = f"https://whiteboard.felix.hackclub.app/{whiteboard_id}"
-    thumbnail_url = "https://placehold.co/1280x720?text=click%20to%20open%20the\\ncoolton%20embed"
-    text_with_id = f"{text} #{whiteboard_id}"
-    title_with_id = f"{title} #{whiteboard_id}"
-    result = send_web_embed(
-        channel_id=channel_id, text=text_with_id, url=url, title=title_with_id,
-        thumbnail_url=thumbnail_url, thread_ts=thread_ts,
-    )
-    if result.startswith("Success"):
-        return f"{result} (whiteboard id: {whiteboard_id})"
-    return result
+    return url, f"{title} #{whiteboard_id}", f"{text} #{whiteboard_id}", whiteboard_id
 
 
 @agent.tool
@@ -1455,34 +1430,28 @@ def send_whiteboard_embed_tool(
         title: Embed title (default: "whiteboard").
         whiteboard_id: Optional specific 6-digit uppercase hex ID like "3A9F01" (default: random).
     """
-    return send_whiteboard_embed(
-        channel_id=ctx.deps.channel_id, text=text, title=title,
-        whiteboard_id=whiteboard_id, thread_ts=ctx.deps.thread_ts,
+    url, title_with_id, text_with_id, whiteboard_id = send_whiteboard_embed(
+        text=text, title=title, whiteboard_id=whiteboard_id,
     )
+    result = _surface(ctx.deps).post_embed(url, title_with_id, text_with_id, _EMBED_THUMBNAIL_URL)
+    if result.startswith("Success"):
+        return f"{result} (whiteboard id: {whiteboard_id})"
+    return result
 
 
-def send_html_embed(
-    channel_id: str, html: str, text: str = "html embed", title: str = "html embed",
-    user_token: str | None = None, thread_ts: str | None = None,
-) -> str:
+def send_html_embed(html: str, title: str = "html embed", text: str = "html embed") -> str:
+    """Host HTML on the coolton file server and return its URL. Posting it into
+    the current conversation is the caller's job, via Surface.post_embed."""
     from html import escape as _html_escape
 
-    try:
-        from agent.web64_client import upload_bytes
-        if "<head" not in html.lower():
-            meta = (
-                f'<head><meta property="og:title" content="{_html_escape(title)}"/>'
-                f'<meta property="og:description" content="{_html_escape(text)}"/></head>'
-            )
-            html = meta + html
-        url = upload_bytes(html.encode(), "embed.html", mime="text/html")
-    except Exception as e:
-        return f"Error hosting HTML embed: {e}"
-    thumbnail_url = "https://placehold.co/1280x720?text=click%20to%20open%20the%20\\ncoolton%20embed"
-    return send_web_embed(
-        channel_id=channel_id, text=text, url=url, title=title,
-        thumbnail_url=thumbnail_url, user_token=user_token, thread_ts=thread_ts,
-    )
+    from agent.web64_client import upload_bytes
+    if "<head" not in html.lower():
+        meta = (
+            f'<head><meta property="og:title" content="{_html_escape(title)}"/>'
+            f'<meta property="og:description" content="{_html_escape(text)}"/></head>'
+        )
+        html = meta + html
+    return upload_bytes(html.encode(), "embed.html", mime="text/html")
 
 
 @agent.tool
@@ -1493,7 +1462,7 @@ def send_html_embed_tool(
     """Send custom HTML as a live embed in the current thread.
 
     Your HTML is hosted on the coolton file server (2390.proxy.tanjim.org) as a
-    short URL and sent as a Slack embed (same mechanism as the whiteboard embed).
+    short URL and sent as a live embed (same mechanism as the whiteboard embed).
     There is no size limit.
 
     IMPORTANT: the embed's default background varies (it can be black, white, or
@@ -1507,10 +1476,11 @@ def send_html_embed_tool(
         text: Fallback text (default: "html embed").
         title: Embed title (default: "html embed").
     """
-    return send_html_embed(
-        channel_id=ctx.deps.channel_id, html=html, text=text, title=title,
-        thread_ts=ctx.deps.thread_ts,
-    )
+    try:
+        url = send_html_embed(html, title=title, text=text)
+    except Exception as e:
+        return f"Error hosting HTML embed: {e}"
+    return _surface(ctx.deps).post_embed(url, title, text, _EMBED_THUMBNAIL_URL)
 
 
 _SLACK_API_CALL_RETRY_LIMIT = 1  # identical failures allowed (shared across both tools) before refusing to repeat it
@@ -1766,8 +1736,7 @@ def leave_thread_tool(ctx: RunContext[AgentDeps]) -> str:
     Use this when the user asks you to stop responding in a thread. A mid-thread
     mention still answers once but does not rejoin the thread.
     """
-    from agent.leave_thread_store import leave_thread
-    return leave_thread(ctx.deps.channel_id, ctx.deps.thread_ts)
+    return _surface(ctx.deps).set_engaged(False)
 
 
 @agent.tool
@@ -1778,8 +1747,7 @@ def join_thread_tool(ctx: RunContext[AgentDeps]) -> str:
     a mid-thread mention answers once without joining. Use this when the user
     asks you to stay in (or keep responding in) this thread.
     """
-    from agent.leave_thread_store import join_thread
-    return join_thread(ctx.deps.channel_id, ctx.deps.thread_ts)
+    return _surface(ctx.deps).set_engaged(True)
 
 
 @agent.tool
@@ -1791,11 +1759,7 @@ def send_message(ctx: RunContext[AgentDeps], text: str) -> str:
         text: The message content to send (Markdown supported).
     """
     try:
-        ctx.deps.client.chat_postMessage(
-            channel=ctx.deps.channel_id,
-            thread_ts=ctx.deps.thread_ts,
-            markdown_text=_redact(text, context="send_message"),
-        )
+        _surface(ctx.deps).post_text(text)
         return "Message sent."
     except Exception as e:
         return f"Failed to send message: {_redact(str(e), context='send_message')}"
@@ -2386,9 +2350,12 @@ def run_agent(text, deps, message_history=None, images=None):
     )
 
     capabilities = [_hooks, PrepareTools(disable_strict_for_all_tools)]
-    if deps.plan_ts:
-        from agent.plan_block import build_plan_hooks
-        capabilities.append(build_plan_hooks())
+    # Each surface's own live-progress hooks (Slack's plan/thinking block,
+    # the web UI's step spine) — Surface.build_hooks() is the one place this
+    # decision lives, so it isn't re-derived here.
+    surface_hooks = _surface(deps).build_hooks(deps)
+    if surface_hooks is not None:
+        capabilities.append(surface_hooks)
 
     from pydantic_ai_skills import CallableSkillScriptExecutor, SkillsCapability, SkillsDirectory
     skill_script_executor = CallableSkillScriptExecutor(func=_run_skill_script_in_sandbox)

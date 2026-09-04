@@ -14,6 +14,7 @@ from slack_sdk import WebClient
 import agent.thread_status as thread_status
 from agent import AgentDeps, run_agent
 from agent.redact import redact as _redact
+from agent.surface import get_surface as _surface
 from thread_context import conversation_store, conversation_trace_store
 from listeners.views.feedback_builder import build_feedback_blocks
 
@@ -74,8 +75,6 @@ def _post_fallback_response(
 def run_agent_turn(
     *,
     client: WebClient,
-    say_stream: SayStream,
-    say: Say,
     logger: Logger,
     channel_id: str,
     thread_ts: str,
@@ -85,12 +84,28 @@ def run_agent_turn(
     text: str,
     history,
     images: list[dict] | None = None,
+    say_stream: SayStream | None = None,
+    say: Say | None = None,
+    surface: object | None = None,
 ) -> None:
     """Run one agent turn: status → plan message → run → stream → history → kevinton.
 
     Exceptions are reported to the thread (mirroring the old per-handler
     error handling) and never propagate.
+
+    Slack callers pass `say_stream`/`say` (Bolt's own response helpers) and leave
+    `surface` unset — a SlackSurface is built lazily from `client`/`channel_id`/
+    `thread_ts`/`message_ts` the first time something needs it (see
+    agent.surface.get_surface). Non-Slack callers (the web UI) pass an explicit
+    `surface` and no `say_stream`/`say`; everything downstream — steering, !stop,
+    kevinton, history compaction — is the exact same pipeline either way.
     """
+    # Slack callers either pass an explicit SlackSurface or nothing (the lazy
+    # default is also a SlackSurface); a non-Slack caller always passes its own
+    # surface explicitly. Decided once, up front, so both the try body and the
+    # finally block (thread_status is Slack-only) agree on it.
+    is_slack = surface is None or getattr(surface, "name", "slack") == "slack"
+
     deps = None
     from agent.active_runs import mark_run_finished, mark_run_started
     mark_run_started(channel_id, thread_ts, time.time())
@@ -98,13 +113,17 @@ def run_agent_turn(
         from agent.provider_config import extract_tag_directive
         text, tag_filter, tag_error = extract_tag_directive(text)
         if tag_error:
-            say(text=tag_error, thread_ts=thread_ts)
+            if say:
+                say(text=tag_error, thread_ts=thread_ts)
+            elif surface is not None:
+                surface.post_error(tag_error)
             return
 
-        # Live "what's coolton doing" status pill: starts at "Working", then tracks
-        # the last tool called (agent.plan_block's before_tool_execute hook) and
-        # refreshes every 30s in between — see agent.thread_status.
-        thread_status.start(client, channel_id, thread_ts)
+        if is_slack:
+            # Live "what's coolton doing" status pill: starts at "Working", then tracks
+            # the last tool called (agent.plan_block's before_tool_execute hook) and
+            # refreshes every 30s in between — see agent.thread_status.
+            thread_status.start(client, channel_id, thread_ts)
 
         deps = AgentDeps(
             client=client,
@@ -114,7 +133,9 @@ def run_agent_turn(
             message_ts=message_ts,
             user_token=user_token,
             provider_tag_filter=tag_filter,
+            surface=surface,
         )
+        conv_surface = _surface(deps)
 
         from agent.plan_block import (
             send_plan_message,
@@ -123,7 +144,11 @@ def run_agent_turn(
             delete_plan_message,
             set_plan_error,
         )
-        plan_ts = send_plan_message(deps)
+        # The Slack "plan/thinking" block is Slack-specific (a chat_update'd rich
+        # block); a non-Slack surface shows its own live progress through
+        # conv_surface.build_hooks() instead (wired into run_agent via
+        # deps.surface), so there's no plan_ts to manage here.
+        plan_ts = send_plan_message(deps) if is_slack else None
         deps.plan_ts = plan_ts
 
         result = run_agent(text, deps, message_history=history, images=images)
@@ -138,26 +163,31 @@ def run_agent_turn(
         else:
             finalize_plan_message(deps, result.output)
 
-            # Stream response in thread with feedback buttons. If streaming fails
-            # (e.g. msg_too_long on chat.startStream), fall back to regular
-            # chat.postMessage with the message chunked to fit Slack's limit.
             output = _redact(result.output, context="final response")
-            feedback_blocks = build_feedback_blocks()
-            try:
-                streamer = say_stream()
-                streamer.append(markdown_text=output)
-                streamer.stop(blocks=feedback_blocks)
-            except Exception as e:
-                logger.warning(f"Streaming response failed ({e}); falling back to chat.postMessage")
-                _post_fallback_response(
-                    client=client,
-                    logger=logger,
-                    channel_id=channel_id,
-                    thread_ts=thread_ts,
-                    output=output,
-                    feedback_blocks=feedback_blocks,
-                )
+            if is_slack:
+                # Stream response in thread with feedback buttons. If streaming fails
+                # (e.g. msg_too_long on chat.startStream), fall back to regular
+                # chat.postMessage with the message chunked to fit Slack's limit.
+                feedback_blocks = build_feedback_blocks()
+                try:
+                    streamer = say_stream()
+                    streamer.append(markdown_text=output)
+                    streamer.stop(blocks=feedback_blocks)
+                except Exception as e:
+                    logger.warning(f"Streaming response failed ({e}); falling back to chat.postMessage")
+                    _post_fallback_response(
+                        client=client,
+                        logger=logger,
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        output=output,
+                        feedback_blocks=feedback_blocks,
+                    )
+            else:
+                conv_surface.post_final(output)
             complete_plan_message(deps)
+
+        conv_surface.finish_turn(deps)
 
         # Store conversation history, compacting it first if the thread has run long
         # enough that carrying the full raw history would waste context on every
@@ -191,16 +221,18 @@ def run_agent_turn(
                 set_plan_error(deps, str(e))
         except Exception:
             pass
-        say(
-            text=f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})",
-            thread_ts=thread_ts,
-        )
+        error_text = f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})"
+        if say:
+            say(text=error_text, thread_ts=thread_ts)
+        elif surface is not None:
+            surface.post_error(error_text)
     finally:
         # Whatever happened, this thread is no longer "actively running" —
         # any message.py/app_mentioned.py check from here on should start a
         # fresh turn rather than queuing as a steer for a run that's over.
         mark_run_finished(channel_id, thread_ts)
-        thread_status.stop(channel_id, thread_ts)
+        if is_slack:
+            thread_status.stop(channel_id, thread_ts)
 
         # A message can land in the steering queue for a run that's about to end
         # without ever getting the chance to fold it into a live tool result — most
@@ -220,6 +252,7 @@ def run_agent_turn(
                 client=client,
                 say_stream=say_stream,
                 say=say,
+                surface=surface,
                 logger=logger,
                 channel_id=channel_id,
                 thread_ts=thread_ts,

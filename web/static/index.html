@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>coolton</title>
+<link rel="icon" href="/static/coolton.png">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/vendor/hljs-theme-dark.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <g id="i-clip"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></g>
+    <g id="i-send"><path d="M12 20V5"/><path d="M5.5 11.5 12 5l6.5 6.5"/></g>
+    <g id="i-stop"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></g>
+    <g id="i-trash"><path d="M4 7h16"/><path d="M9.5 7V5.2a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V7"/><path d="M6.5 7v12a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V7"/></g>
+    <g id="i-plus"><path d="M12 5v14"/><path d="M5 12h14"/></g>
+    <g id="i-download"><path d="M12 4v12"/><path d="M6.5 10.5 12 16l5.5-5.5"/><path d="M4.5 19.5h15"/></g>
+  </defs>
+</svg>
+
+<div id="app" class="app">
+  <button id="drawerToggle" class="drawer-toggle" aria-label="Show sessions">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg>
+  </button>
+
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-head">
+      <img class="brand-mark" src="/static/coolton.png" alt="">
+      <span class="brand-name">coolton web (beta)</span>
+    </div>
+
+    <button id="newConversationBtn" class="new-session">
+      <svg class="icon" viewBox="0 0 24 24"><use href="#i-plus"/></svg>
+      <span>New session</span>
+    </button>
+
+    <nav id="conversationList" class="session-list" aria-label="Sessions"></nav>
+    <div id="userFooter" class="user-footer"></div>
+  </aside>
+
+  <div id="backdrop" class="backdrop"></div>
+
+  <main class="main">
+    <header id="statusBar" class="status-bar">
+      <button type="button" id="statusTitle" class="status-title" title="Rename this session">Select a session</button>
+      <!-- Mobile-only fallback: on desktop the composer's own status-state
+           (below) shows this instead, since there's room there without
+           narrowing the message box. -->
+      <span id="statusStateHeader" class="status-state status-state--header">
+        <span class="state-dot"></span><span class="status-state-text">Idle</span>
+      </span>
+    </header>
+
+    <div id="transcript" class="transcript">
+      <div id="emptyState" class="empty-state">
+        <img src="/static/coolton.png" alt="">
+        <p>Same coolton as in Slack &mdash; same sandbox, same tools, same memory of what it broke last time. Ask it to do something.</p>
+      </div>
+    </div>
+
+    <form id="composer" class="composer">
+      <div id="attachmentTray" class="attachment-tray" hidden></div>
+      <div class="composer-row">
+        <textarea id="composerInput" class="composer-input" placeholder="Message coolton" rows="1"></textarea>
+        <div class="composer-actions">
+          <button type="button" id="attachBtn" class="icon-btn" title="Attach a file" aria-label="Attach a file">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-clip"/></svg>
+          </button>
+          <input type="file" id="fileInput" multiple hidden>
+          <button type="button" id="stopBtn" class="icon-btn icon-btn-stop" title="Stop coolton" aria-label="Stop coolton" hidden>
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-stop"/></svg>
+          </button>
+          <button type="submit" id="sendBtn" class="icon-btn icon-btn-send" title="Send" aria-label="Send">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-send"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="composer-foot">
+        <p class="composer-hint">Enter to send &middot; Shift+Enter for a new line &middot; send while it&rsquo;s working to steer it</p>
+        <span id="statusStateComposer" class="status-state status-state--composer">
+          <span class="state-dot"></span><span class="status-state-text">Idle</span>
+        </span>
+      </div>
+    </form>
+  </main>
+</div>
+
+<template id="tpl-user-message">
+  <div class="row row-user">
+    <div class="row-gutter"><span class="row-time"></span></div>
+    <div class="row-main">
+      <div class="row-actor">
+        <img class="actor-avatar" alt="">
+        <span class="actor-name">You</span>
+      </div>
+      <div class="row-text"></div>
+      <div class="row-attachments"></div>
+      <div class="row-reactions"></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-turn">
+  <div class="row row-agent turn working">
+    <div class="row-gutter"><span class="row-time"></span></div>
+    <div class="row-main">
+      <div class="row-actor">
+        <img class="actor-avatar" src="/static/coolton.png" alt="">
+        <span class="actor-name">coolton</span>
+      </div>
+      <div class="spine-group" hidden>
+        <button type="button" class="spine-head">
+          <span class="caret" aria-hidden="true"></span><span class="spine-count"></span>
+        </button>
+        <div class="spine"></div>
+      </div>
+      <div class="turn-content"></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-spine-node">
+  <div class="spine-node">
+    <button type="button" class="spine-line">
+      <span class="caret" aria-hidden="true"></span>
+      <span class="spine-marker"></span>
+      <span class="spine-title"></span>
+      <span class="spine-time"></span>
+    </button>
+    <div class="spine-detail" hidden>
+      <div class="spine-args"></div>
+      <div class="spine-result"></div>
+    </div>
+  </div>
+</template>
+
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<script src="/static/vendor/highlight.core.min.js"></script>
+<script src="/static/vendor/hljs-lang/python.min.js"></script>
+<script src="/static/vendor/hljs-lang/javascript.min.js"></script>
+<script src="/static/vendor/hljs-lang/typescript.min.js"></script>
+<script src="/static/vendor/hljs-lang/bash.min.js"></script>
+<script src="/static/vendor/hljs-lang/json.min.js"></script>
+<script src="/static/vendor/hljs-lang/yaml.min.js"></script>
+<script src="/static/vendor/hljs-lang/go.min.js"></script>
+<script src="/static/vendor/hljs-lang/rust.min.js"></script>
+<script src="/static/vendor/hljs-lang/java.min.js"></script>
+<script src="/static/vendor/hljs-lang/c.min.js"></script>
+<script src="/static/vendor/hljs-lang/cpp.min.js"></script>
+<script src="/static/vendor/hljs-lang/sql.min.js"></script>
+<script src="/static/vendor/hljs-lang/markdown.min.js"></script>
+<script src="/static/vendor/hljs-lang/diff.min.js"></script>
+<script src="/static/vendor/hljs-lang/xml.min.js"></script>
+<script src="/static/vendor/hljs-lang/css.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
