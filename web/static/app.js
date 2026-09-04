@@ -336,6 +336,21 @@
     emptyStateEl.hidden = false;
   }
 
+  // A real link, not a script-driven redirect — clicking it is the deliberate
+  // action that was missing (see /oauth/logout's comment for why landing on
+  // "/" after sign-out silently re-authorized before the user saw anything).
+  function renderAuthScreen(message) {
+    appEl.hidden = true;
+    const screen = document.createElement('div');
+    screen.className = 'auth-screen';
+    screen.innerHTML = `
+      <img src="/static/coolton.png" alt="">
+      <p>${message}</p>
+      <a href="/oauth/login" class="auth-signin">Sign in</a>
+    `;
+    document.body.appendChild(screen);
+  }
+
   async function selectConversation(id) {
     if (eventSource) { eventSource.close(); eventSource = null; }
     currentConversationId = id;
@@ -365,9 +380,12 @@
       updateStatusBar('working');
     }
     if (!data.events.length) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-state';
-      empty.innerHTML = '<img src="/static/coolton.png" alt=""><p>Nothing here yet. Ask coolton for something.</p>';
+      // Same copy as the pre-sign-in empty state (#emptyState in index.html) —
+      // an empty conversation isn't a different situation from never having
+      // started one, so it shouldn't say something different.
+      const empty = emptyStateEl.cloneNode(true);
+      empty.removeAttribute('id');
+      empty.hidden = false;
       transcriptEl.appendChild(empty);
     }
     scrollToBottom();
@@ -945,6 +963,16 @@
   newConvoBtn.addEventListener('click', createConversation);
 
   async function init() {
+    const params = new URLSearchParams(location.search);
+    if (params.has('signed_out') || params.has('auth_error')) {
+      // Bail before any authenticated call (api()'s own 401 handler would
+      // otherwise bounce straight back through /oauth/login itself).
+      history.replaceState(null, '', location.pathname);
+      renderAuthScreen(
+        params.has('signed_out') ? "You're signed out." : "Sign-in didn't go through. Try again."
+      );
+      return;
+    }
     try {
       await emojiMapReady;
       await loadMe();

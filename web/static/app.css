@@ -286,6 +286,21 @@ button { font: inherit; color: inherit; }
 .empty-state img { width: 46px; height: 46px; border-radius: 10px; margin-bottom: 18px; }
 .empty-state p { font-size: 14.5px; line-height: 1.65; }
 
+/* Shown instead of the whole app after sign-out or a failed sign-in — a real
+   page, not the sidebar/composer chrome with nothing behind it. */
+.auth-screen {
+  min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 14px; text-align: center; padding: 0 24px;
+}
+.auth-screen img { width: 46px; height: 46px; border-radius: 10px; }
+.auth-screen p { max-width: 360px; color: var(--bone-2); font-size: 14.5px; line-height: 1.6; }
+.auth-signin {
+  display: inline-flex; align-items: center; padding: 8px 18px;
+  background: var(--green-deep); border: 1px solid var(--green-mid); border-radius: var(--r);
+  color: #7fd8b0; font-weight: 700; font-size: 14px; text-decoration: none;
+}
+.auth-signin:hover { background: var(--green-mid); border-color: var(--green-live); color: #fff; }
+
 .row {
   display: flex;
   max-width: var(--shell);

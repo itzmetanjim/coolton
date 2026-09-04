@@ -83,6 +83,20 @@ def test_login_sets_a_state_cookie_and_redirects_to_hackclub():
     assert "oauth_state=" in response.headers.get("set-cookie", "")
 
 
+def test_logout_clears_the_session_cookie_and_lands_on_signed_out():
+    """Landing back on "/" would call /api/me, get a 401, and the frontend's
+    own 401 handler bounces that straight to /oauth/login — which Hack Club
+    Auth silently re-approves since it has its own SSO session coolton can't
+    end. Redirecting to "?signed_out=1" instead is what stops that loop; see
+    the frontend's init() for the other half of this."""
+    response = auth.logout()
+    assert response.status_code == 302
+    assert response.headers["location"] == "/?signed_out=1"
+    set_cookie = response.headers.get("set-cookie", "")
+    assert auth.SESSION_COOKIE in set_cookie
+    assert 'Max-Age=0' in set_cookie or "01 Jan 1970" in set_cookie
+
+
 def test_callback_rejects_a_mismatched_state():
     request = Mock()
     request.cookies = {auth.STATE_COOKIE: "expected"}
