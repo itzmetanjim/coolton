@@ -37,7 +37,15 @@ app.include_router(conversations.router)
 
 @app.get("/")
 def index(request: Request):
-    if not auth.require_slack_id(request):
+    # An unauthenticated visit skips straight to login (no flash of app shell)
+    # — except landing here right after /oauth/logout or a failed sign-in,
+    # where the point is to actually show a page instead of silently bouncing
+    # through /oauth/login again (Hack Club Auth keeps its own SSO session, so
+    # that redirect alone re-authorizes without the user seeing anything: see
+    # /oauth/logout's own comment). The frontend reads these same params to
+    # render that state instead of calling any authenticated endpoint.
+    landing_from_auth = "signed_out" in request.query_params or "auth_error" in request.query_params
+    if not auth.require_slack_id(request) and not landing_from_auth:
         return RedirectResponse("/oauth/login", status_code=302)
     return FileResponse(_STATIC_DIR / "index.html")
 
