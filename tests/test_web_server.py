@@ -7,7 +7,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from web import auth
-from web.server import app
+from web.server import app, run
+
+
+def test_run_defaults_to_localhost_not_all_interfaces(monkeypatch):
+    """Caddy proxies to this port from the same host — 0.0.0.0 would needlessly
+    expose the raw, cookie-authenticated app on every interface instead of
+    just the one Caddy actually reaches it through."""
+    captured = {}
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: captured.update(k))
+    run()
+    assert captured["host"] == "127.0.0.1"
 
 
 @pytest.fixture(autouse=True)

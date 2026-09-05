@@ -53,7 +53,7 @@ def index(request: Request):
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
-def run(host: str = "0.0.0.0", port: int | None = None) -> None:
+def run(host: str = "127.0.0.1", port: int | None = None) -> None:
     import uvicorn
 
     uvicorn.run(
