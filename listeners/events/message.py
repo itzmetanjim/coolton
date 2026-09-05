@@ -50,6 +50,19 @@ def handle_message(
     if context.channel_id == "C06QV2T1P4G":
         return
 
+    # Banned users get nothing at all — not even !stop or a steering fold-in
+    # into someone else's active run (both of those live further down this
+    # function, well before any is_banned() check would otherwise run). This
+    # must be the very first thing checked once the message is known to be a
+    # real, human message, so there is no path in this handler that can still
+    # reach run_agent_turn, request_stop, or queue_steering_message for a
+    # banned user. run_agent_turn (listeners.events.turn) does the same check
+    # again as defense-in-depth, but that check alone was not enough — a
+    # steered message never goes through run_agent_turn at all.
+    from agent.ban_store import is_banned
+    if is_banned(context.user_id):
+        return
+
     text = event.get("text", "")
     bot_id = os.environ.get("COOLTON_BOT_ID", "")
     is_dm = event.get("channel_type") == "im"

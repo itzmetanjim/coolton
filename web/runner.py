@@ -43,12 +43,25 @@ def submit_message(conversation_id: str, user_id: str, text: str, attachments: l
     """Record the message and either fold it into the run already in flight
     (steering — same rule Slack follows: don't race a second turn alongside a
     live one) or start a fresh turn on the executor."""
+    from agent.ban_store import is_banned
     from web import conversation_log as log
 
     attachments = attachments or []
     user_event = log.append_event(conversation_id, {
         "type": "user_message", "text": text, "user_id": user_id, "attachments": attachments,
     })
+
+    # A banned user's message is recorded (so it isn't silently swallowed —
+    # the person can see they sent it) but never starts or steers a turn, on
+    # Slack or here. Checked here, before the steering branch below, because
+    # listeners.events.turn.run_agent_turn's own is_banned() check (the other
+    # half of this fix) only guards a fresh turn — a message folded into an
+    # already-running one via queue_steering_message never reaches it.
+    if is_banned(user_id):
+        log.append_event(conversation_id, {
+            "type": "turn_end", "state": "error", "reason": "you're banned from using coolton.",
+        })
+        return
 
     # Name the conversation after the message that opened it, so the sidebar
     # isn't a column of identical placeholders. Only ever fills a blank name —
