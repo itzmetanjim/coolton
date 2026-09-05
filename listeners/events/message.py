@@ -8,6 +8,7 @@ from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
 from agent.active_runs import is_run_active
+from agent.ban_store import apply_ban_command, is_authorized, parse_ban_command
 from agent.leave_thread_store import is_thread_engaged
 from agent.steering_store import queue_steering_message
 from agent.stop_store import is_stop_command, request_stop
@@ -90,6 +91,23 @@ def handle_message(
                 text="⏹️ stopping all your running coolton instances…",
                 thread_ts=thread_ts,
             )
+        return
+
+    # !ban / !unban: only handled in a DM, same reasoning as !stop above — a
+    # bare command in a channel thread without a mention is not addressed to
+    # the bot at all. Silently ignored (not even a "not authorized" reply) for
+    # anyone but ban_store.BAN_ADMIN_USER_ID, so the mechanism isn't exposed
+    # to random users typing the syntax.
+    ban_command = parse_ban_command(text, bot_id) if is_dm else None
+    if ban_command:
+        if not is_authorized(user_id):
+            return
+        action, target_user_id, reason = ban_command
+        apply_ban_command(client, action, target_user_id, reason)
+        try:
+            client.reactions_add(channel=channel_id, timestamp=event["ts"], name="white_check_mark")
+        except Exception:
+            logger.exception("Failed to react to ban/unban command")
         return
 
     # Messages starting with "<>" are only answered when the bot is explicitly

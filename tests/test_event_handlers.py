@@ -752,3 +752,87 @@ def test_message_case_sensitive_angle_brackets(ctx):
         run_turn.assert_not_called()
         # Only exact <> prefix is blocked, not case variations
         # <> is literal characters, not case-sensitive
+
+
+# ---------------------------------------------------------------------------
+# !ban / !unban
+# ---------------------------------------------------------------------------
+
+
+def test_message_dm_ban_by_admin_applies_and_reacts(monkeypatch):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.apply_ban_command") as apply_ban:
+        client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
+        context.channel_id = "D123"
+        context.user_id = "U0B2VTYER33"
+        event = {
+            "type": "message", "text": "!ban <@U999> being annoying",
+            "ts": "111.111", "channel_type": "im",
+        }
+        handle_message(client, context, event, logger, say, say_stream, None)
+        apply_ban.assert_called_once_with(client, "ban", "U999", "being annoying")
+        client.reactions_add.assert_called_once_with(channel="D123", timestamp="111.111", name="white_check_mark")
+        run_turn.assert_not_called()
+
+
+def test_message_dm_ban_by_non_admin_is_silently_ignored(monkeypatch):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.apply_ban_command") as apply_ban:
+        client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
+        context.channel_id = "D123"
+        context.user_id = "U_SOME_RANDOM_USER"
+        event = {
+            "type": "message", "text": "!ban <@U999> being annoying",
+            "ts": "111.111", "channel_type": "im",
+        }
+        handle_message(client, context, event, logger, say, say_stream, None)
+        apply_ban.assert_not_called()
+        client.reactions_add.assert_not_called()
+        say.assert_not_called()
+        run_turn.assert_not_called()
+
+
+def test_message_dm_unban_by_admin_applies(monkeypatch):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.apply_ban_command") as apply_ban:
+        client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
+        context.channel_id = "D123"
+        context.user_id = "U0B2VTYER33"
+        event = {
+            "type": "message", "text": "!unban <@U999>",
+            "ts": "111.111", "channel_type": "im",
+        }
+        handle_message(client, context, event, logger, say, say_stream, None)
+        apply_ban.assert_called_once_with(client, "unban", "U999", "")
+        run_turn.assert_not_called()
+
+
+def test_app_mentioned_ban_by_admin_applies_and_reacts(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.apply_ban_command") as apply_ban:
+        ctx.context.user_id = "U0B2VTYER33"
+        _mention(ctx, text="!ban <@U999> spamming")
+        apply_ban.assert_called_once_with(ctx.client, "ban", "U999", "spamming")
+        ctx.client.reactions_add.assert_called_once_with(channel="C123", timestamp="111.111", name="white_check_mark")
+        run_turn.assert_not_called()
+
+
+def test_app_mentioned_ban_by_non_admin_is_silently_ignored(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.apply_ban_command") as apply_ban:
+        ctx.context.user_id = "U_SOME_RANDOM_USER"
+        _mention(ctx, text="!ban <@U999> spamming")
+        apply_ban.assert_not_called()
+        ctx.client.reactions_add.assert_not_called()
+        ctx.say.assert_not_called()
+        run_turn.assert_not_called()
