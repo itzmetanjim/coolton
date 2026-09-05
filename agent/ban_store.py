@@ -28,17 +28,25 @@ ANNOUNCE_CHANNEL_ID = "C0BCNM6SQA0"
 
 # Optionally preceded by an @-mention of the bot (with or without a space
 # before "!ban" — Slack renders a mention as its own token, and users type
-# both "<@BOT> !ban ..." and "<@BOT>!ban ..."). Reason is everything after the
-# target mention, trimmed; DOTALL so a multi-line reason is captured whole.
-_BAN_COMMAND_RE = re.compile(r"^!(ban|unban)\s+<@([A-Z0-9]+)>\s*(.*)$", re.IGNORECASE | re.DOTALL)
+# both "<@BOT> !ban ..." and "<@BOT>!ban ..."). The target mention's id may
+# carry a "|label" suffix ("<@U123|display name>") — Slack includes one on
+# some client/message paths — so that's matched and discarded too, not just
+# the bare "<@U123>" form. Reason is everything after the target mention,
+# trimmed; DOTALL so a multi-line reason is captured whole.
+_BAN_COMMAND_RE = re.compile(r"^!(ban|unban)\s+<@([A-Z0-9]+)(?:\|[^>]*)?>\s*(.*)$", re.IGNORECASE | re.DOTALL)
 
 
 def _load() -> dict:
     try:
         with open(BAN_STORE_FILE) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
         return {}
+    # A non-dict top-level value (corrupt/hand-edited file) must fall back to
+    # "no bans" rather than raise AttributeError the next time something
+    # calls .get() on it (e.g. is_banned) — mirrors the same defensive check
+    # agent.scheduler / agent.policy_consent already make on their own stores.
+    return data if isinstance(data, dict) else {}
 
 
 def _save(data: dict) -> None:
@@ -69,7 +77,9 @@ def unban_user(target_user_id: str, reason: str = "") -> None:
 def is_banned(user_id: str) -> bool:
     with _lock:
         entry = _load().get(user_id)
-    return bool(entry and entry.get("banned"))
+    if not isinstance(entry, dict):
+        return False
+    return bool(entry.get("banned"))
 
 
 def parse_ban_command(text: str, bot_id: str = "") -> tuple[str, str, str] | None:

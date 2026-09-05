@@ -37,6 +37,19 @@ def test_corrupt_file_falls_back_to_unbanned(tmp_store):
     assert store.is_banned("U1") is False
 
 
+def test_non_dict_top_level_json_falls_back_to_unbanned(tmp_store):
+    """A hand-edited or otherwise corrupted file whose top level parses as
+    valid JSON but isn't an object (e.g. a bare list) must not raise
+    AttributeError the next time something calls .get() on it."""
+    (tmp_store / "ban_store.json").write_text("[]")
+    assert store.is_banned("U1") is False
+
+
+def test_non_dict_entry_for_a_user_falls_back_to_unbanned(tmp_store):
+    (tmp_store / "ban_store.json").write_text('{"U1": true}')
+    assert store.is_banned("U1") is False
+
+
 def test_persists_to_disk(tmp_store):
     store.ban_user("U1", reason="spamming")
     data = json.loads((tmp_store / "ban_store.json").read_text())
@@ -66,6 +79,16 @@ class TestParseBanCommand:
 
     def test_mention_with_space_before_bang(self):
         assert store.parse_ban_command("<@UBOT> !ban <@U123> reason", bot_id="UBOT") == ("ban", "U123", "reason")
+
+    def test_target_mention_with_pipe_label_is_stripped_to_the_id(self):
+        """Slack renders some user mentions as "<@U123|display name>", not
+        just the bare "<@U123>" form — the id alone must still be extracted."""
+        assert store.parse_ban_command("!ban <@U123|some.user> being annoying") == ("ban", "U123", "being annoying")
+
+    def test_target_mention_with_pipe_label_and_bot_prefix(self):
+        assert store.parse_ban_command(
+            "<@UBOT>!ban <@U123|some.user> reason", bot_id="UBOT",
+        ) == ("ban", "U123", "reason")
 
     def test_case_insensitive_command_word(self):
         assert store.parse_ban_command("!BAN <@U123>") == ("ban", "U123", "")
