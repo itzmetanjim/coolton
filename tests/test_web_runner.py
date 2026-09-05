@@ -17,6 +17,11 @@ def tmp_store(monkeypatch, tmp_path):
     log._last_seq.clear()
     with log._subscribers_guard:
         log._subscribers.clear()
+    # Every test in this file exercises steering/ban/turn-start behavior, not
+    # the policy opt-in gate itself (see the two tests that override this
+    # below) — default to "already consented" so they aren't all incidentally
+    # coupled to it.
+    monkeypatch.setattr("agent.policy_consent.has_consent", lambda uid: True)
     yield
     from agent.active_runs import mark_run_finished
     from agent.steering_store import clear_steering_messages
@@ -173,6 +178,39 @@ def test_submit_message_banned_user_cannot_steer_an_active_run(conversation_id, 
     assert calls == []
     from agent.steering_store import peek_steering_messages
     assert peek_steering_messages("web", conversation_id) == []
+
+
+def test_submit_message_without_policy_consent_never_starts_a_turn(conversation_id, monkeypatch):
+    """Slack gates every turn on agent.policy_consent.ensure_consent before it
+    ever reaches run_agent_turn; nothing on the web path called it. A Hack
+    Club Auth account with no recorded consent must not be able to drive the
+    full toolset just by never having DMed coolton on Slack."""
+    from web import runner
+
+    monkeypatch.setattr("agent.policy_consent.has_consent", lambda uid: False)
+    calls = []
+    monkeypatch.setattr(runner._executor, "submit", lambda fn, *a: calls.append((fn, a)))
+
+    runner.submit_message(conversation_id, "U1", "hello")
+
+    assert calls == []
+    events = log.read_events(conversation_id)
+    assert events[0]["type"] == "user_message"
+    assert any("opt in" in e.get("text", "") for e in events if e["type"] == "agent_message")
+    assert events[-1]["type"] == "turn_end"
+    assert events[-1]["state"] == "error"
+
+
+def test_submit_message_with_policy_consent_proceeds_normally(conversation_id, monkeypatch):
+    from web import runner
+
+    monkeypatch.setattr("agent.policy_consent.has_consent", lambda uid: True)
+    calls = []
+    monkeypatch.setattr(runner._executor, "submit", lambda fn, *a: calls.append((fn, a)))
+
+    runner.submit_message(conversation_id, "U1", "hello")
+
+    assert len(calls) == 1
 
 
 def test_submit_message_names_an_unnamed_conversation_after_the_first_message(monkeypatch):
