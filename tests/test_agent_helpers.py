@@ -1656,6 +1656,28 @@ def test_run_skill_script_in_sandbox_builds_named_args(monkeypatch, tmp_path):
     assert "--name coolton" in cmd
 
 
+def test_run_skill_script_in_sandbox_rejects_an_unsafe_flag_name(monkeypatch, tmp_path):
+    """args' keys come from the model's own run_skill_script tool call and were
+    interpolated as f"--{key}" completely unquoted (unlike values, which are
+    shlex-quoted) — a key like "foo; rm -rf ~" would inject shell syntax into
+    the sandbox command. A flag name has no legitimate reason to be anything
+    but an identifier; anything else must be dropped, not run."""
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_sandbox = _FakeSkillScriptSandbox()
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+
+    ctx = _run_ctx(Mock())
+    script = _fake_skill_script(tmp_path)
+    agent_mod._run_skill_script_in_sandbox(
+        script, args={"safe-name": "ok", "foo; rm -rf ~": "evil", "also bad": True}, ctx=ctx,
+    )
+
+    cmd = fake_sandbox.last_cmd
+    assert "--safe-name" in cmd
+    assert "rm -rf" not in cmd
+    assert "also bad" not in cmd
+
+
 def test_run_skill_script_in_sandbox_reports_exit_code(monkeypatch, tmp_path):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     fake_sandbox = _FakeSkillScriptSandbox(exit_code=1)

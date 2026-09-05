@@ -2007,8 +2007,21 @@ def _run_skill_script_in_sandbox(script, args=None, ctx=None) -> str:
 
     # Mirrors pydantic_ai_skills' own LocalSkillScriptExecutor._build_args: every
     # script takes named (--flag value) arguments, never positional ones.
+    #
+    # Values are shlex-quoted below, but a flag NAME was interpolated as
+    # f"--{key}" completely unquoted — args comes from the model's own
+    # run_skill_script tool call, so a key like "foo; rm -rf ~" would inject
+    # extra shell syntax into run_cmd. This only runs inside the disposable
+    # sandbox (no host exposure, and the model already has unrestricted
+    # sandbox code execution via other tools), but there's no reason for a
+    # flag name to be anything other than an identifier — reject anything
+    # else rather than let it become part of the shell command.
+    _FLAG_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
     cmd_args: list[str] = []
     for key, value in (args or {}).items():
+        if not _FLAG_NAME_RE.match(key):
+            logger.warning("Skipping skill script arg with an unsafe flag name: %r", key)
+            continue
         if isinstance(value, bool):
             if value:
                 cmd_args.append(f"--{key}")
