@@ -52,6 +52,26 @@ def test_load_reminders_rejects_non_dict(tmp_files):
     assert scheduler._load_reminders() == {"reminders": []}
 
 
+def test_get_due_reminders_tolerates_a_legacy_entry_missing_fields(tmp_files):
+    """A hand-edited or otherwise legacy reminders.json entry missing "sent"/
+    "due_at" must not raise — _get_due_reminders runs inside the recurring
+    check_reminders job with no surrounding try/except at this level, so one
+    bad entry used to silently disable reminders on every run forever."""
+    scheduler.schedule_reminder("U1", "C1", "normal one", delay_seconds=-10)
+    data = scheduler._load_reminders()
+    data["reminders"].append({"id": "legacy", "user_id": "U2", "channel_id": "C2", "text": "old"})
+    scheduler._save_reminders(data)
+
+    due = scheduler._get_due_reminders()
+    assert [r["text"] for r in due] == ["normal one"]
+
+
+def test_prune_sent_reminders_tolerates_a_legacy_entry_missing_fields(tmp_files):
+    data = {"reminders": [{"id": "legacy", "user_id": "U2", "channel_id": "C2", "text": "old"}]}
+    scheduler._prune_sent_reminders(data)  # must not raise
+    assert data["reminders"] == [{"id": "legacy", "user_id": "U2", "channel_id": "C2", "text": "old"}]
+
+
 # ---------------------------------------------------------------------------
 # Cron validation
 # ---------------------------------------------------------------------------
