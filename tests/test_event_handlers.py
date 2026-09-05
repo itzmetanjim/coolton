@@ -836,3 +836,88 @@ def test_app_mentioned_ban_by_non_admin_is_silently_ignored(ctx):
         ctx.client.reactions_add.assert_not_called()
         ctx.say.assert_not_called()
         run_turn.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Ban enforcement: a banned user gets nothing at all, even mid-active-run
+# (steering) or via !stop — both bypass run_agent_turn's own is_banned() check.
+# ---------------------------------------------------------------------------
+
+
+def test_message_banned_user_gets_nothing_even_in_dm(ctx, monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
+    with patch("listeners.events.message.run_agent_turn") as run_turn:
+        _msg(ctx, channel_type="im", text="hello")
+        run_turn.assert_not_called()
+        ctx.say.assert_not_called()
+
+
+def test_message_banned_user_cannot_steer_an_active_run(ctx, monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_run_active", return_value=True), \
+         patch("listeners.events.message.queue_steering_message") as queue_steering:
+        _msg(ctx, channel_type="im", text="do something else")
+        run_turn.assert_not_called()
+        queue_steering.assert_not_called()
+        ctx.client.reactions_add.assert_not_called()
+
+
+def test_message_banned_user_cannot_stop(ctx, monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.request_stop") as request_stop:
+        _msg(ctx, channel_type="im", text="!stop")
+        request_stop.assert_not_called()
+        ctx.say.assert_not_called()
+        run_turn.assert_not_called()
+
+
+def test_app_mentioned_banned_user_gets_nothing(ctx, monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
+        _mention(ctx, text="<@BOT1> hello")
+        run_turn.assert_not_called()
+        ctx.say.assert_not_called()
+
+
+def test_app_mentioned_banned_user_cannot_steer_an_active_run(ctx, monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.is_run_active", return_value=True), \
+         patch("listeners.events.app_mentioned.queue_steering_message") as queue_steering:
+        _mention(ctx, text="<@BOT1> also check this", ts="1.1", thread_ts="1.1")
+        run_turn.assert_not_called()
+        queue_steering.assert_not_called()
+        ctx.client.reactions_add.assert_not_called()
+
+
+def test_app_mentioned_banned_user_cannot_stop(ctx, monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+        _mention(ctx, text="!stop")
+        request_stop.assert_not_called()
+        ctx.say.assert_not_called()
+        run_turn.assert_not_called()
+
+
+def test_message_non_banned_user_is_unaffected(ctx, monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U_SOMEONE_ELSE")
+    with patch("listeners.events.message.run_agent_turn") as run_turn:
+        _msg(ctx, channel_type="im", text="hello")
+        run_turn.assert_called_once()

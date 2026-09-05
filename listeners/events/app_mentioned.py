@@ -36,6 +36,15 @@ def handle_app_mentioned(
         if event.get("bot_id"):
             return
 
+        # Banned users get nothing at all — not even !stop or a steering
+        # fold-in into someone else's active run (both live further down this
+        # function). This must run before either of those, since neither path
+        # reaches run_agent_turn (listeners.events.turn), which does its own
+        # is_banned() check but only guards a real turn, not a steer.
+        from agent.ban_store import is_banned
+        if is_banned(context.user_id):
+            return
+
         text = event.get("text", "")
         if text.strip().startswith("##"):
             logger.info(f"Ignoring message starting with '##': {text}")

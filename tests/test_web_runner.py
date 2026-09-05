@@ -139,6 +139,42 @@ def test_run_turn_reports_an_error_if_run_agent_turn_itself_raises(conversation_
     assert events[-1]["state"] == "error"
 
 
+def test_submit_message_banned_user_never_starts_or_steers_a_turn(conversation_id, monkeypatch):
+    """listeners.events.turn.run_agent_turn checks is_banned() too, but that
+    guard only fires for a fresh turn — a message folded into a run already in
+    flight via queue_steering_message never reaches it. submit_message must
+    check first, before either the fresh-turn or steering branch."""
+    from web import runner
+
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
+    calls = []
+    monkeypatch.setattr(runner._executor, "submit", lambda fn, *a: calls.append((fn, a)))
+
+    runner.submit_message(conversation_id, "U1", "hello")
+
+    assert calls == []
+    events = log.read_events(conversation_id)
+    assert events[0]["type"] == "user_message"  # still recorded, not swallowed
+    assert events[-1]["type"] == "turn_end"
+    assert events[-1]["state"] == "error"
+
+
+def test_submit_message_banned_user_cannot_steer_an_active_run(conversation_id, monkeypatch):
+    from agent.active_runs import mark_run_started
+    from web import runner
+
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
+    mark_run_started("web", conversation_id, time.time())
+    calls = []
+    monkeypatch.setattr(runner._executor, "submit", lambda fn, *a: calls.append((fn, a)))
+
+    runner.submit_message(conversation_id, "U1", "keep going")
+
+    assert calls == []
+    from agent.steering_store import peek_steering_messages
+    assert peek_steering_messages("web", conversation_id) == []
+
+
 def test_submit_message_names_an_unnamed_conversation_after_the_first_message(monkeypatch):
     from web import runner
 
