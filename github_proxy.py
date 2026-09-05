@@ -23,6 +23,8 @@ Importable:
 """
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -232,8 +234,8 @@ class _AdminHandler(BaseHTTPRequestHandler):
 
     def _admin_ok(self) -> bool:
         h = self.headers.get("Authorization", "")
-        if h.startswith("Bearer "):
-            return h[7:].strip() == ADMIN_TOKEN
+        if h.startswith("Bearer ") and ADMIN_TOKEN:
+            return hmac.compare_digest(h[7:].strip(), ADMIN_TOKEN)
         return False
 
     def _send_json(self, code, payload):
@@ -363,7 +365,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._deny(401, challenge=True)
             return
         if tok not in allowlist:
-            logger.warning("deny: tok=%r in_allowlist=False auth=%r", tok, self.headers.get("Authorization", "")[:30])
+            # Never log the presented token itself — it's exactly the kind of
+            # value someone mistakenly pastes in full (a real PAT, an admin
+            # token), and this fires on every rejected credential. A short
+            # hash is enough to correlate repeated denials in the journal
+            # without ever writing out anything secret-shaped.
+            tok_fingerprint = hashlib.sha256(tok.encode()).hexdigest()[:12]
+            logger.warning("deny: tok_sha256_prefix=%s in_allowlist=False", tok_fingerprint)
             self._deny(403)
             return
 
