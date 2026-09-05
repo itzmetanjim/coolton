@@ -364,6 +364,54 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str, timeout: int = _
         return f"Error: {str(e)}"
 
 
+@agent.tool
+def run_background_command_tool(ctx: RunContext[AgentDeps], command: str, cwd: str = "") -> str:
+    """Start a command in the sandbox running DETACHED IN THE BACKGROUND and
+    return immediately with a job id, instead of blocking the turn until it
+    finishes — use this for a dev server, a watcher, or any long-running
+    process you need to keep alive while you do other things (check its
+    output later with check_background_command_tool, stop it with
+    kill_background_command_tool). For anything that just needs to finish and
+    give you its output, use run_linux_command instead — don't background
+    something you're only going to immediately wait on.
+
+    Args:
+        command: The shell command to run in the background.
+        cwd: Directory to run it from (optional — defaults to the sandbox's
+            default working directory).
+    """
+    from agent.tools.sandbox_background import run_background_command
+    return run_background_command(ctx.deps.channel_id, ctx.deps.thread_ts, command, cwd)
+
+
+@agent.tool
+def check_background_command_tool(
+    ctx: RunContext[AgentDeps], job_id: str, tail_lines: int = 200,
+) -> str:
+    """Check whether a background command (started with
+    run_background_command_tool) is still running, and see the most recent
+    lines of its output.
+
+    Args:
+        job_id: The id returned by run_background_command_tool.
+        tail_lines: How many of the most recent output lines to return
+            (default 200).
+    """
+    from agent.tools.sandbox_background import check_background_command
+    return check_background_command(ctx.deps.channel_id, ctx.deps.thread_ts, job_id, tail_lines)
+
+
+@agent.tool
+def kill_background_command_tool(ctx: RunContext[AgentDeps], job_id: str) -> str:
+    """Stop a background command started with run_background_command_tool.
+
+    Args:
+        job_id: The id returned by run_background_command_tool.
+    """
+    from agent.tools.sandbox_background import kill_background_command
+    return kill_background_command(ctx.deps.channel_id, ctx.deps.thread_ts, job_id)
+
+
 # Tools a `code_mode` program may NOT call: recursion back into the sandbox, the tool itself,
 # or run-control tools that make no sense from a sandboxed loop.
 CODE_MODE_EXCLUDED_TOOLS = {
@@ -371,8 +419,12 @@ CODE_MODE_EXCLUDED_TOOLS = {
     "run_linux_command",
     "read_sandbox_file_tool",
     "write_sandbox_file_tool",
+    "edit_sandbox_file_tool",
     "search_sandbox_files_tool",
     "list_sandbox_files_tool",
+    "run_background_command_tool",
+    "check_background_command_tool",
+    "kill_background_command_tool",
     "download_attachments_to_sandbox",
     "extract_tar_gz_tool",
     "analyze_csv_tool",
@@ -1238,20 +1290,32 @@ def read_conversation_history_tool(
 
 
 @agent.tool
-def read_sandbox_file_tool(ctx: RunContext[AgentDeps], path: str) -> str:
-    """Read a file from the sandbox filesystem.
-    
+def read_sandbox_file_tool(
+    ctx: RunContext[AgentDeps], path: str, offset: int = 1, limit: int = 2000,
+) -> str:
+    """Read a file from the sandbox filesystem — prefer this over `cat`/`head`/
+    `tail` via run_linux_command. Output is line-numbered (like `cat -n`), so
+    you can reference exact lines back to the user or as context for
+    edit_sandbox_file_tool.
+
     Args:
         path: Path to file (e.g., /home/user/file.txt or ~/attachments/data.csv).
+        offset: 1-indexed line to start reading from (default 1, the top).
+            Use this to page through a file larger than `limit`.
+        limit: Max number of lines to return (default 2000).
     """
     from agent.tools.sandbox_files import read_sandbox_file
-    return read_sandbox_file(ctx.deps.channel_id, ctx.deps.thread_ts, path)
+    return read_sandbox_file(ctx.deps.channel_id, ctx.deps.thread_ts, path, offset, limit)
 
 
 @agent.tool
 def write_sandbox_file_tool(ctx: RunContext[AgentDeps], path: str, content: str) -> str:
-    """Write content to a file in the sandbox filesystem. Creates parent dirs.
-    
+    """Write content to a file in the sandbox filesystem, OVERWRITING it
+    entirely if it already exists. Creates parent dirs. Use this for a new
+    file, or when you're replacing a file's content wholesale — for a
+    targeted change to an existing file, use edit_sandbox_file_tool instead,
+    it's cheaper and can't accidentally drop unrelated content.
+
     Args:
         path: Path to write (e.g., /home/user/output.txt).
         content: Text content to write.
@@ -1261,27 +1325,85 @@ def write_sandbox_file_tool(ctx: RunContext[AgentDeps], path: str, content: str)
 
 
 @agent.tool
-def search_sandbox_files_tool(ctx: RunContext[AgentDeps], pattern: str, path: str = "/home/user") -> str:
-    """Search for text patterns in sandbox files (grep).
-    
+def edit_sandbox_file_tool(
+    ctx: RunContext[AgentDeps], path: str, old_string: str, new_string: str, replace_all: bool = False,
+) -> str:
+    """Replace an exact string in an existing sandbox file — prefer this over
+    `sed`/sandbox rewrites via run_linux_command for any targeted code change.
+
+    old_string must match the file's existing content EXACTLY (whitespace and
+    indentation included) and must be unique in the file unless
+    replace_all=True — read the file with read_sandbox_file_tool first if
+    you're not certain of its exact contents, and include enough surrounding
+    lines in old_string to pin down the one occurrence you mean.
+
     Args:
-        pattern: Regex or text pattern to search for.
-        path: Directory to search (default: /home/user).
+        path: Path to the file to edit (must already exist — use
+            write_sandbox_file_tool to create a new one).
+        old_string: The exact text to find and replace.
+        new_string: The text to replace it with.
+        replace_all: Replace every occurrence instead of requiring old_string
+            to be unique (default False). Use this for e.g. renaming a
+            variable throughout the file.
     """
-    from agent.tools.sandbox_files import search_sandbox_files
-    return search_sandbox_files(ctx.deps.channel_id, ctx.deps.thread_ts, pattern, path)
+    from agent.tools.sandbox_files import edit_sandbox_file
+    return edit_sandbox_file(ctx.deps.channel_id, ctx.deps.thread_ts, path, old_string, new_string, replace_all)
 
 
 @agent.tool
-def list_sandbox_files_tool(ctx: RunContext[AgentDeps], pattern: str = "*", path: str = "/home/user") -> str:
-    """List files in the sandbox matching a glob pattern.
-    
+def search_sandbox_files_tool(
+    ctx: RunContext[AgentDeps],
+    pattern: str,
+    path: str = "/home/user",
+    glob: str = "",
+    case_insensitive: bool = False,
+    output_mode: str = "content",
+    context_lines: int = 0,
+    head_limit: int = 100,
+) -> str:
+    """Search file CONTENTS in the sandbox with a regex — prefer this over
+    `grep`/`rg` via run_linux_command for finding where something is defined
+    or used. For finding files BY NAME instead, use list_sandbox_files_tool.
+
     Args:
-        pattern: Glob pattern (default: "*").
-        path: Directory to search (default: /home/user).
+        pattern: Extended regex (grep -E syntax) to search for.
+        path: File or directory to search (default /home/user).
+        glob: Optional filename glob to restrict the search to (e.g. "*.py").
+        case_insensitive: Match case-insensitively (default False).
+        output_mode: "content" (matching lines with line numbers, default),
+            "files_with_matches" (just the file paths), or "count" (per-file
+            match counts).
+        context_lines: Lines of context to show before/after each match
+            (content mode only, default 0).
+        head_limit: Cap on the number of output lines returned (default 100)
+            so a broad search can't flood your context — narrow `pattern`/
+            `glob`/`path` instead of raising this if you hit the cap.
+    """
+    from agent.tools.sandbox_files import search_sandbox_files
+    return search_sandbox_files(
+        ctx.deps.channel_id, ctx.deps.thread_ts, pattern, path,
+        glob, case_insensitive, output_mode, context_lines, head_limit,
+    )
+
+
+@agent.tool
+def list_sandbox_files_tool(
+    ctx: RunContext[AgentDeps], pattern: str = "*", path: str = "/home/user", limit: int = 200,
+) -> str:
+    """Find files in the sandbox BY NAME/PATTERN — prefer this over `find`/`ls`
+    via run_linux_command. Supports "**" for recursive matching (e.g.
+    "**/*.py" finds every .py file under `path`, at any depth). Results are
+    sorted by modification time, most recently modified first. To search file
+    CONTENTS instead, use search_sandbox_files_tool.
+
+    Args:
+        pattern: Glob pattern, relative to `path` unless it starts with "/"
+            (default "*"). Use "**/*.ext" to search recursively.
+        path: Directory to search from (default /home/user).
+        limit: Max number of results to return (default 200).
     """
     from agent.tools.sandbox_files import list_sandbox_files
-    return list_sandbox_files(ctx.deps.channel_id, ctx.deps.thread_ts, pattern, path)
+    return list_sandbox_files(ctx.deps.channel_id, ctx.deps.thread_ts, pattern, path, limit)
 
 
 @agent.tool

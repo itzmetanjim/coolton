@@ -288,10 +288,37 @@ if __name__ == "__main__":
 ```
 
 ## SANDBOX FILE OPERATIONS
-- `read_sandbox_file(path)` — read a file from sandbox (e.g., /home/user/file.txt)
-- `write_sandbox_file(path, content)` — write content to a file in sandbox
-- `search_sandbox_files(pattern, path)` — grep for text in sandbox files
-- `list_sandbox_files(pattern, path)` — find files matching a glob pattern
+Structured tools for reading/writing/searching sandbox files — use these instead of
+`cat`/`sed`/`grep`/`find` via `run_linux_command` for anything they cover; they're cheaper
+(no shelling out) and harder to get subtly wrong (an Edit that fails loudly beats a `sed`
+that silently matched the wrong line).
+- `read_sandbox_file(path, offset=1, limit=2000)` — read a file, line-numbered (`cat -n`
+  style). Page through a file bigger than `limit` with `offset`.
+- `write_sandbox_file(path, content)` — write/overwrite a file's entire contents. For a new
+  file, or replacing one wholesale. For a small change to an existing file, use
+  `edit_sandbox_file` instead — cheaper, and it can't accidentally drop unrelated content.
+- `edit_sandbox_file(path, old_string, new_string, replace_all=False)` — replace an exact
+  string in an existing file. `old_string` must match the file's contents EXACTLY (read the
+  file first if unsure) and must be unique unless `replace_all=True` — include enough
+  surrounding context to pin down the one occurrence you mean, not just a bare word.
+- `search_sandbox_files(pattern, path, glob="", case_insensitive=False, output_mode="content",
+  context_lines=0, head_limit=100)` — grep for a regex across sandbox files. `output_mode`:
+  "content" (matching lines), "files_with_matches" (just paths), or "count".
+- `list_sandbox_files(pattern="*", path, limit=200)` — find files by name/glob, "**"
+  supported for recursive matching (e.g. "**/*.py"), sorted by most-recently-modified.
+
+## BACKGROUND COMMANDS (run_background_command, check_background_command, kill_background_command)
+`run_linux_command` blocks until the command finishes — fine for most things, but wrong for
+a dev server, a watcher, or anything meant to keep running while you do other work.
+- `run_background_command(command, cwd="")` — starts `command` detached in the background and
+  returns immediately with a job id. The job keeps running (or waiting, paused with the rest
+  of the sandbox) across tool calls and turns until it exits or you kill it.
+- `check_background_command(job_id, tail_lines=200)` — is it still running, and what has it
+  printed recently.
+- `kill_background_command(job_id)` — stop it.
+Use this for: `npm run dev`/other dev servers, file watchers, long builds you want to poll
+instead of blocking on. Don't background something you're only going to immediately wait on
+— that's just `run_linux_command` with extra steps.
 
 ## SANDBOX ATTACHMENTS
 ### download_attachments_to_sandbox
