@@ -494,7 +494,6 @@ def _run_ctx(client):
     deps = SimpleNamespace(
         client=client, channel_id="C1", thread_ts="1.2", user_id="U_TEST",
         last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=0.0, keep_sandbox_warm=False,
-        slack_api_call_failures={},
     )
     return RunContext(model=None, usage=None, prompt="", deps=deps)
 
@@ -731,80 +730,6 @@ def test_slack_api_call_returns_full_error_json(monkeypatch):
     assert "required" in result
     assert "channel" in result
     assert "provided" in result
-
-
-def test_slack_api_call_blocks_after_one_failure(monkeypatch):
-    """The exact loop a user reported: the model kept calling conversations.join with
-    an empty params dict, never correcting itself, and kept going even after an
-    explicit "stop retrying this" error. The budget is tight (1) precisely because a
-    softer limit didn't stop it — the 2nd identical attempt must never reach the
-    network at all."""
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
-    ctx = _run_ctx(Mock())
-    with patch("agent.agent.requests.post") as post:
-        post.return_value.json.return_value = {"ok": False, "error": "missing_argument"}
-        first = agent_mod.slack_api_call(ctx, method="conversations.join", api_parameters="{}")
-        second = agent_mod.slack_api_call(ctx, method="conversations.join", api_parameters="{}")
-    assert post.call_count == 1  # only the first attempt hits the network
-    assert "missing_argument" in first
-    assert "already failed" in second
-    assert "api_parameters was empty" in second
-
-
-def test_slack_api_call_block_is_shared_across_both_slack_api_tools(monkeypatch):
-    """Observed live: a model blocked on slack_api_call_as_bot_tool immediately just
-    switched to slack_api_call with the exact same broken call and got a fresh budget.
-    Both tools must share one failure count per (method, params), not one each.
-
-    agent.agent and agent.tools.slack_bot_api both `import requests` — the same module
-    object (verified directly) — so a single patch of requests.post covers whichever
-    of the two tools actually reaches the network below."""
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    ctx = _run_ctx(Mock())
-    with patch("agent.agent.requests.post") as post:
-        post.return_value.json.return_value = {"ok": False, "error": "missing_argument"}
-        first = agent_mod.slack_api_call(ctx, method="conversations.join", api_parameters="{}")
-        second = agent_mod.slack_api_call_as_bot_tool(ctx, method="conversations.join", api_parameters="{}")
-    assert post.call_count == 1  # only the first attempt, on either tool, hits the network
-    assert "missing_argument" in first
-    assert "already failed" in second
-    assert "share this limit" in second
-
-
-def test_slack_api_call_block_is_specific_to_the_exact_method_and_params(monkeypatch):
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
-    ctx = _run_ctx(Mock())
-    with patch("agent.agent.requests.post") as post:
-        post.return_value.json.return_value = {"ok": False, "error": "missing_argument"}
-        agent_mod.slack_api_call(ctx, method="conversations.join", api_parameters="{}")
-        agent_mod.slack_api_call(ctx, method="conversations.join", api_parameters="{}")  # blocked
-        # A different channel is a different failure signature — not blocked by the above.
-        result = agent_mod.slack_api_call(ctx, method="conversations.join", api_parameters='{"channel": "C2"}')
-    assert post.call_count == 2  # the genuinely different call still reaches the network
-    assert "already failed" not in result
-
-
-def test_slack_api_call_a_success_does_not_get_blocked_later(monkeypatch):
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
-    ctx = _run_ctx(Mock())
-    with patch("agent.agent.requests.post") as post:
-        post.return_value.json.return_value = {"ok": True}
-        for _ in range(5):
-            result = agent_mod.slack_api_call(ctx, method="auth.test", api_parameters="{}")
-    assert post.call_count == 5
-    assert "Success" in result
-
-
-def test_slack_api_call_as_bot_tool_blocks_after_one_failure(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    ctx = _run_ctx(Mock())
-    with patch("agent.tools.slack_bot_api.requests.post") as post:
-        post.return_value.json.return_value = {"ok": False, "error": "missing_argument"}
-        agent_mod.slack_api_call_as_bot_tool(ctx, method="conversations.join", api_parameters="{}")
-        result = agent_mod.slack_api_call_as_bot_tool(ctx, method="conversations.join", api_parameters="{}")
-    assert post.call_count == 1
-    assert "already failed" in result
 
 
 def test_slack_api_call_as_bot_rejects_chat_post_message_without_channel(monkeypatch):

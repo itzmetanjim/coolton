@@ -55,13 +55,6 @@ class AgentDeps:
     # own message (agent.agent._maybe_post_screenshot). Throttles computer_use's
     # "screenshot" action so a fast click/screenshot loop doesn't spam the channel.
     last_screenshot_post_ts: float = 0.0
-    # Counts identical (tool, method, params) failures for slack_api_call /
-    # slack_api_call_as_bot_tool this turn (agent.agent._blocked_by_repeated_failure).
-    # These two tools take an untyped `params: dict` with no schema hint about what
-    # keys a given Slack method needs beyond the docstring — a model that gets one
-    # wrong (e.g. an empty dict for a method that needs 'channel') can otherwise keep
-    # retrying the exact same broken call instead of correcting it. Reset every turn.
-    slack_api_call_failures: dict = field(default_factory=dict)
     # Progressive checkpoint of "everything safe to resume from" for the CURRENT
     # provider-chain attempt (agent.agent._run_with_provider_chain) — reassigned (a new
     # list, never mutated in place) on every tool call by agent.plan_block's
