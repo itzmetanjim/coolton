@@ -146,3 +146,40 @@ def test_non_stale_error_propagates(sandbox_env):
         helpers_mod.get_or_create_sandbox("C1", "1.1")
     assert api.created == []
     assert bad.killed is False
+
+
+# ---------------------------------------------------------------------------
+# kill_thread_sandbox — used when a conversation/thread is deleted outright,
+# distinct from _recycle_dead_sandbox's "E2B already killed it" case.
+# ---------------------------------------------------------------------------
+
+
+def test_kill_thread_sandbox_kills_and_cleans_up(sandbox_env, monkeypatch):
+    live = _FakeSandbox("sbx-live")
+    api = _FakeSandboxAPI(existing={"sbx-live": live})
+    tokens = sandbox_env(store_id="sbx-live", api=api)
+    revoked = []
+    monkeypatch.setattr(helpers_mod, "revoke_sandbox_token", lambda tok: revoked.append(tok))
+    monkeypatch.setattr(helpers_mod, "_proxy_cache", {"sbx-live": {"token": "tok-sbx-live"}})
+
+    helpers_mod.kill_thread_sandbox("web", "convo-1")
+
+    assert live.killed is True
+    assert tokens == [("del", "web", "convo-1")]
+    assert revoked == ["tok-sbx-live"]
+    assert "sbx-live" not in helpers_mod._proxy_cache
+
+
+def test_kill_thread_sandbox_is_a_noop_with_nothing_stored(sandbox_env):
+    tokens = sandbox_env(store_id=None)
+    helpers_mod.kill_thread_sandbox("web", "convo-1")
+    assert tokens == []
+
+
+def test_kill_thread_sandbox_never_raises_if_the_sandbox_is_already_gone(sandbox_env):
+    class _ExplodingAPI:
+        def connect(self, sandbox_id):
+            raise RuntimeError("sandbox not found")
+
+    sandbox_env(store_id="sbx-gone", api=_ExplodingAPI())
+    helpers_mod.kill_thread_sandbox("web", "convo-1")  # must not raise

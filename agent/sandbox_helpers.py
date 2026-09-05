@@ -132,6 +132,30 @@ def _recycle_dead_sandbox(channel_id: str, thread_ts: str, sandbox_id: str, erro
         _proxy_cache.pop(sandbox_id, None)
 
 
+def kill_thread_sandbox(channel_id: str, thread_ts: str) -> None:
+    """Tear down this thread's sandbox (if any) and revoke its github_proxy
+    token, for when the thread/conversation itself is being deleted —
+    distinct from _recycle_dead_sandbox's case of E2B having already killed
+    it out from under us. Without this, deleting a web conversation
+    (web.conversation_log.delete_conversation) left its sandbox running (and
+    its proxy token valid) indefinitely: nothing else ever tears it down once
+    the conversation it belonged to is gone. Best-effort and safe to call
+    with nothing to clean up; never raises."""
+    sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
+    if not sandbox_id:
+        return
+    try:
+        Sandbox.connect(sandbox_id).kill()
+    except Exception:
+        logger.warning("Failed to kill sandbox %s for %s/%s", sandbox_id, channel_id, thread_ts, exc_info=True)
+    delete_thread_sandbox_id(channel_id, thread_ts)
+    proxy_info = _proxy_cache_get(sandbox_id)
+    if proxy_info and proxy_info.get("token"):
+        revoke_sandbox_token(proxy_info["token"])
+    with _proxy_cache_lock:
+        _proxy_cache.pop(sandbox_id, None)
+
+
 def get_or_create_sandbox(channel_id: str, thread_ts: str):
     """Return (sandbox, proxy_info) for this thread, guaranteed to be alive.
 
