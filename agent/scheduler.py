@@ -4,7 +4,10 @@ import logging
 import uuid
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 # datetime used for typing if needed
+
+from slack_sdk import WebClient
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +93,11 @@ def _mark_sent(reminder_id: str):
 SCHEDULED_TASKS_FILE = "scheduled_tasks.json"
 scheduled_tasks_lock = threading.Lock()
 MIN_SCHEDULE_INTERVAL_SECONDS = 30 * 60
+# Firing had no effect at all until now (see _fire_task) — nothing bounded how
+# many a single user could pile up. Now that firing actually runs a real
+# agent turn, an unbounded pile of tasks is an unbounded pile of autonomous
+# turns; cap it per user.
+MAX_TASKS_PER_USER = 20
 ADMIN_USER_IDS = {"U0B2VTYER33", "U09ASUK57K8", "U0BFB1AEY3D", "U0BDCU34308"}
 
 
@@ -183,48 +191,95 @@ def _sync_cron_jobs():
             _add_cron_job(task)
 
 
+# Runs each fired task's real agent turn off of APScheduler's own worker
+# thread, so a slow/long turn can never block other cron jobs (including other
+# users' scheduled tasks) from firing on time.
+_task_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="scheduled-task")
+
+
 def _fire_task(task_id: str):
-    """Post a scheduled task's prompt to its origin thread when cron fires."""
+    """When cron fires: post a banner announcing the task, then run its prompt
+    as a real agent turn threaded off that banner (or the task's own origin
+    thread, if it had one).
+
+    Previously this only posted the banner via chat.postMessage and stopped —
+    both listeners.events.message and .app_mentioned drop every message with
+    a bot_id, so nothing ever consumed it and the prompt silently never ran,
+    despite create_scheduled_task_tool advertising a working recurring-task
+    feature end to end.
+    """
     with scheduled_tasks_lock:
         data = _load_tasks()
         task = next((t for t in data["tasks"] if t["id"] == task_id), None)
         if not task or task.get("paused"):
             return
+
+    from agent.ban_store import is_banned
+    if is_banned(task["user_id"]):
+        logger.warning("Scheduled task %s: owner %s is banned; not firing", task_id, task["user_id"])
+        return
+
+    bot_token = os.environ.get("SLACK_BOT_TOKEN")
+    if not bot_token:
+        logger.error("Scheduled task %s: no bot token", task_id)
+        return
+
+    client = WebClient(token=bot_token)
     try:
-        import requests
-        bot_token = os.environ.get("SLACK_BOT_TOKEN")
-        if not bot_token:
-            logger.error("Scheduled task %s: no bot token", task_id)
-            return
-        payload = {"channel": task["channel_id"], "text": f":timer_clock: *Scheduled task:* {task['prompt']}"}
-        if task.get("thread_ts"):
-            payload["thread_ts"] = task["thread_ts"]
-        response = requests.post(
-            "https://slack.com/api/chat.postMessage",
-            json=payload,
-            headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json; charset=utf-8"},
-            timeout=20,
+        response = client.chat_postMessage(
+            channel=task["channel_id"],
+            text=f":timer_clock: *Scheduled task:* {task['prompt']}",
+            thread_ts=task["thread_ts"] or None,
         )
-        res_json = response.json()
-        if res_json.get("ok"):
-            with scheduled_tasks_lock:
-                data = _load_tasks()
-                updated = next((t for t in data["tasks"] if t["id"] == task_id), None)
-                if updated:
-                    updated["last_run_at"] = time.time()
-                    tz = updated.get("timezone", "UTC")
-                    try:
-                        from datetime import datetime
-                        from croniter import croniter
-                        updated["next_run_at"] = croniter(updated["cron"], datetime.now(_resolve_tz(tz))).get_next(float)
-                    except Exception:
-                        updated["next_run_at"] = None
-                    _save_tasks(data)
-            logger.info("Scheduled task %s fired to %s", task_id, task["channel_id"])
-        else:
-            logger.error("Scheduled task %s post failed: %s", task_id, res_json.get("error", "unknown"))
     except Exception as e:
-        logger.error("Scheduled task %s failed: %s", task_id, e)
+        logger.error("Scheduled task %s post failed: %s", task_id, e)
+        return
+
+    thread_ts = task["thread_ts"] or response["ts"]
+    message_ts = response["ts"]
+
+    with scheduled_tasks_lock:
+        data = _load_tasks()
+        updated = next((t for t in data["tasks"] if t["id"] == task_id), None)
+        if updated:
+            updated["last_run_at"] = time.time()
+            tz = updated.get("timezone", "UTC")
+            try:
+                from datetime import datetime
+                from croniter import croniter
+                updated["next_run_at"] = croniter(updated["cron"], datetime.now(_resolve_tz(tz))).get_next(float)
+            except Exception:
+                updated["next_run_at"] = None
+            _save_tasks(data)
+
+    logger.info("Scheduled task %s fired to %s", task_id, task["channel_id"])
+    _task_executor.submit(
+        _run_scheduled_turn, client, task["channel_id"], thread_ts, message_ts,
+        task["user_id"], task["prompt"],
+    )
+
+
+def _run_scheduled_turn(client: WebClient, channel_id: str, thread_ts: str, message_ts: str, user_id: str, prompt: str) -> None:
+    """Run a scheduled task's prompt through the exact same turn pipeline a
+    real Slack message runs through (listeners.events.turn.run_agent_turn) —
+    Say/SayStream are the same helpers Bolt hands a real event listener,
+    built directly here since there's no incoming event to hand them to us."""
+    from slack_bolt import Say, SayStream
+
+    from listeners.events.turn import run_agent_turn
+    from thread_context import conversation_store
+
+    say = Say(client=client, channel=channel_id, thread_ts=thread_ts)
+    say_stream = SayStream(client=client, channel=channel_id, thread_ts=thread_ts)
+    try:
+        run_agent_turn(
+            client=client, say=say, say_stream=say_stream, logger=logger,
+            channel_id=channel_id, thread_ts=thread_ts, message_ts=message_ts,
+            user_id=user_id, user_token=os.environ.get("SLACK_USER_TOKEN"),
+            text=prompt, history=conversation_store.get_history(channel_id, thread_ts),
+        )
+    except Exception:
+        logger.exception("Scheduled task turn failed for %s/%s", channel_id, thread_ts)
 
 
 def create_scheduled_task(
@@ -257,6 +312,9 @@ def create_scheduled_task(
     }
     with scheduled_tasks_lock:
         data = _load_tasks()
+        owned = sum(1 for t in data["tasks"] if t["user_id"] == user_id)
+        if owned >= MAX_TASKS_PER_USER:
+            return f"Error: you already have {MAX_TASKS_PER_USER} scheduled tasks (the max). Delete or pause one first."
         data["tasks"].append(task)
         _save_tasks(data)
     _add_cron_job(task)
