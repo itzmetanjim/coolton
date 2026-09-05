@@ -8,6 +8,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -185,11 +186,28 @@ async def stream_events(conversation_id: str, request: Request, after: int = 0):
 # ---------------------------------------------------------------------------
 
 
+# What upload_attachment_route ever actually generates: a 24-hex-char digest
+# plus an optional lowercased extension (at most 12 chars, from
+# os.path.splitext) of plain filename characters. attachment_ids reach
+# _load_attachment_meta straight from a request body (send_message_route's
+# JSON, below) with no other validation, so this is the only thing standing
+# between that and a path-traversal read of an arbitrary "*.json" file on
+# disk (e.g. "../../../../etc/something") — reject anything that doesn't
+# match the real shape before it's ever joined into a path.
+_ASSET_ID_RE = re.compile(r"^[0-9a-f]{24}[A-Za-z0-9_.-]{0,12}$")
+
+
+def _valid_asset_id(asset_id: str) -> bool:
+    return bool(asset_id) and bool(_ASSET_ID_RE.match(asset_id))
+
+
 def _attachment_meta_path(asset_id: str) -> str:
     return os.path.join(ATTACHMENTS_DIR, f"{asset_id}.json")
 
 
 def _load_attachment_meta(asset_id: str) -> dict | None:
+    if not _valid_asset_id(asset_id):
+        return None
     try:
         with open(_attachment_meta_path(asset_id)) as f:
             return json.load(f)
@@ -208,9 +226,15 @@ async def upload_attachment_route(conversation_id: str, request: Request, file: 
         raise HTTPException(413, "File too large (25MB max)")
 
     os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
-    digest = hashlib.sha256(content).hexdigest()[:24]
+    # Salted with conversation_id so two conversations uploading identical
+    # bytes (a common case — the same screenshot, the same sample file) don't
+    # collide on the same asset_id and silently steal each other's metadata
+    # record (the second upload's conversation_id would otherwise overwrite
+    # the first's, transferring ownership and 404-ing the original uploader).
+    digest = hashlib.sha256(f"{conversation_id}:".encode() + content).hexdigest()[:24]
     _, ext = os.path.splitext(file.filename or "")
-    asset_id = f"{digest}{ext[:12].lower()}"
+    ext = re.sub(r"[^A-Za-z0-9_.-]", "", ext[:12].lower())
+    asset_id = f"{digest}{ext}"
 
     mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
     meta = {
