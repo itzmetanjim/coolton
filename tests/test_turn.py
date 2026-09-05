@@ -396,3 +396,37 @@ def test_stopped_run_context_preserved_for_stranded_steering_message(mocks, monk
     assert turn.run_agent.call_count == 2
     second_call = turn.run_agent.call_args_list[1]
     assert second_call.kwargs["message_history"] == halted_messages
+
+
+def test_stranded_steering_recursion_stops_at_the_depth_limit(mocks, monkeypatch):
+    """Each stranded-steering recovery is a real recursive call (a new stack
+    frame), not a loop. If something keeps re-stranding a message on every
+    single turn (a bug elsewhere, or just enough near-simultaneous messages),
+    it must not grow the stack without bound — it should give up after
+    _MAX_STRANDED_RECURSION_DEPTH turns rather than recursing forever."""
+    from agent.steering_store import clear_steering_messages, queue_steering_message
+
+    def fake_run_agent(text, deps, message_history=None, images=None):
+        # Every single turn strands another message for the next one to pick up.
+        queue_steering_message("C1", "1.1", "again", "U1", "999.999")
+
+        class _Result:
+            output = "ok"
+
+            def all_messages(self):
+                return []
+
+        return _Result()
+
+    turn.run_agent.side_effect = fake_run_agent
+
+    try:
+        _run_turn(mocks)
+    finally:
+        clear_steering_messages("C1", "1.1")
+
+    # The very first call, plus one recursive call per depth level allowed —
+    # never unbounded.
+    assert turn.run_agent.call_count == turn._MAX_STRANDED_RECURSION_DEPTH + 1
+    mocks.logger.error.assert_called_once()
+    assert "depth limit" in mocks.logger.error.call_args.args[0]

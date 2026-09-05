@@ -22,6 +22,14 @@ from listeners.views.feedback_builder import build_feedback_blocks
 # response that the streaming API rejected as msg_too_long.
 _MAX_MESSAGE_CHARS = 38000
 
+# run_agent_turn recurses into itself (via the `finally` block below) to drain
+# a message stranded in the steering queue by the run that's ending. Each
+# recursive call is a real stack frame, not a loop — bound how deep that can
+# go so a pathological run of stranding (a bug elsewhere re-queuing messages
+# faster than turns can drain them, or just enough near-simultaneous messages
+# racing the same !stop window) can never grow the stack unboundedly.
+_MAX_STRANDED_RECURSION_DEPTH = 25
+
 
 def _chunk_text(text: str, limit: int = _MAX_MESSAGE_CHARS) -> list[str]:
     """Split text into chunks of at most `limit` chars, on line boundaries.
@@ -87,6 +95,7 @@ def run_agent_turn(
     say_stream: SayStream | None = None,
     say: Say | None = None,
     surface: object | None = None,
+    _stranded_recursion_depth: int = 0,
 ) -> None:
     """Run one agent turn: status → plan message → run → stream → history → kevinton.
 
@@ -259,7 +268,19 @@ def run_agent_turn(
         from agent.steering_store import clear_steering_messages, peek_steering_messages
         stranded = peek_steering_messages(channel_id, thread_ts)
         clear_steering_messages(channel_id, thread_ts)
-        if stranded:
+        if stranded and _stranded_recursion_depth >= _MAX_STRANDED_RECURSION_DEPTH:
+            # Give up recursing rather than risk an unbounded stack — this
+            # should never actually happen (it would take that many turns
+            # each stranding another message in the narrow window between
+            # this turn ending and the queue being drained), but silently
+            # dropping the last stranded message is still better than a
+            # crash, and it's logged so a real pathological case is visible.
+            logger.error(
+                "Stranded-steering recursion hit its depth limit (%d) in %s/%s; "
+                "dropping the last stranded message instead of recursing further.",
+                _MAX_STRANDED_RECURSION_DEPTH, channel_id, thread_ts,
+            )
+        elif stranded:
             last = stranded[-1]
             run_agent_turn(
                 client=client,
@@ -274,4 +295,5 @@ def run_agent_turn(
                 user_token=user_token,
                 text=last["text"],
                 history=conversation_store.get_history(channel_id, thread_ts),
+                _stranded_recursion_depth=_stranded_recursion_depth + 1,
             )
