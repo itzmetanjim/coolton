@@ -140,8 +140,13 @@ def title_from_message(text: str, limit: int = 52) -> str:
 
 
 def delete_conversation(conversation_id: str) -> bool:
-    """Remove a conversation's event log and its index entry. Returns whether
-    there was anything to remove."""
+    """Remove a conversation's event log and its index entry, and kill its E2B
+    sandbox if it has one. Returns whether there was anything to remove.
+
+    Without the sandbox teardown, deleting a conversation left its sandbox
+    (and its github_proxy token) running indefinitely — nothing else ever
+    tears one down once the conversation it belonged to is gone.
+    """
     with _index_lock:
         data = _load_index()
         existed = data.pop(conversation_id, None) is not None
@@ -154,6 +159,12 @@ def delete_conversation(conversation_id: str) -> bool:
     _last_seq.pop(conversation_id, None)
     with _subscribers_guard:
         _subscribers.pop(conversation_id, None)
+    try:
+        from agent.sandbox_helpers import kill_thread_sandbox
+        from web.runner import WEB_CHANNEL_ID
+        kill_thread_sandbox(WEB_CHANNEL_ID, conversation_id)
+    except Exception:
+        logger.exception("Failed to kill sandbox for deleted conversation %s", conversation_id)
     return existed
 
 

@@ -143,6 +143,31 @@ def test_delete_conversation_leaves_other_conversations_alone():
     assert [r["id"] for r in log.list_conversations("U1")] == [keep]
 
 
+def test_delete_conversation_kills_its_sandbox(monkeypatch):
+    """Otherwise a deleted conversation's sandbox (and its github_proxy
+    token) keeps running indefinitely — nothing else ever tears it down."""
+    from web.runner import WEB_CHANNEL_ID
+
+    calls = []
+    monkeypatch.setattr("agent.sandbox_helpers.kill_thread_sandbox", lambda ch, tid: calls.append((ch, tid)))
+
+    cid = log.create_conversation("U1", title="doomed")
+    log.delete_conversation(cid)
+
+    assert calls == [(WEB_CHANNEL_ID, cid)]
+
+
+def test_delete_conversation_still_succeeds_if_sandbox_teardown_fails(monkeypatch):
+    def boom(ch, tid):
+        raise RuntimeError("e2b unreachable")
+
+    monkeypatch.setattr("agent.sandbox_helpers.kill_thread_sandbox", boom)
+
+    cid = log.create_conversation("U1", title="doomed")
+    assert log.delete_conversation(cid) is True
+    assert log.get_conversation_meta(cid) is None
+
+
 def test_title_from_message_uses_the_first_non_empty_line():
     assert log.title_from_message("\n\n  deploy the thing  \nand then some") == "deploy the thing"
 
