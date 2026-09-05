@@ -1403,6 +1403,9 @@ def send_web_embed(
 _EMBED_THUMBNAIL_URL = "https://placehold.co/1280x720?text=click%20to%20open%20the%20\\ncoolton%20embed"
 
 
+_WHITEBOARD_ID_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
+
+
 def send_whiteboard_embed(
     text: str = "whiteboard", title: str = "whiteboard", whiteboard_id: str | None = None,
 ) -> tuple[str, str, str, str]:
@@ -1410,7 +1413,13 @@ def send_whiteboard_embed(
     current conversation is the caller's job, via Surface.post_embed — the one
     call site that already knows how to show a live embed on Slack vs. the web
     UI, same as computer_stream_tool/agent_browser_stream_tool."""
-    if whiteboard_id is None:
+    if whiteboard_id is None or not _WHITEBOARD_ID_RE.match(whiteboard_id):
+        # whiteboard_id is model-supplied (the tool docstring invites a
+        # specific id) and gets interpolated straight into a URL path that
+        # WebSurface.post_embed hands the frontend as an iframe src — anything
+        # other than the 6-hex-digit id it's documented to be (e.g. a path
+        # traversal or query-string payload aimed at the felix host) is
+        # silently replaced with a fresh random one rather than used as-is.
         whiteboard_id = f"{random.randint(0, 0xFFFFFF):06X}"
     url = f"https://whiteboard.felix.hackclub.app/{whiteboard_id}"
     return url, f"{title} #{whiteboard_id}", f"{text} #{whiteboard_id}", whiteboard_id

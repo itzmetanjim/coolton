@@ -1034,6 +1034,23 @@ def test_send_web_embed_omits_thread_ts_when_not_given(monkeypatch):
     assert "thread_ts" not in post.call_args.kwargs["json"]
 
 
+def test_send_whiteboard_embed_rejects_a_malformed_whiteboard_id():
+    """whiteboard_id is model-supplied and gets interpolated straight into a
+    URL path an embed's iframe src carries to the frontend — anything other
+    than the documented 6-hex-digit id (e.g. a path-traversal or
+    query-string payload) must be replaced with a fresh random id instead of
+    used verbatim."""
+    url, _, _, whiteboard_id = agent_mod.send_whiteboard_embed(whiteboard_id="../evil?x=1")
+    assert "../evil" not in url
+    assert agent_mod._WHITEBOARD_ID_RE.match(whiteboard_id)
+
+
+def test_send_whiteboard_embed_accepts_a_valid_hex_id():
+    url, _, _, whiteboard_id = agent_mod.send_whiteboard_embed(whiteboard_id="3A9F01")
+    assert whiteboard_id == "3A9F01"
+    assert url == "https://whiteboard.felix.hackclub.app/3A9F01"
+
+
 def test_whiteboard_embed_tool_threads_off_the_current_deps_thread_ts(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     with patch("agent.agent.requests.post") as post:

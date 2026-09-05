@@ -16,6 +16,23 @@
     return IMAGE_EXTENSIONS.test((name || '').split(/[?#]/)[0]);
   }
 
+  // Every current event producer builds ev.url server-side from a fixed
+  // template (a coolton file-server link, a whiteboard/desktop-stream URL),
+  // so there's no live path from model output to here today — but
+  // Surface.post_embed/post_image/post_file_link are public methods, and an
+  // unvalidated string handed straight to iframe.src/a.href/img.src is one
+  // future tool call away from a "javascript:" URL executing in this page's
+  // origin. Only ever assign a value this has approved.
+  function safeUrl(url) {
+    if (typeof url !== 'string' || !url) return '';
+    try {
+      const resolved = new URL(url, window.location.href);
+      return (resolved.protocol === 'http:' || resolved.protocol === 'https:') ? url : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
   const mdRenderer = new marked.Renderer();
   mdRenderer.code = function (code, infostring) {
     const lang = (infostring || '').trim().split(/\s+/)[0];
@@ -677,7 +694,7 @@
       const card = document.createElement('div');
       card.className = 'image-card';
       const img = document.createElement('img');
-      img.src = ev.url;
+      img.src = safeUrl(ev.url);
       img.alt = ev.alt_text || '';
       card.appendChild(img);
       content.appendChild(card);
@@ -690,7 +707,7 @@
       if (isImageFilename(ev.filename || ev.url)) {
         const img = document.createElement('img');
         img.className = 'file-preview';
-        img.src = ev.url;
+        img.src = safeUrl(ev.url);
         img.alt = ev.filename || '';
         card.appendChild(img);
       }
@@ -699,7 +716,7 @@
       row.className = 'file-row';
 
       const link = document.createElement('a');
-      link.href = ev.url;
+      link.href = safeUrl(ev.url);
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
       link.className = 'file-label';
@@ -707,7 +724,7 @@
       row.appendChild(link);
 
       const dl = document.createElement('a');
-      dl.href = ev.url;
+      dl.href = safeUrl(ev.url);
       dl.download = ev.filename || '';
       dl.className = 'file-download';
       dl.title = 'Download';
@@ -730,7 +747,7 @@
       const head = document.createElement('div');
       head.className = 'embed-head';
       const link = document.createElement('a');
-      link.href = ev.url;
+      link.href = safeUrl(ev.url);
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
       link.className = 'embed-label';
@@ -740,10 +757,18 @@
 
       const frame = document.createElement('iframe');
       frame.className = 'embed-frame';
-      frame.src = ev.url;
+      frame.src = safeUrl(ev.url);
       frame.title = ev.title || 'Embedded content';
       frame.loading = 'lazy';
       frame.allow = 'clipboard-write; fullscreen';
+      frame.referrerPolicy = 'no-referrer';
+      // allow-same-origin is safe here because the embed is always a
+      // cross-origin URL (the coolton file server / whiteboard / desktop
+      // stream, never this page's own origin) — it's what the noVNC desktop
+      // stream needs for its own storage/WebSocket use. Deliberately no
+      // allow-top-navigation: framed content (including model-authored HTML
+      // via send_html_embed) must never be able to navigate this page away.
+      frame.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups';
       card.appendChild(frame);
 
       if (ev.text && ev.text !== ev.title) {
