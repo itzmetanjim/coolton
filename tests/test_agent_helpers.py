@@ -1219,6 +1219,94 @@ def test_run_linux_command_arms_keepalive_instead_of_pausing_when_active(monkeyp
     assert ctx.deps.keep_sandbox_warm is True
 
 
+# ---------------------------------------------------------------------------
+# Sandbox file/background tool wrappers — each just forwards ctx.deps.channel_id/
+# thread_ts and its own args to the plain function in agent.tools.sandbox_files /
+# agent.tools.sandbox_background (see tests/test_sandbox_files.py and
+# tests/test_sandbox_background.py for the actual behavior of those functions).
+# ---------------------------------------------------------------------------
+
+
+def _capturing(captured, retval):
+    """A stand-in for a monkeypatched function: records the args it was
+    called with under captured["args"] and always returns `retval`
+    (unlike `lambda *a: captured.setdefault(...) or retval`, which breaks the
+    moment `a` itself is truthy — setdefault returns the stored value, so a
+    non-empty args tuple short-circuits the `or` and `retval` never wins)."""
+    def _fn(*args):
+        captured["args"] = args
+        return retval
+    return _fn
+
+
+def test_read_sandbox_file_tool_forwards_offset_and_limit(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("agent.tools.sandbox_files.read_sandbox_file", _capturing(captured, "file contents"))
+    ctx = _run_ctx(Mock())
+    result = agent_mod.read_sandbox_file_tool(ctx, "/f.txt", offset=5, limit=10)
+    assert result == "file contents"
+    assert captured["args"] == ("C1", "1.2", "/f.txt", 5, 10)
+
+
+def test_write_sandbox_file_tool_forwards_path_and_content(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("agent.tools.sandbox_files.write_sandbox_file", _capturing(captured, "ok"))
+    ctx = _run_ctx(Mock())
+    agent_mod.write_sandbox_file_tool(ctx, "/f.txt", "hello")
+    assert captured["args"] == ("C1", "1.2", "/f.txt", "hello")
+
+
+def test_edit_sandbox_file_tool_forwards_all_args(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("agent.tools.sandbox_files.edit_sandbox_file", _capturing(captured, "ok"))
+    ctx = _run_ctx(Mock())
+    agent_mod.edit_sandbox_file_tool(ctx, "/f.py", "old", "new", replace_all=True)
+    assert captured["args"] == ("C1", "1.2", "/f.py", "old", "new", True)
+
+
+def test_search_sandbox_files_tool_forwards_all_args(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("agent.tools.sandbox_files.search_sandbox_files", _capturing(captured, "matches"))
+    ctx = _run_ctx(Mock())
+    agent_mod.search_sandbox_files_tool(
+        ctx, "pattern", path="/repo", glob="*.py", case_insensitive=True,
+        output_mode="count", context_lines=2, head_limit=10,
+    )
+    assert captured["args"] == ("C1", "1.2", "pattern", "/repo", "*.py", True, "count", 2, 10)
+
+
+def test_list_sandbox_files_tool_forwards_all_args(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("agent.tools.sandbox_files.list_sandbox_files", _capturing(captured, "files"))
+    ctx = _run_ctx(Mock())
+    agent_mod.list_sandbox_files_tool(ctx, "**/*.py", path="/repo", limit=5)
+    assert captured["args"] == ("C1", "1.2", "**/*.py", "/repo", 5)
+
+
+def test_run_background_command_tool_forwards_command_and_cwd(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("agent.tools.sandbox_background.run_background_command", _capturing(captured, "started"))
+    ctx = _run_ctx(Mock())
+    agent_mod.run_background_command_tool(ctx, "npm run dev", cwd="/app")
+    assert captured["args"] == ("C1", "1.2", "npm run dev", "/app")
+
+
+def test_check_background_command_tool_forwards_job_id_and_tail_lines(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("agent.tools.sandbox_background.check_background_command", _capturing(captured, "status"))
+    ctx = _run_ctx(Mock())
+    agent_mod.check_background_command_tool(ctx, "abcd1234", tail_lines=50)
+    assert captured["args"] == ("C1", "1.2", "abcd1234", 50)
+
+
+def test_kill_background_command_tool_forwards_job_id(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("agent.tools.sandbox_background.kill_background_command", _capturing(captured, "killed"))
+    ctx = _run_ctx(Mock())
+    agent_mod.kill_background_command_tool(ctx, "abcd1234")
+    assert captured["args"] == ("C1", "1.2", "abcd1234")
+
+
 def test_computer_stream_tool_sets_keepalive_and_arms_it(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
