@@ -68,6 +68,17 @@ def secret_values() -> list[tuple[str, str]]:
                         if not line or line.startswith("#") or "=" not in line:
                             continue
                         key, value = line.split("=", 1)
+                        key = key.strip()
+                        if key.startswith("export "):
+                            key = key[len("export "):].strip()
+                        value = value.strip()
+                        # A quoted value ("abc" or 'abc') would otherwise be
+                        # registered including its quote characters, so the
+                        # bare secret value (what actually appears in tool
+                        # output/errors) would never match and never get
+                        # redacted.
+                        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                            value = value[1:-1]
                         if any(hint in key for hint in _SECRET_NAME_HINTS):
                             _add(key, value)
             except OSError:
