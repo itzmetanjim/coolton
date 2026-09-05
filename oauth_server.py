@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shlex
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,10 +80,16 @@ def _restart_coolton(bot_user_id: str = "") -> None:
     # the membership sync (best-effort) and restart a second later so the
     # handler isn't killed mid-response. `;` keeps the restart from being
     # skipped if the sync exits non-zero.
+    #
+    # bot_user_id comes straight from Slack's oauth.v2.access response (only
+    # reachable past oauth_redirect's authed_user_id == COOLTON_USER_ID check,
+    # but there's no reason for it to pass through a shell at all) — quoted
+    # with shlex.quote rather than interpolated into the bash -c string, so a
+    # hostile or malformed response can't inject additional shell commands.
     venv_python = BASE_DIR / ".venv" / "bin" / "python"
     cmd = (
-        f"sleep 1 && {venv_python} {BASE_DIR / 'oauth_sync.py'} {bot_user_id}; "
-        f"sudo -n systemctl restart coolton.service"
+        f"sleep 1 && {shlex.quote(str(venv_python))} {shlex.quote(str(BASE_DIR / 'oauth_sync.py'))} "
+        f"{shlex.quote(bot_user_id)}; sudo -n systemctl restart coolton.service"
     )
     subprocess.Popen(
         ["bash", "-c", cmd],
@@ -182,6 +189,20 @@ def oauth_redirect(request: Request, code: str = Query(""), state: str = Query("
         _log_error({"event": "env_update_failed", "error": str(e), "response": result})
         logger.exception("Failed to update .env")
         return HTMLResponse(f"<h3>Failed to update .env: {e}</h3>", status_code=500)
+
+    if changed == 0:
+        # _update_env only rewrites lines that already start with
+        # SLACK_BOT_TOKEN=/SLACK_USER_TOKEN= — if .env has neither (a fresh
+        # checkout, a renamed key, a manually edited file), it silently wrote
+        # nothing and this would otherwise report success and restart the
+        # service with the OLD tokens still in place.
+        _log_error({"event": "env_no_lines_matched", "response": result})
+        logger.error(".env has no SLACK_BOT_TOKEN=/SLACK_USER_TOKEN= lines to update")
+        return HTMLResponse(
+            "<h3>Failed to update .env: no SLACK_BOT_TOKEN=/SLACK_USER_TOKEN= lines found. "
+            "Tokens NOT updated, service NOT restarted.</h3>",
+            status_code=500,
+        )
 
     _restart_coolton(bot_user_id)
     logger.info("Reinstalled by cooltonUser: .env updated (%s lines), restart scheduled", changed)
