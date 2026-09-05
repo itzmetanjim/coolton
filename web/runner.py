@@ -63,6 +63,27 @@ def submit_message(conversation_id: str, user_id: str, text: str, attachments: l
         })
         return
 
+    # message.py/app_mentioned.py gate every Slack turn on policy consent
+    # (agent.policy_consent.ensure_consent) before it ever reaches
+    # run_agent_turn — nothing on this path called it, so any Hack Club Auth
+    # account could drive the full toolset (sandbox execution, the GitHub PAT
+    # proxy, slack_api_call as SLACK_USER_TOKEN) without ever giving the
+    # consent Slack requires first. ensure_consent itself needs a Slack `say`
+    # to post interactive opt-in buttons into, which the web surface has none
+    # of — check the cheap, file-backed has_consent() directly and point the
+    # user at the Slack flow instead of trying to reproduce it here.
+    from agent.policy_consent import has_consent
+    if not has_consent(user_id):
+        log.append_event(conversation_id, {
+            "type": "agent_message", "variant": "final",
+            "text": (
+                "you need to opt in to the Coolton policy before using coolton here. "
+                "DM coolton on Slack once to opt in, then come back."
+            ),
+        })
+        log.append_event(conversation_id, {"type": "turn_end", "state": "error", "reason": "no policy consent"})
+        return
+
     # Name the conversation after the message that opened it, so the sidebar
     # isn't a column of identical placeholders. Only ever fills a blank name —
     # a title the user set by hand, or one already derived, is never overwritten.
