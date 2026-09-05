@@ -41,11 +41,19 @@ REMINDER_RETENTION_SECONDS = 7 * 86400
 def _prune_sent_reminders(data: dict) -> None:
     """Drop reminders sent more than a week ago so reminders.json doesn't grow
     forever — every reminder ever created otherwise stays in the file (and gets
-    re-scanned every 30s by check_reminders) indefinitely."""
+    re-scanned every 30s by check_reminders) indefinitely.
+
+    Uses .get() rather than direct indexing: this (and _get_due_reminders,
+    same reasoning) runs inside the recurring check_reminders job with no
+    surrounding try/except at this level — one legacy or hand-edited entry
+    missing "sent"/"due_at" would otherwise raise KeyError and silently
+    disable reminders on every single run from then on, forever, not just
+    skip that one bad entry.
+    """
     now = time.time()
     data["reminders"] = [
         r for r in data["reminders"]
-        if not r["sent"] or now - r["due_at"] < REMINDER_RETENTION_SECONDS
+        if not r.get("sent") or now - r.get("due_at", now) < REMINDER_RETENTION_SECONDS
     ]
 
 
@@ -71,7 +79,7 @@ def _get_due_reminders() -> list[dict]:
     now = time.time()
     with reminders_lock:
         data = _load_reminders()
-        due = [r for r in data["reminders"] if not r["sent"] and r["due_at"] <= now]
+        due = [r for r in data["reminders"] if not r.get("sent") and r.get("due_at", float("inf")) <= now]
         return due
 
 
