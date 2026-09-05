@@ -420,19 +420,43 @@
   }
 
   function connectStream(id, after) {
-    eventSource = new EventSource(`/api/conversations/${id}/events?after=${after}`);
-    eventSource.onmessage = (msg) => {
-      if (!msg.data) return;
-      let ev;
-      try { ev = JSON.parse(msg.data); } catch (e) { return; }
-      if (id !== currentConversationId) return;
-      if (transcriptEl.querySelector('.empty-state')) transcriptEl.innerHTML = '';
-      handleEvent(ev);
-      scrollToBottomIfNearBottom();
-    };
-    eventSource.onerror = () => {
-      // EventSource auto-reconnects; nothing to do but let it retry.
-    };
+    // The server never sends an SSE "id:" field, so a native EventSource
+    // reconnect (a network blip, the tab being backgrounded, a server
+    // restart) just reopens this exact URL — including the "after" it was
+    // built with at the very first connect, frozen forever. Every reconnect
+    // then replays the whole turn from that stale watermark, and nothing
+    // dedupes it, which is why a turn could render itself several times
+    // over. Closing the EventSource ourselves in onerror (instead of letting
+    // it auto-reconnect) and reopening with an advancing "after" fixes the
+    // replay; the seenSeqs check is a second guard against the server's own
+    // replay-vs-live-queue overlap (see stream_events' own comment) landing
+    // on this same connection.
+    let lastSeq = after;
+    const seenSeqs = new Set();
+
+    function open() {
+      eventSource = new EventSource(`/api/conversations/${id}/events?after=${lastSeq}`);
+      eventSource.onmessage = (msg) => {
+        if (!msg.data) return;
+        let ev;
+        try { ev = JSON.parse(msg.data); } catch (e) { return; }
+        if (id !== currentConversationId) return;
+        if (ev.seq != null) {
+          if (seenSeqs.has(ev.seq)) return;
+          seenSeqs.add(ev.seq);
+          lastSeq = Math.max(lastSeq, ev.seq);
+        }
+        if (transcriptEl.querySelector('.empty-state')) transcriptEl.innerHTML = '';
+        handleEvent(ev);
+        scrollToBottomIfNearBottom();
+      };
+      eventSource.onerror = () => {
+        if (id !== currentConversationId) return;
+        eventSource.close();
+        setTimeout(() => { if (id === currentConversationId) open(); }, 2000);
+      };
+    }
+    open();
   }
 
   function scrollToBottom() {
