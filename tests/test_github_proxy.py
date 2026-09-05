@@ -210,3 +210,77 @@ def test_forward_never_sends_real_pat_to_a_pages_host(monkeypatch):
 
 def test_rewrite_url_with_port_in_host():
     assert gp._rewrite_url(f"{HOST}:443", "/o/r") == "https://github.com/o/r"
+
+
+# ---------------------------------------------------------------------------
+# _AdminHandler._admin_ok — timing-safe comparison, fail-closed on empty token
+# ---------------------------------------------------------------------------
+
+
+def _admin_handler(auth_header):
+    handler = gp._AdminHandler.__new__(gp._AdminHandler)
+    handler.headers = {"Authorization": auth_header} if auth_header is not None else {}
+    return handler
+
+
+def test_admin_ok_accepts_the_real_token(monkeypatch):
+    monkeypatch.setattr(gp, "ADMIN_TOKEN", "correct-admin-token")
+    assert _admin_handler("Bearer correct-admin-token")._admin_ok() is True
+
+
+def test_admin_ok_rejects_wrong_token(monkeypatch):
+    monkeypatch.setattr(gp, "ADMIN_TOKEN", "correct-admin-token")
+    assert _admin_handler("Bearer wrong-token")._admin_ok() is False
+
+
+def test_admin_ok_rejects_missing_header(monkeypatch):
+    monkeypatch.setattr(gp, "ADMIN_TOKEN", "correct-admin-token")
+    assert _admin_handler(None)._admin_ok() is False
+
+
+def test_admin_ok_fails_closed_when_admin_token_unconfigured(monkeypatch):
+    """An empty ADMIN_TOKEN must never be trivially satisfiable by an empty
+    presented value (mirrors coolton_web_helper._authorized's own posture)."""
+    monkeypatch.setattr(gp, "ADMIN_TOKEN", "")
+    assert _admin_handler("Bearer ")._admin_ok() is False
+    assert _admin_handler("Bearer anything")._admin_ok() is False
+
+
+def test_admin_ok_uses_constant_time_comparison(monkeypatch):
+    monkeypatch.setattr(gp, "ADMIN_TOKEN", "correct-admin-token")
+    calls = []
+    real_compare = gp.hmac.compare_digest
+
+    def spy(a, b):
+        calls.append((a, b))
+        return real_compare(a, b)
+
+    monkeypatch.setattr(gp.hmac, "compare_digest", spy)
+    _admin_handler("Bearer wrong-token")._admin_ok()
+    assert calls == [("wrong-token", "correct-admin-token")]
+
+
+# ---------------------------------------------------------------------------
+# _forward's denial log never contains the presented token verbatim
+# ---------------------------------------------------------------------------
+
+
+def test_forward_denial_log_never_contains_the_raw_token(monkeypatch, caplog):
+    import io
+    from unittest.mock import MagicMock
+
+    handler = gp._Handler.__new__(gp._Handler)
+    handler.command = "GET"
+    handler.path = "/o/r"
+    handler.headers = {"Authorization": "Bearer a-mistakenly-pasted-real-pat"}
+    handler.rfile = io.BytesIO(b"")
+    handler.wfile = io.BytesIO()
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.connection = MagicMock()
+
+    with caplog.at_level("WARNING", logger="github_proxy"):
+        handler._forward()
+
+    assert "a-mistakenly-pasted-real-pat" not in caplog.text
