@@ -263,58 +263,135 @@ def test_format_ts_none_or_zero():
     assert scheduler._format_ts(0) == "n/a"
 
 
-def test_fire_task_posts_and_updates_next_run(tmp_files, monkeypatch):
+def _fake_web_client(monkeypatch, post_result=None, post_error=None):
+    """Stand in for slack_sdk.WebClient in _fire_task: records chat_postMessage
+    calls and returns/raises what the test wants, without a real network call."""
+    calls = []
+
+    class FakeClient:
+        def __init__(self, token=None):
+            self.token = token
+
+        def chat_postMessage(self, **kwargs):
+            calls.append(kwargs)
+            if post_error is not None:
+                raise post_error
+            return post_result if post_result is not None else {"ok": True, "ts": "999.1"}
+
+    monkeypatch.setattr(scheduler, "WebClient", FakeClient)
+    return calls
+
+
+def test_fire_task_posts_a_banner_and_updates_next_run(tmp_files, monkeypatch):
     scheduler.create_scheduled_task(OWNER, "C1", "1.1", "daily", "0 9 * * *")
     task_id = scheduler._load_tasks()["tasks"][0]["id"]
     monkeypatch.setattr(scheduler, "_scheduler", None)  # ensure no cron job registration
-
-    class FakeResponse:
-        def json(self):
-            return {"ok": True}
-
-    import requests
-
-    calls = []
-
-    def fake_post(url, **kwargs):
-        calls.append((url, kwargs))
-        return FakeResponse()
-
-    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(scheduler._task_executor, "submit", lambda *a, **k: None)
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+
+    calls = _fake_web_client(monkeypatch)
 
     scheduler._fire_task(task_id)
 
     assert len(calls) == 1
-    assert calls[0][0] == "https://slack.com/api/chat.postMessage"
-    payload = calls[0][1]["json"]
-    assert payload["channel"] == "C1"
-    assert payload["thread_ts"] == "1.1"
-    assert "Scheduled task" in payload["text"]
+    assert calls[0]["channel"] == "C1"
+    assert calls[0]["thread_ts"] == "1.1"
+    assert "Scheduled task" in calls[0]["text"]
 
     task = scheduler._load_tasks()["tasks"][0]
     assert task["last_run_at"] is not None
     assert task["next_run_at"] is not None
 
 
-def test_fire_task_no_advance_on_failure(tmp_files, monkeypatch):
-    scheduler.create_scheduled_task(OWNER, "C1", "1.1", "daily", "0 9 * * *")
+def test_fire_task_runs_a_real_turn_threaded_off_the_banner(tmp_files, monkeypatch):
+    """The bug being fixed: firing used to stop after posting the banner —
+    both listeners.events.message and .app_mentioned drop every bot_id
+    message, so the prompt never actually ran anything. It must now submit a
+    real turn to the task executor."""
+    scheduler.create_scheduled_task(OWNER, "C1", "", "do the thing", "0 9 * * *")
     task_id = scheduler._load_tasks()["tasks"][0]["id"]
-
-    import requests
-
-    class FakeResponse:
-        def json(self):
-            return {"ok": False, "error": "not_in_channel"}
-
-    monkeypatch.setattr(requests, "post", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(scheduler, "_scheduler", None)
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    _fake_web_client(monkeypatch, post_result={"ok": True, "ts": "555.1"})
+
+    submitted = []
+    monkeypatch.setattr(scheduler._task_executor, "submit", lambda fn, *a: submitted.append((fn, a)))
 
     scheduler._fire_task(task_id)
 
+    assert len(submitted) == 1
+    fn, args = submitted[0]
+    assert fn is scheduler._run_scheduled_turn
+    client, channel_id, thread_ts, message_ts, user_id, prompt = args
+    assert channel_id == "C1"
+    # No origin thread_ts was given, so the banner's own ts starts the thread.
+    assert thread_ts == "555.1"
+    assert message_ts == "555.1"
+    assert user_id == OWNER
+    assert prompt == "do the thing"
+
+
+def test_fire_task_uses_the_origin_thread_ts_when_the_task_has_one(tmp_files, monkeypatch):
+    scheduler.create_scheduled_task(OWNER, "C1", "1.1", "daily", "0 9 * * *")
+    task_id = scheduler._load_tasks()["tasks"][0]["id"]
+    monkeypatch.setattr(scheduler, "_scheduler", None)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    _fake_web_client(monkeypatch, post_result={"ok": True, "ts": "555.1"})
+
+    submitted = []
+    monkeypatch.setattr(scheduler._task_executor, "submit", lambda fn, *a: submitted.append((fn, a)))
+
+    scheduler._fire_task(task_id)
+
+    _, args = submitted[0]
+    assert args[2] == "1.1"  # thread_ts: the task's own origin thread, not the banner's ts
+
+
+def test_fire_task_no_advance_and_no_turn_when_the_banner_post_fails(tmp_files, monkeypatch):
+    from slack_sdk.errors import SlackApiError
+
+    scheduler.create_scheduled_task(OWNER, "C1", "1.1", "daily", "0 9 * * *")
+    task_id = scheduler._load_tasks()["tasks"][0]["id"]
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    _fake_web_client(monkeypatch, post_error=SlackApiError("not_in_channel", {"ok": False, "error": "not_in_channel"}))
+
+    submitted = []
+    monkeypatch.setattr(scheduler._task_executor, "submit", lambda *a, **k: submitted.append(a))
+
+    scheduler._fire_task(task_id)
+
+    task = scheduler._load_tasks()["tasks"][0]
+    assert task["last_run_at"] is None
+    assert submitted == []
+
+
+def test_fire_task_banned_owner_is_skipped_entirely(tmp_files, monkeypatch):
+    scheduler.create_scheduled_task(OWNER, "C1", "1.1", "daily", "0 9 * * *")
+    task_id = scheduler._load_tasks()["tasks"][0]["id"]
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == OWNER)
+    calls = _fake_web_client(monkeypatch)
+
+    scheduler._fire_task(task_id)
+
+    assert calls == []
     task = scheduler._load_tasks()["tasks"][0]
     assert task["last_run_at"] is None
 
 
 def test_fire_task_missing_task_is_noop(tmp_files):
     scheduler._fire_task("does-not-exist")  # should not raise
+
+
+def test_create_scheduled_task_enforces_the_per_user_cap(tmp_files):
+    for i in range(scheduler.MAX_TASKS_PER_USER):
+        msg = scheduler.create_scheduled_task(OWNER, "C1", "1.1", f"task {i}", "0 9 * * *")
+        assert msg.startswith("Created scheduled task ")
+
+    msg = scheduler.create_scheduled_task(OWNER, "C1", "1.1", "one too many", "0 9 * * *")
+    assert f"you already have {scheduler.MAX_TASKS_PER_USER}" in msg
+    assert len(scheduler._load_tasks()["tasks"]) == scheduler.MAX_TASKS_PER_USER
+
+    # Cap is per-user — a different user is unaffected.
+    other_msg = scheduler.create_scheduled_task(OTHER, "C1", "1.1", "theirs", "0 9 * * *")
+    assert other_msg.startswith("Created scheduled task ")
