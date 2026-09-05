@@ -5,6 +5,7 @@ from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
 from agent.active_runs import is_run_active
+from agent.ban_store import apply_ban_command, is_authorized, parse_ban_command
 from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import join_thread
 from agent.steering_store import queue_steering_message
@@ -53,6 +54,21 @@ def handle_app_mentioned(
                 text="⏹️ stopping all your running coolton instances…",
                 thread_ts=thread_ts,
             )
+            return
+
+        # !ban / !unban: silently ignored (not even a "not authorized" reply)
+        # for anyone but ban_store.BAN_ADMIN_USER_ID, so the mechanism isn't
+        # exposed to random users typing the syntax.
+        ban_command = parse_ban_command(text, bot_id)
+        if ban_command:
+            if not is_authorized(user_id):
+                return
+            action, target_user_id, reason = ban_command
+            apply_ban_command(client, action, target_user_id, reason)
+            try:
+                client.reactions_add(channel=channel_id, timestamp=event["ts"], name="white_check_mark")
+            except Exception:
+                logger.exception("Failed to react to ban/unban command")
             return
 
         from agent.policy_consent import ensure_consent

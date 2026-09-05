@@ -100,6 +100,19 @@ def run_agent_turn(
     `surface` and no `say_stream`/`say`; everything downstream — steering, !stop,
     kevinton, history compaction — is the exact same pipeline either way.
     """
+    from agent.ban_store import is_banned
+    if is_banned(user_id):
+        # The single choke point both Slack and the web UI funnel through, so
+        # a ban applies everywhere at once rather than needing a check per
+        # surface. No plan block, no active_runs tracking — this never starts
+        # a real turn at all.
+        refusal = "you're banned from using coolton."
+        if say:
+            say(text=refusal, thread_ts=thread_ts)
+        elif surface is not None:
+            surface.post_error(refusal)
+        return
+
     # Slack callers either pass an explicit SlackSurface or nothing (the lazy
     # default is also a SlackSurface); a non-Slack caller always passes its own
     # surface explicitly. Decided once, up front, so both the try body and the

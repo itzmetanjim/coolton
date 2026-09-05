@@ -68,6 +68,30 @@ def _run_turn(mocks, text="hello"):
     )
 
 
+def test_banned_user_short_circuits_before_any_work(mocks, monkeypatch):
+    import agent.ban_store as ban_store
+    monkeypatch.setattr(ban_store, "is_banned", lambda user_id: user_id == "U1")
+
+    _run_turn(mocks, text="hello")
+
+    turn.run_agent.assert_not_called()
+    mocks.client.assistant_threads_setStatus.assert_not_called()
+    mocks.say.assert_called_once()
+    assert "banned" in mocks.say.call_args.kwargs["text"]
+
+    import agent.plan_block as pb
+    pb.send_plan_message.assert_not_called()
+
+
+def test_non_banned_user_runs_normally(mocks, monkeypatch):
+    import agent.ban_store as ban_store
+    monkeypatch.setattr(ban_store, "is_banned", lambda user_id: user_id == "SOMEONE_ELSE")
+
+    _run_turn(mocks, text="hello")
+
+    turn.run_agent.assert_called_once()
+
+
 def test_happy_path(mocks):
     import agent.plan_block as pb
     _run_turn(mocks)

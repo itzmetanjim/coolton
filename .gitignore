@@ -67,6 +67,7 @@ conversations.json
 fallback_cache.json
 mcp_health.json
 leave_thread_store.json
+ban_store.json
 reminders.json
 scheduled_tasks.json
 thread_sandboxes.json
