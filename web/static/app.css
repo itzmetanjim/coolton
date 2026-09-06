@@ -359,6 +359,7 @@ button { font: inherit; color: inherit; }
   background: var(--panel); border: 1px solid var(--line); border-radius: 20px;
   padding: 1px 8px; font-size: 13px; line-height: 1.5;
 }
+.emoji-img { width: 1.2em; height: 1.2em; vertical-align: -0.25em; object-fit: contain; }
 
 /* ---------------------------------------------------------------------- */
 /* Step log — collapsible, with real JSON args, not flattened key=value     */
