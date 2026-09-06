@@ -63,6 +63,11 @@
     .then((m) => { EMOJI_MAP = m; })
     .catch(() => { EMOJI_MAP = {}; });
 
+  // Not every standard Slack emoji (e.g. custom workspace emoji) resolves to
+  // Unicode. cachet.dunkirk.sh mirrors Slack's custom emoji by name and
+  // redirects /emojis/<name>/r to the actual image.
+  const CUSTOM_EMOJI_URL = (name) => `https://cachet.dunkirk.sh/emojis/${encodeURIComponent(name)}/r`;
+
   function emojiFor(name) {
     if (!EMOJI_MAP) return null;
     const key = name.toLowerCase();
@@ -76,8 +81,19 @@
     return text.replace(/:([a-z0-9_+\-]+):/gi, (match, name) => emojiFor(name) || match);
   }
 
+  // Same as convertShortcodes, but for text headed into innerHTML: unresolved
+  // names become an <img> for a custom emoji instead of staying as ":name:".
+  function convertShortcodesHTML(text) {
+    if (!EMOJI_MAP || !text) return text;
+    return text.replace(/:([a-z0-9_+\-]+):/gi, (match, name) => {
+      const glyph = emojiFor(name);
+      if (glyph) return glyph;
+      return `<img class="emoji-img" src="${CUSTOM_EMOJI_URL(name)}" alt="${match}" title="${match}">`;
+    });
+  }
+
   function renderMarkdown(text) {
-    const raw = marked.parse(convertShortcodes(text || ''));
+    const raw = marked.parse(convertShortcodesHTML(text || ''));
     return DOMPurify.sanitize(raw, { ADD_ATTR: ['target', 'rel'] });
   }
 
@@ -845,7 +861,16 @@
     if (ev.op === 'add') {
       const badge = document.createElement('span');
       badge.className = 'reaction-badge';
-      badge.textContent = emojiFor(ev.emoji) || `:${ev.emoji}:`;
+      const glyph = emojiFor(ev.emoji);
+      if (glyph) {
+        badge.textContent = glyph;
+      } else {
+        const img = document.createElement('img');
+        img.className = 'emoji-img';
+        img.src = CUSTOM_EMOJI_URL(ev.emoji);
+        img.alt = `:${ev.emoji}:`;
+        badge.appendChild(img);
+      }
       badge.title = `:${ev.emoji}:`;
       badge.dataset.emoji = ev.emoji;
       container.appendChild(badge);
