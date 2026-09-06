@@ -1819,7 +1819,14 @@ def join_thread_tool(ctx: RunContext[AgentDeps]) -> str:
 def send_message(ctx: RunContext[AgentDeps], text: str) -> str:
     """Send a message to the current Slack thread mid-turn. Use this to post progress updates,
     intermediate results, or messages that don't wait for the final response.
-    
+
+    This is for STATUS UPDATES — see the system prompt's STATUS UPDATES section for the exact
+    format. Reminder since this is easy to forget mid-task: `text` MUST start with one marker
+    character (→ ↺ ? ● ◐ ○ ⚠), a space, then the rest of the line in _italics_ (single
+    underscores), e.g. `→ _checking the deploy logs for the last restart_`. Never send a plain,
+    unmarked, non-italic line through this tool — that's for the final answer only, which
+    doesn't use this tool at all.
+
     Args:
         text: The message content to send (Markdown supported).
     """
