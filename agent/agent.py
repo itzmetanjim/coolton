@@ -164,34 +164,6 @@ def get_runtime_model(deps_user_id: str | None = None) -> str:
     )
 
 
-_VISION_MODEL_MARKERS = (
-    "claude",
-    "gpt-4",
-    "gpt-5",
-    "o1",
-    "o3",
-    "o4",
-    "luna",
-    "gemini",
-    "kimi",
-    "minimax",
-    "gemma",
-    "versatile",
-    "llava",
-    "vision",
-    "vlm",
-    "-vl",
-)
-
-
-def _is_vision_capable(model_name: str) -> bool:
-    """Best-effort check of whether a model string supports image input."""
-    m = model_name.lower()
-    if m.startswith("anthropic:"):
-        return True
-    return any(marker in m for marker in _VISION_MODEL_MARKERS)
-
-
 def _resolve_provider_order(deps_user_id: str | None = None, tag: str | None = None) -> list:
     """The provider fallback order the run loop will actually try, cache-adjusted.
 
@@ -2408,7 +2380,7 @@ def run_agent(text, deps, message_history=None, images=None):
         first_model = provider_order[0][1]["model"]
     except Exception:
         first_model = ""
-    is_vision = _is_vision_capable(first_model)
+    is_vision = provider_config.is_vision_model(first_model)
 
     # Everything folded into full_prompt (the Agent's system_prompt) must be
     # byte-identical across every turn of a thread, or providers can never

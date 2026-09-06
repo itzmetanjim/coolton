@@ -188,6 +188,23 @@ def test_is_vision_model_matches_after_pydantic_ai_strips_the_provider_prefix(is
     assert provider_config.is_vision_model("anthropic:claude-x") is True
 
 
+def test_is_vision_model_true_for_a_name_with_no_recognizable_marker_words(isolated_config):
+    """Regression: agent.py used to also have a hand-maintained substring-marker
+    list (_VISION_MODEL_MARKERS) answering this same question for turn-context
+    purposes, which drifted out of sync with providers.json — e.g. it didn't
+    know "z-ai/glm-5.3-flash" or "qwen/qwen3.6-27b" were vision-capable even
+    though both are tagged "vision" here, so a real turn wrongly told itself
+    (and the user) it couldn't see images. is_vision_model must stay the only
+    place this is decided, so a model with a name matching none of that old
+    list's substrings ("claude", "gpt-4", "gemini", ...) still resolves True
+    purely from the tag."""
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [{"provider": "p1", "model": "z-ai/glm-5.3-flash", "tags": ["vision"]}],
+    })
+    assert provider_config.is_vision_model("z-ai/glm-5.3-flash") is True
+
+
 def test_is_vision_model_false_for_a_model_not_in_config(isolated_config):
     isolated_config({
         "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],

@@ -27,44 +27,18 @@ def clean_env(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _is_vision_capable
+# Whether a turn is vision-capable (run_agent_turn's `is_vision`, which drives
+# the turn-context text and whether attached images actually get sent to the
+# model) is resolved via provider_config.is_vision_model — the same
+# tags-in-providers.json source of truth the computer_use gate uses. There
+# used to be a second, hand-maintained substring-marker list here
+# (_VISION_MODEL_MARKERS) that answered the same question and drifted out of
+# sync with providers.json — e.g. it didn't recognize "z-ai/glm-5.3-flash" or
+# "qwen/qwen3.6-27b" as vision-capable even though both carry the "vision"
+# tag, so a real turn on either model wrongly told itself (and the user) it
+# couldn't see images. See tests/test_provider_config.py for is_vision_model's
+# own coverage; this file no longer needs a parallel copy of that logic.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic:claude-sonnet-4-6",
-        "openai:gpt-4.1-mini",
-        "openrouter:openai/gpt-5.6-luna",
-        "openai/gpt-5.6-luna",
-        "openrouter:moonshotai/kimi-k2.6",
-        "moonshotai/kimi-k2.6",
-        "openrouter:minimax/minimax-m2.7",
-        "google:gemma-4-31b-it",
-        "google:gemini-3.1-flash-lite",
-        "custom/gpt-4o",
-        "meta-llama/llama-3.3-70b-versatile",
-    ],
-)
-def test_is_vision_capable_true(model):
-    assert agent_mod._is_vision_capable(model)
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "groq:qwen/qwen3-32b",
-        "groq:qwen/qwen3.6-27b",
-        "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free",
-        "groq:openai/gpt-oss-120b",
-        "mistral:mistral-large-2512",
-        "cerebras:zai-glm-4.7",
-        "",
-    ],
-)
-def test_is_vision_capable_false(model):
-    assert not agent_mod._is_vision_capable(model)
 
 
 # ---------------------------------------------------------------------------
