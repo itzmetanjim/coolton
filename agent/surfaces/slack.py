@@ -83,7 +83,16 @@ class SlackSurface:
             self.client.reactions_add(channel=self.channel_id, timestamp=self.message_ts, name=emoji_name)
             return f"Reacted with :{emoji_name}:"
         except SlackApiError as e:
-            return f"Could not add reaction: {e.response['error']}"
+            error = e.response["error"]
+            if error == "already_reacted":
+                # Not a failure — the reaction is already there, which is the
+                # end state add_emoji_reaction wants. Framing this as an error
+                # (the way every other Slack API failure is reported) reads as
+                # something to retry or escalate, and a model that takes "if a
+                # tool returns an error, don't silently fall back" seriously
+                # will loop calling this again instead of moving on.
+                return f"Already reacted with :{emoji_name}: (no action needed, proceed)."
+            return f"Could not add reaction: {error}"
         except Exception as e:
             return f"Could not add reaction: {e}"
 

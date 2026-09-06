@@ -81,6 +81,32 @@ def test_slack_surface_react_delegates_to_reactions_add():
     assert result == "Reacted with :tada:"
 
 
+def test_slack_surface_react_treats_already_reacted_as_a_completed_call():
+    """already_reacted isn't a real failure — the reaction is already there, which
+    is the end state react() wants. Framing it as an error (like every other Slack
+    API failure) reads as something to retry, and a model that takes "report tool
+    errors, don't silently fall back" seriously will loop calling this again."""
+    from slack_sdk.errors import SlackApiError
+
+    client = Mock()
+    client.reactions_add.side_effect = SlackApiError("already_reacted", {"error": "already_reacted"})
+    surface = SlackSurface(client, "C1", "1.1", "1.2")
+    result = surface.react("tada")
+    assert "Could not add reaction" not in result
+    assert "already reacted" in result.lower()
+    assert "tada" in result
+
+
+def test_slack_surface_react_still_reports_other_slack_errors():
+    from slack_sdk.errors import SlackApiError
+
+    client = Mock()
+    client.reactions_add.side_effect = SlackApiError("channel_not_found", {"error": "channel_not_found"})
+    surface = SlackSurface(client, "C1", "1.1", "1.2")
+    result = surface.react("tada")
+    assert result == "Could not add reaction: channel_not_found"
+
+
 def test_slack_surface_post_file_link_includes_thread_ts_when_present():
     client = Mock()
     client.chat_postMessage.return_value = {"ok": True}
