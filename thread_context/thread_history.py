@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timezone
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart, TextPart
@@ -68,13 +69,39 @@ def build_thread_context(
         return None
     prior = prior[-MAX_CONTEXT:]
 
+    # Only messages coolton itself posted (its own bot user id) belong in the
+    # model's history as ModelResponse — that role tells the model "you said
+    # this," so it MUST NOT be used for other Slack apps' bot messages. A
+    # thread this mention is new to may already have other bots talking in
+    # it; attributing their text to the assistant turn made the model treat
+    # a different bot's outputs as its own prior utterances and continue/
+    # mimic them instead of speaking as itself.
+    coolton_bot_id = os.environ.get("COOLTON_BOT_ID", "")
+
     name_cache = {}
     model_messages = []
     for msg in prior:
         text = msg.get("text", "")
         try:
-            if msg.get("bot_id") or msg.get("subtype") == "bot_message":
+            is_bot_message = bool(msg.get("bot_id")) or msg.get("subtype") == "bot_message"
+            if is_bot_message and coolton_bot_id and msg.get("user") == coolton_bot_id:
                 model_messages.append(ModelResponse(parts=[TextPart(content=text)]))
+            elif is_bot_message:
+                bot_name = msg.get("username") or msg.get("bot_id") or "unknown bot"
+                try:
+                    timestamp = datetime.fromtimestamp(float(msg.get("ts")), tz=timezone.utc)
+                except (TypeError, ValueError):
+                    timestamp = None
+                model_messages.append(
+                    ModelRequest(
+                        parts=[
+                            UserPromptPart(
+                                content=f"[other bot] {bot_name}:\n{text}",
+                                timestamp=timestamp,
+                            )
+                        ]
+                    )
+                )
             else:
                 user = msg.get("user") or "unknown"
                 name = _display_name(client, user, name_cache)
