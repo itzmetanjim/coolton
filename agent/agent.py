@@ -298,6 +298,11 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str, timeout: int = _
             entirely and let the command run as long as it needs; only do this when
             you're confident it will actually finish on its own. Any other value is
             clamped to 10-1800 seconds.
+
+    About to run `agent-browser open --headed <url>` for a nontrivial session? Call
+    `agent_browser_stream_tool` first (before this command, not after) — otherwise the
+    browser opens invisibly on a desktop nobody's watching. This tool has no way to
+    remind you again once the command is already running.
     """
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured."
@@ -784,6 +789,12 @@ def computer_use(
     Needs a vision-capable model — see a screenshot after every action to know where
     things are and what happened. If the current turn isn't running on one, this
     returns an error telling the user to re-send with `[!WITH:vision]`.
+
+    Call `computer_stream_tool` once, BEFORE your first action here, so the user has
+    a live view instead of just a final report — easy to forget mid-task since this
+    tool itself never prompts for it. Skipping it isn't fatal (screenshots still post
+    to the thread as you go), but do it by default for anything that isn't a single
+    trivial click.
 
     A "screenshot" action also posts that image to the thread itself (throttled to at
     most once every few seconds), so the user sees progress inline without needing to
