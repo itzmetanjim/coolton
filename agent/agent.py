@@ -1194,7 +1194,7 @@ def get_channel_info_tool(ctx: RunContext[AgentDeps], channel_id: str) -> str:
 
 
 @agent.tool
-def post_message_tool(ctx: RunContext[AgentDeps], channel_id: str, text: str, thread_ts: str = "") -> str:
+def post_message_tool(ctx: RunContext[AgentDeps], channel_id: str = "", text: str = "", thread_ts: str = "") -> str:
     """Post a message as coolton to a Slack channel/thread — but ONLY to the current channel
     (or a thread within it), or a DM with the user who asked. Posting elsewhere is refused.
 
@@ -1208,6 +1208,7 @@ def post_message_tool(ctx: RunContext[AgentDeps], channel_id: str, text: str, th
     """
     from agent.tools.slack_info import post_message_to_target
     name, pfp = _get_user_display_info(ctx.deps.user_id)
+    channel_id = channel_id or ctx.deps.channel_id
     return post_message_to_target(
         channel_id=channel_id, text=text, thread_ts=thread_ts,
         from_user=ctx.deps.user_id, current_channel=ctx.deps.channel_id,
