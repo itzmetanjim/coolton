@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 
 _POLL_TAIL_LINES = 100
 
+# Used as deps.user_id for a fresh wake-up turn instead of the job owner's
+# real Slack/web user id — nobody actually sent this turn, and showing the
+# owner's real id would make coolton think it's talking to them again (their
+# name in the context prompt, their custom instructions applied, etc). The
+# real owner id is still used for the is_banned() check before we ever get
+# here (see _notify_finished) and for steering, which already passes "".
+AUTOMATED_USER_ID = "AUTOMATED"
+
 # A background job nobody has checked on this long is presumed abandoned —
 # stop paying to keep its sandbox warm and stop polling it. Long enough for
 # a real build/install to finish, short enough that a forgotten `sleep`
@@ -105,6 +113,7 @@ def _notify_finished(job: dict, output: str) -> None:
 
 
 def _wake(channel_id: str, thread_ts: str, user_id: str, job_id: str, command: str, output: str) -> None:
+    logger.info("Waking %s/%s for background job %s (owner %s)", channel_id, thread_ts, job_id, user_id)
     banner = f":gear: _automatic check-in (nobody sent this) — background job finished:_ `{command}`"
     prompt = (
         f"[SYSTEM: your background job `{job_id}` (`{command}`) finished while you "
@@ -113,9 +122,9 @@ def _wake(channel_id: str, thread_ts: str, user_id: str, job_id: str, command: s
 
     from web.runner import WEB_CHANNEL_ID
     if channel_id == WEB_CHANNEL_ID:
-        _wake_web(thread_ts, user_id, banner, prompt)
+        _wake_web(thread_ts, AUTOMATED_USER_ID, banner, prompt)
     else:
-        _wake_slack(channel_id, thread_ts, user_id, banner, prompt)
+        _wake_slack(channel_id, thread_ts, AUTOMATED_USER_ID, banner, prompt)
 
 
 def _wake_web(conversation_id: str, user_id: str, banner: str, prompt: str) -> None:
