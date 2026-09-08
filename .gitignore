@@ -107,3 +107,7 @@ coolton_bots.json
 
 # Local-dev web64 helper: token + uploaded files (prod uses /home/tanjim/web64_*)
 .local/
+
+
+# this contains tokens
+codechannelinternal.sh
