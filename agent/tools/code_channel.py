@@ -18,6 +18,8 @@ import subprocess
 import threading
 import time
 
+from slack_sdk import WebClient
+
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -87,6 +89,41 @@ def create_code_channel(
     )
 
 
+def _delete_cooltonuser_auto_message(channel_id: str) -> None:
+    """codechannelinternal.sh creates the channel using cooltonUser's own
+    Slack user token, and Slack auto-posts a message "as cooltonUser" the
+    moment a code channel is created (a Slack quirk, not anything
+    codechannelinternal.sh itself asks for). Find it and delete it.
+
+    Uses cooltonUser's own token (SLACK_USER_TOKEN) for both the lookup and
+    the delete — chat.delete can only remove a message on behalf of the user
+    who posted it (or a workspace admin), and the bot client this module
+    otherwise uses is neither.
+    """
+    user_token = os.environ.get("SLACK_USER_TOKEN")
+    coolton_user_id = os.environ.get("COOLTON_USER_ID", "")
+    if not user_token or not coolton_user_id:
+        return
+
+    user_client = WebClient(token=user_token)
+    try:
+        resp = user_client.conversations_history(channel=channel_id, limit=200)
+        messages = resp.get("messages", []) if resp.get("ok") else []
+    except Exception:
+        logger.exception("Failed to fetch history to find cooltonUser's auto message in %s", channel_id)
+        return
+
+    candidates = [m for m in messages if m.get("user") == coolton_user_id and m.get("ts")]
+    if not candidates:
+        return
+    oldest = min(candidates, key=lambda m: float(m["ts"]))
+    try:
+        user_client.chat_delete(channel=channel_id, ts=oldest["ts"])
+        logger.info("Deleted cooltonUser's auto-generated message in code channel %s (ts %s)", channel_id, oldest["ts"])
+    except Exception:
+        logger.exception("Failed to delete cooltonUser's auto message (ts %s) in %s", oldest["ts"], channel_id)
+
+
 def _activate_code_channel(
     client, channel_id: str, name: str, task: str, owner_id: str,
     source_channel_id: str, source_thread_ts: str,
@@ -97,6 +134,8 @@ def _activate_code_channel(
         client.conversations_join(channel=channel_id)
     except Exception as e:
         logger.info("conversations_join for code channel %s: %s", channel_id, e)
+
+    _delete_cooltonuser_auto_message(channel_id)
 
     try:
         from agent.ensure_coolton_user import ensure_coolton_user_in_channel

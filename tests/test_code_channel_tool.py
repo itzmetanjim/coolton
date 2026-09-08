@@ -167,6 +167,109 @@ def test_ok_response_schedules_activation_thread(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _delete_cooltonuser_auto_message
+# ---------------------------------------------------------------------------
+
+
+def test_delete_auto_message_finds_and_deletes_the_oldest_cooltonuser_message(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
+    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
+
+    user_client = Mock()
+    user_client.conversations_history.return_value = {
+        "ok": True,
+        "messages": [
+            # Slack returns newest-first — deliberately out of ts order here.
+            {"user": "UCOOLTON", "ts": "300.0", "text": "later"},
+            {"user": "UCOOLTON", "ts": "100.0", "text": "the auto message"},
+            {"user": "U_SOMEONE_ELSE", "ts": "50.0", "text": "not cooltonUser"},
+        ],
+    }
+    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
+
+    code_channel._delete_cooltonuser_auto_message("C1")
+
+    user_client.conversations_history.assert_called_once_with(channel="C1", limit=200)
+    user_client.chat_delete.assert_called_once_with(channel="C1", ts="100.0")
+
+
+def test_delete_auto_message_noop_when_no_cooltonuser_message(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
+    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
+
+    user_client = Mock()
+    user_client.conversations_history.return_value = {
+        "ok": True, "messages": [{"user": "U_SOMEONE_ELSE", "ts": "50.0"}],
+    }
+    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
+
+    code_channel._delete_cooltonuser_auto_message("C1")
+
+    user_client.chat_delete.assert_not_called()
+
+
+def test_delete_auto_message_noop_without_user_token(monkeypatch):
+    monkeypatch.delenv("SLACK_USER_TOKEN", raising=False)
+    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
+    called = []
+    monkeypatch.setattr(code_channel, "WebClient", lambda token: called.append(token))
+
+    code_channel._delete_cooltonuser_auto_message("C1")
+
+    assert called == []
+
+
+def test_delete_auto_message_noop_without_coolton_user_id(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
+    monkeypatch.delenv("COOLTON_USER_ID", raising=False)
+    called = []
+    monkeypatch.setattr(code_channel, "WebClient", lambda token: called.append(token))
+
+    code_channel._delete_cooltonuser_auto_message("C1")
+
+    assert called == []
+
+
+def test_delete_auto_message_history_failure_does_not_raise(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
+    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
+
+    user_client = Mock()
+    user_client.conversations_history.side_effect = Exception("boom")
+    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
+
+    code_channel._delete_cooltonuser_auto_message("C1")  # must not raise
+    user_client.chat_delete.assert_not_called()
+
+
+def test_delete_auto_message_delete_failure_does_not_raise(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
+    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
+
+    user_client = Mock()
+    user_client.conversations_history.return_value = {
+        "ok": True, "messages": [{"user": "UCOOLTON", "ts": "100.0"}],
+    }
+    user_client.chat_delete.side_effect = Exception("cant_delete_message")
+    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
+
+    code_channel._delete_cooltonuser_auto_message("C1")  # must not raise
+
+
+def test_delete_auto_message_not_ok_response_is_treated_as_no_messages(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
+    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
+
+    user_client = Mock()
+    user_client.conversations_history.return_value = {"ok": False, "error": "not_in_channel"}
+    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
+
+    code_channel._delete_cooltonuser_auto_message("C1")
+
+    user_client.chat_delete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _activate_code_channel
 # ---------------------------------------------------------------------------
 
