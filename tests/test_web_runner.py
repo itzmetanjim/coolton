@@ -232,3 +232,28 @@ def test_submit_message_never_renames_a_conversation_that_already_has_a_title(mo
 
     runner.submit_message(cid, "U1", "something else entirely")
     assert log.get_conversation_meta(cid)["title"] == "Named by hand"
+
+
+# ---------------------------------------------------------------------------
+# wake_conversation — a background job finishing with no active run starts a
+# fresh turn the same way a real user message would, minus the HTTP POST
+# (see agent.background_jobs_poller).
+# ---------------------------------------------------------------------------
+
+
+def test_wake_conversation_posts_a_banner_and_starts_a_turn(conversation_id, monkeypatch):
+    from web import runner
+
+    calls = []
+    monkeypatch.setattr(runner._executor, "submit", lambda fn, *a: calls.append((fn, a)))
+    runner.wake_conversation(conversation_id, "U1", "background job finished", "here's what happened")
+
+    events = log.read_events(conversation_id)
+    assert events[0]["type"] == "agent_message"
+    assert events[0]["variant"] == "final"
+    assert events[0]["text"] == "background job finished"
+
+    assert len(calls) == 1
+    fn, args = calls[0]
+    assert fn is runner._run_turn
+    assert args == (conversation_id, "U1", "here's what happened", events[0]["seq"], [])

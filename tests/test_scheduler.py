@@ -262,6 +262,27 @@ def test_start_scheduler_registers_mcp_health_refresh_job(monkeypatch, tmp_files
     assert call.kwargs.get("next_run_time") is not None
 
 
+def test_start_scheduler_registers_background_job_polling(monkeypatch, tmp_files):
+    """agent.background_jobs_poller only ever runs if this job is actually
+    registered — verify start_scheduler wires it up."""
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+
+    fake_scheduler = Mock()
+    monkeypatch.setattr(
+        "apscheduler.schedulers.background.BackgroundScheduler", lambda: fake_scheduler
+    )
+    monkeypatch.setattr(scheduler, "_sync_cron_jobs", lambda: None)
+
+    scheduler.start_scheduler(app=Mock())
+
+    poll_calls = [
+        c for c in fake_scheduler.add_job.call_args_list
+        if c.kwargs.get("id") == "poll_background_jobs"
+    ]
+    assert len(poll_calls) == 1
+    assert poll_calls[0].kwargs.get("seconds") == 30
+
+
 def test_cannot_pause_other_users_task(tmp_files):
     scheduler.create_scheduled_task(OWNER, "C1", "1.1", "mine", "0 9 * * *")
     task_id = scheduler._load_tasks()["tasks"][0]["id"]
