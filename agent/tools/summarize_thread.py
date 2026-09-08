@@ -30,13 +30,21 @@ def summarize_thread(channel_id: str, thread_ts: str, user_token: str | None = N
 
 
 def _fetch_thread_messages(channel_id: str, thread_ts: str, token: str) -> list[dict]:
-    url = "https://slack.com/api/conversations.replies"
+    # thread_ts="" means a code channel's channel-level conversation (see
+    # agent.code_channel_store) — there's no thread to fetch replies for, so
+    # fall back to the channel's own top-level history instead.
+    url = (
+        "https://slack.com/api/conversations.history" if not thread_ts
+        else "https://slack.com/api/conversations.replies"
+    )
     headers = {"Authorization": f"Bearer {token}"}
     all_messages = []
     cursor = None
 
     while True:
-        params = {"channel": channel_id, "ts": thread_ts, "limit": 100}
+        params = {"channel": channel_id, "limit": 100}
+        if thread_ts:
+            params["ts"] = thread_ts
         if cursor:
             params["cursor"] = cursor
         resp = requests.get(url, headers=headers, params=params, timeout=10)

@@ -30,7 +30,10 @@ class SlackSurface:
         try:
             self.client.chat_postMessage(
                 channel=self.channel_id,
-                thread_ts=self.thread_ts,
+                # thread_ts="" is a code channel's channel-level conversation
+                # (agent.code_channel_store) — coerce to None so it posts at
+                # channel level instead of threading under a "" ts.
+                thread_ts=self.thread_ts or None,
                 markdown_text=_redact(text, context="send_message"),
             )
         except Exception as e:
@@ -45,7 +48,7 @@ class SlackSurface:
         try:
             self.client.chat_postMessage(
                 channel=self.channel_id,
-                thread_ts=self.thread_ts,
+                thread_ts=self.thread_ts or None,
                 text=f":warning: Something went wrong! ({_redact(text)})",
             )
         except Exception as e:

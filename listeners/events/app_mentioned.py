@@ -6,6 +6,7 @@ from slack_sdk import WebClient
 
 from agent.active_runs import is_run_active
 from agent.ban_store import apply_ban_command, is_authorized, parse_ban_command
+from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel
 from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import join_thread
 from agent.steering_store import queue_steering_message
@@ -49,7 +50,18 @@ def handle_app_mentioned(
         if text.strip().startswith("##"):
             logger.info(f"Ignoring message starting with '##': {text}")
             return
-        thread_ts = event.get("thread_ts") or event["ts"]
+
+        # A mention at a code channel's channel level (not inside a thread)
+        # is part of that channel's single whole-channel conversation — see
+        # agent.code_channel_store. A mention inside a thread within a code
+        # channel is a normal, separate thread conversation and takes neither
+        # branch here.
+        at_channel_level = (
+            event.get("channel_type") != "im"
+            and not event.get("thread_ts")
+            and is_code_channel(channel_id)
+        )
+        thread_ts = CODE_CHANNEL_THREAD_TS if at_channel_level else (event.get("thread_ts") or event["ts"])
         user_id = context.user_id
         bot_id = os.environ.get("COOLTON_BOT_ID", "")
 
@@ -106,8 +118,10 @@ def handle_app_mentioned(
 
         # A mention on the thread's starter message auto-joins the thread so we
         # respond to every subsequent message. A mid-thread mention answers once
-        # but does NOT join — we only respond again when mentioned again.
-        if event["ts"] == thread_ts:
+        # but does NOT join — we only respond again when mentioned again. A
+        # code channel's channel level has no thread to join — it already
+        # responds to everything by definition.
+        if not at_channel_level and event["ts"] == thread_ts:
             join_thread(channel_id, thread_ts)
 
         # The bot mention stays in the text verbatim — the model is taught to read

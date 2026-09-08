@@ -109,7 +109,11 @@ def send_plan_message(deps) -> str | None:
     try:
         resp = deps.client.chat_postMessage(
             channel=deps.channel_id,
-            thread_ts=deps.thread_ts,
+            # A code channel's channel-level conversation uses thread_ts=""
+            # (see agent.code_channel_store) — posting that literally would
+            # thread under a message with ts "", so coerce to None (post at
+            # channel level) same as everywhere else that reposts it to Slack.
+            thread_ts=deps.thread_ts or None,
             blocks=blocks,
             text="Thinking...",
         )
@@ -465,7 +469,7 @@ def build_plan_hooks():
                     try:
                         deps.client.chat_postMessage(
                             channel=deps.channel_id,
-                            thread_ts=deps.thread_ts,
+                            thread_ts=deps.thread_ts or None,
                             markdown_text=redacted,
                         )
                     except Exception as e:

@@ -248,6 +248,27 @@ def test_streaming_stop_failure_falls_back_to_chat_post_message(mocks):
     assert texts == ["Here is the answer."]
 
 
+def test_channel_level_reply_never_streams_and_posts_directly(mocks):
+    """thread_ts="" is a code channel's channel-level conversation (see
+    agent.code_channel_store) — chat.startStream requires a real thread_ts,
+    so this must go straight to chat.postMessage without even trying
+    say_stream()."""
+    import agent.plan_block as pb
+
+    turn.run_agent_turn(
+        client=mocks.client, say_stream=mocks.say_stream, say=mocks.say,
+        logger=mocks.logger, channel_id="C1", thread_ts="", message_ts="111.111",
+        user_id="U1", user_token="xoxp-user", text="hello", history=None,
+    )
+
+    mocks.say_stream.assert_not_called()
+    pb.complete_plan_message.assert_called_once()
+    posts = mocks.client.chat_postMessage.call_args_list
+    texts = [c.kwargs["markdown_text"] for c in posts if "markdown_text" in c.kwargs]
+    assert texts == ["Here is the answer."]
+    assert all(c.kwargs.get("thread_ts") is None for c in posts)
+
+
 def test_chunk_text_splits_on_line_boundaries():
     text = "\n".join(f"line {i} " * 30 for i in range(50))
     chunks = turn._chunk_text(text, limit=1000)

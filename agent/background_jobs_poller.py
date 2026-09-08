@@ -153,11 +153,17 @@ def _wake_slack(channel_id: str, thread_ts: str, user_id: str, banner: str, prom
         return
 
     message_ts: str = str(response["ts"])
-    turn_thread_ts: str = thread_ts or message_ts
+    # thread_ts="" is ambiguous here: it means either "no thread — start one
+    # at this banner" (the ordinary case) or "a code channel's channel-level
+    # conversation" (agent.code_channel_store), which must NOT be moved into
+    # a new thread — that would silently split the channel's one conversation
+    # in two. Distinguish by checking the registry.
+    from agent.code_channel_store import is_code_channel
+    turn_thread_ts: str = thread_ts if (not thread_ts and is_code_channel(channel_id)) else (thread_ts or message_ts)
     try:
         run_agent_turn(
-            client=client, say=Say(client=client, channel=channel_id, thread_ts=turn_thread_ts),
-            say_stream=SayStream(client=client, channel=channel_id, thread_ts=turn_thread_ts),
+            client=client, say=Say(client=client, channel=channel_id, thread_ts=turn_thread_ts or None),
+            say_stream=SayStream(client=client, channel=channel_id, thread_ts=turn_thread_ts or None),
             logger=logger, channel_id=channel_id, thread_ts=turn_thread_ts, message_ts=message_ts,
             user_id=user_id, user_token=os.environ.get("SLACK_USER_TOKEN"),
             text=prompt, history=conversation_store.get_history(channel_id, turn_thread_ts),

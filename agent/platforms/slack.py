@@ -68,12 +68,25 @@ class SlackPlatform(PlatformAdapter):
     def build_context_prompt(self, deps: Any) -> str:
         # Stable for every turn of this thread — safe inside the cached system
         # prompt. Nothing here may vary turn to turn (see build_turn_context).
+        code_channel_note = ""
+        if not deps.thread_ts:
+            from agent.code_channel_store import is_code_channel
+            if is_code_channel(deps.channel_id):
+                code_channel_note = (
+                    "\n- This channel is a CODE CHANNEL, and you're at its channel level "
+                    "(no thread_ts): the ENTIRE channel is ONE ongoing conversation with "
+                    "you. Every message posted directly in the channel (not inside a "
+                    "thread) is addressed to you — reply at channel level (thread_ts \"\"), "
+                    "never start a thread for your reply. A thread started inside this "
+                    "channel is a separate, normal conversation — mention-gated like any "
+                    "other Slack thread."
+                )
         return f"""\n## CURRENT CONTEXT
 - You are in channel_id: `{deps.channel_id}` (thread_ts: `{deps.thread_ts}` if in thread, else DM)
 - Use this channel_id for operations in the current channel unless user specifies otherwise
 - Your user_id (the HUMAN who messaged you): `{deps.user_id}`
 - Your own bot user id (this is YOU, not a third party): `{os.environ.get("COOLTON_BOT_ID", "")}`
-- Your cooltonUser helper account id (acts on your behalf): `{os.environ.get("COOLTON_USER_ID", "")}`
+- Your cooltonUser helper account id (acts on your behalf): `{os.environ.get("COOLTON_USER_ID", "")}`{code_channel_note}
 """
 
     def build_turn_context(self, deps: Any, model: str, is_vision: bool) -> str:

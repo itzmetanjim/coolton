@@ -70,6 +70,10 @@ def _post_fallback_response(
     own mrkdwn dialect, not standard Markdown, and would show literal
     asterisks/brackets instead of formatting.
     """
+    # thread_ts="" is a code channel's channel-level conversation (see
+    # agent.code_channel_store) — coerce to None so this posts at channel
+    # level instead of threading under a "" ts.
+    thread_ts = thread_ts or None
     for chunk in _chunk_text(output):
         client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, markdown_text=chunk)
     try:
@@ -195,16 +199,13 @@ def run_agent_turn(
 
             output = _redact(result.output, context="final response")
             if is_slack:
-                # Stream response in thread with feedback buttons. If streaming fails
-                # (e.g. msg_too_long on chat.startStream), fall back to regular
-                # chat.postMessage with the message chunked to fit Slack's limit.
                 feedback_blocks = build_feedback_blocks()
-                try:
-                    streamer = say_stream()
-                    streamer.append(markdown_text=output)
-                    streamer.stop(blocks=feedback_blocks)
-                except Exception as e:
-                    logger.warning(f"Streaming response failed ({e}); falling back to chat.postMessage")
+                if not thread_ts:
+                    # A code channel's channel-level conversation (thread_ts=""
+                    # — see agent.code_channel_store) has no thread to stream
+                    # into: chat.startStream requires a real thread_ts. Post
+                    # the finished answer directly instead of even attempting
+                    # to stream.
                     _post_fallback_response(
                         client=client,
                         logger=logger,
@@ -213,6 +214,24 @@ def run_agent_turn(
                         output=output,
                         feedback_blocks=feedback_blocks,
                     )
+                else:
+                    # Stream response in thread with feedback buttons. If streaming fails
+                    # (e.g. msg_too_long on chat.startStream), fall back to regular
+                    # chat.postMessage with the message chunked to fit Slack's limit.
+                    try:
+                        streamer = say_stream()
+                        streamer.append(markdown_text=output)
+                        streamer.stop(blocks=feedback_blocks)
+                    except Exception as e:
+                        logger.warning(f"Streaming response failed ({e}); falling back to chat.postMessage")
+                        _post_fallback_response(
+                            client=client,
+                            logger=logger,
+                            channel_id=channel_id,
+                            thread_ts=thread_ts,
+                            output=output,
+                            feedback_blocks=feedback_blocks,
+                        )
             else:
                 conv_surface.post_final(output)
             complete_plan_message(deps)

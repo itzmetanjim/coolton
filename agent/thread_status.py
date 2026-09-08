@@ -33,6 +33,12 @@ def _crop(status: str) -> str:
 
 
 def _send(client, channel_id: str, thread_ts: str, status: str) -> None:
+    if not thread_ts:
+        # thread_ts="" is a code channel's channel-level conversation (see
+        # agent.code_channel_store) — there's no real Slack thread for
+        # assistant.threads.setStatus to attach to, so skip it rather than
+        # logging a warning on every single call for the life of the turn.
+        return
     try:
         client.assistant_threads_setStatus(channel_id=channel_id, thread_ts=thread_ts, status=status)
     except Exception as e:

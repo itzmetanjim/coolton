@@ -9,6 +9,7 @@ from slack_sdk import WebClient
 
 from agent.active_runs import is_run_active
 from agent.ban_store import apply_ban_command, is_authorized, parse_ban_command
+from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel
 from agent.leave_thread_store import is_thread_engaged
 from agent.steering_store import queue_steering_message
 from agent.stop_store import is_stop_command, request_stop
@@ -85,18 +86,25 @@ def handle_message(
         return
 
     channel_id = context.channel_id
-    thread_ts = event.get("thread_ts") or event["ts"]
+
+    # A code channel's whole-channel conversation (any message NOT inside a
+    # thread) is answered as if coolton were mentioned — see
+    # agent.code_channel_store. A threaded reply inside a code channel is a
+    # normal, separate Slack thread and takes none of this.
+    at_channel_level = not is_dm and not event.get("thread_ts") and is_code_channel(channel_id)
+    thread_ts = CODE_CHANNEL_THREAD_TS if at_channel_level else (event.get("thread_ts") or event["ts"])
     user_id = context.user_id
 
     # !stop: immediately halt every coolton run in this thread. Only honored
     # when the bot is explicitly @-mentioned (that path lives in
-    # handle_app_mentioned) or in a DM, where every message is directed at the
-    # bot. A bare "!stop" in a channel thread without a mention is ignored —
-    # it must never kill running coolton instances on its own. Must be the
-    # message's entire content (see is_stop_command) — a normal prompt that
-    # merely contains the word "!stop" must not halt anything.
+    # handle_app_mentioned), in a DM, or at a code channel's channel level —
+    # in all three, every message is directed at the bot. A bare "!stop" in an
+    # ordinary channel thread without a mention is ignored — it must never
+    # kill running coolton instances on its own. Must be the message's entire
+    # content (see is_stop_command) — a normal prompt that merely contains the
+    # word "!stop" must not halt anything.
     if is_stop_command(text, bot_id):
-        if not is_dm:
+        if not is_dm and not at_channel_level:
             logger.info("Ignoring '!stop' without an @mention")
         else:
             request_stop(channel_id, thread_ts)
@@ -141,14 +149,18 @@ def handle_message(
         logger.info(f"Ignoring ping-group mention without direct bot mention: {text[:80]}")
         return
 
-    # Top-level channel messages are handled by app_mentioned.
-    if not is_dm and not event.get("thread_ts"):
+    # Top-level channel messages are handled by app_mentioned — except at a
+    # code channel's channel level, which IS the conversation and has no
+    # "mention required" step to hand off to.
+    if not is_dm and not at_channel_level and not event.get("thread_ts"):
         return
 
     # Channel thread replies are handled only while the bot is joined (engaged)
     # in the thread. A mid-thread mention answers once but does not join, so a
     # non-mentioned reply here means we aren't joined and should be ignored.
-    if not is_thread_engaged(channel_id, thread_ts, is_dm):
+    # A code channel at channel level responds to everything by definition —
+    # there's no engagement step to gate on.
+    if not at_channel_level and not is_thread_engaged(channel_id, thread_ts, is_dm):
         logger.info(f"Ignoring message in unjoined thread {thread_ts} ({channel_id})")
         return
 

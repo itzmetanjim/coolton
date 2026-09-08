@@ -90,6 +90,16 @@ def test_send_plan_message_no_ts():
     assert send_plan_message(deps) is None
 
 
+def test_send_plan_message_channel_level_posts_with_no_thread():
+    """thread_ts="" is a code channel's channel-level conversation (see
+    agent.code_channel_store) — must post at channel level, not thread under
+    a literal "" ts."""
+    deps = _deps(thread_ts="")
+    deps.client.chat_postMessage.return_value = {"ts": "123.456"}
+    send_plan_message(deps)
+    assert deps.client.chat_postMessage.call_args.kwargs["thread_ts"] is None
+
+
 def test_update_plan_message_noop_without_plan_ts():
     deps = _deps()
     update_plan_message(deps)

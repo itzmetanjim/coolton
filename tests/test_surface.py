@@ -73,6 +73,25 @@ def test_slack_surface_post_text_swallows_errors():
     surface.post_text("hi")  # must not raise
 
 
+def test_slack_surface_post_text_channel_level_posts_with_no_thread():
+    """thread_ts="" is a code channel's channel-level conversation (see
+    agent.code_channel_store) — it must post at channel level (thread_ts=None
+    to Slack), not thread under a literal "" ts."""
+    client = Mock()
+    surface = SlackSurface(client, "C1", "", "1.2")
+    surface.post_text("hello")
+    client.chat_postMessage.assert_called_once_with(
+        channel="C1", thread_ts=None, markdown_text="hello",
+    )
+
+
+def test_slack_surface_post_error_channel_level_posts_with_no_thread():
+    client = Mock()
+    surface = SlackSurface(client, "C1", "", "1.2")
+    surface.post_error("oops")
+    assert client.chat_postMessage.call_args.kwargs["thread_ts"] is None
+
+
 def test_slack_surface_react_delegates_to_reactions_add():
     client = Mock()
     surface = SlackSurface(client, "C1", "1.1", "1.2")
