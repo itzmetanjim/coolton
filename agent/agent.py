@@ -429,6 +429,7 @@ CODE_MODE_EXCLUDED_TOOLS = {
     "join_thread_tool",
     "add_emoji_reaction",
     "delegate_to_subagent",
+    "create_code_channel_tool",
 }
 
 
@@ -526,20 +527,29 @@ def download_slack_attachments(
     """Download files attached to messages in this thread only.
 
     Uses conversations.replies so files are scoped to the thread's own
-    messages, never files shared elsewhere in the channel.
+    messages, never files shared elsewhere in the channel. thread_ts="" means
+    a code channel's channel-level conversation (see
+    agent.code_channel_store) — there's no thread to scope to there, so this
+    falls back to conversations.history (the channel's own top-level
+    messages) instead.
     """
     token = user_token or os.environ.get("SLACK_USER_TOKEN")
     if not token:
         return "Error: SLACK_USER_TOKEN not configured"
     sandbox.commands.run("mkdir -p ~/attachments")
-    url = "https://slack.com/api/conversations.replies"
+    url = (
+        "https://slack.com/api/conversations.history" if not thread_ts
+        else "https://slack.com/api/conversations.replies"
+    )
     headers = {"Authorization": f"Bearer {token}"}
 
     files = []
     cursor = None
     try:
         while len(files) < limit:
-            params = {"channel": channel_id, "ts": thread_ts, "limit": 200}
+            params = {"channel": channel_id, "limit": 200}
+            if thread_ts:
+                params["ts"] = thread_ts
             if cursor:
                 params["cursor"] = cursor
             response = requests.get(url, headers=headers, params=params, timeout=30)
@@ -1819,6 +1829,50 @@ def join_thread_tool(ctx: RunContext[AgentDeps]) -> str:
     asks you to stay in (or keep responding in) this thread.
     """
     return _surface(ctx.deps).set_engaged(True)
+
+
+@agent.tool
+def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = "") -> str:
+    """Create a Slack "code channel" and move this whole conversation into it as
+    its own single coolton conversation.
+
+    NEVER call this unless the user has EXPLICITLY asked to start/create a code
+    channel — this feature is buggy and cursed, do not reach for it on your own
+    initiative no matter how well it seems to fit the task.
+
+    `name` is a DISPLAY name, not a slug — write it like a sentence/title, e.g.
+    "Code audit and bug detection in Coolton", never
+    "code-audit-and-bug-detection-in-coolton". Spaces, uppercase letters, and
+    unicode are all fine, and duplicate names (another channel with the exact
+    same display name) are fine too — don't invent uniqueness suffixes. If the
+    name is truly unusable the underlying script reports that itself
+    (forwarded to you verbatim); don't pre-validate it yourself.
+
+    On success, coolton joins the new channel a few seconds later and picks up
+    `task` there on its own, with the context of this conversation carried
+    over — every message sent directly in that channel (not in a thread inside
+    it) is then treated as addressed to coolton and answered at channel level,
+    as if the whole channel were one ongoing thread with coolton. A thread
+    started inside the channel behaves like a normal Slack thread instead —
+    separate conversation, mention required. Because activation happens after
+    this turn ends, just tell the user you're moving the work over; don't keep
+    working on `task` in the current thread once you've called this.
+
+    Only usable on Slack — not available on the web UI.
+
+    Args:
+        name: The code channel's display name (see above — a real sentence,
+            not a slug).
+        task: What you'll be doing there — used to seed the handoff. Optional.
+    """
+    surface = _surface(ctx.deps)
+    if getattr(surface, "name", "slack") != "slack":
+        return "Error: code channels are a Slack-only feature, not available here."
+    from agent.tools.code_channel import create_code_channel
+    return create_code_channel(
+        ctx.deps.client, name, task, ctx.deps.user_id,
+        ctx.deps.channel_id, ctx.deps.thread_ts,
+    )
 
 
 @agent.tool

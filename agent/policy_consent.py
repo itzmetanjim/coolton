@@ -137,7 +137,7 @@ def ensure_consent(
         "message_ts": message_ts,
     })
     say(text="you need to opt in to the Coolton policy:",
-        blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts)
+        blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts or None)
     return False
 
 

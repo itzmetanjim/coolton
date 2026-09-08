@@ -921,3 +921,107 @@ def test_message_non_banned_user_is_unaffected(ctx, monkeypatch):
     with patch("listeners.events.message.run_agent_turn") as run_turn:
         _msg(ctx, channel_type="im", text="hello")
         run_turn.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Code channels (agent.code_channel_store) — a channel-level message in a code
+# channel is answered as if mentioned, at thread_ts="" (channel level).
+# ---------------------------------------------------------------------------
+
+
+def test_message_at_channel_level_in_code_channel_runs_a_turn(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_code_channel", return_value=True):
+        _msg(ctx, channel_type="channel", text="continue the build")  # no thread_ts, no mention
+        run_turn.assert_called_once()
+        kwargs = run_turn.call_args.kwargs
+        assert kwargs["channel_id"] == "C123"
+        assert kwargs["thread_ts"] == ""
+        assert kwargs["user_id"] == "U1"
+
+
+def test_message_at_channel_level_in_a_normal_channel_still_returns_early(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_code_channel", return_value=False):
+        _msg(ctx, channel_type="channel", text="continue the build")
+        run_turn.assert_not_called()
+
+
+def test_message_threaded_reply_in_code_channel_still_needs_engagement(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_code_channel", return_value=True), \
+         patch("listeners.events.message.is_thread_engaged", return_value=False):
+        _msg(ctx, channel_type="channel", thread_ts="1.1", text="reply in a thread")
+        run_turn.assert_not_called()
+
+
+def test_message_bare_stop_at_code_channel_level_halts(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.request_stop") as request_stop, \
+         patch("listeners.events.message.is_code_channel", return_value=True):
+        _msg(ctx, channel_type="channel", text="!stop")
+        request_stop.assert_called_once_with("C123", "")
+        ctx.say.assert_called_once()
+        run_turn.assert_not_called()
+
+
+def test_message_steers_at_code_channel_level_when_a_run_is_active(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_code_channel", return_value=True), \
+         patch("listeners.events.message.is_run_active", return_value=True), \
+         patch("listeners.events.message.queue_steering_message") as queue_steering:
+        _msg(ctx, channel_type="channel", text="also do this")
+        run_turn.assert_not_called()
+        queue_steering.assert_called_once_with("C123", "", "also do this", "U1", "111.111")
+
+
+def test_mention_at_channel_level_in_code_channel_uses_empty_thread_ts_and_does_not_join(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.join_thread") as join_thread, \
+         patch("listeners.events.app_mentioned.ensure_coolton_user_in_channel"), \
+         patch("listeners.events.app_mentioned.is_code_channel", return_value=True):
+        _mention(ctx, text="<@BOT1> hi", ts="1.1")  # no thread_ts: channel-level mention
+        run_turn.assert_called_once()
+        kwargs = run_turn.call_args.kwargs
+        assert kwargs["thread_ts"] == ""
+        join_thread.assert_not_called()
+
+
+def test_mention_threaded_in_code_channel_still_joins_normally(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.join_thread") as join_thread, \
+         patch("listeners.events.app_mentioned.ensure_coolton_user_in_channel"), \
+         patch("listeners.events.app_mentioned.is_code_channel", return_value=True):
+        _mention(ctx, text="<@BOT1> hi", ts="1.1", thread_ts="1.1")
+        run_turn.assert_called_once()
+        kwargs = run_turn.call_args.kwargs
+        assert kwargs["thread_ts"] == "1.1"
+        join_thread.assert_called_once_with("C123", "1.1")
+
+
+def test_mention_in_dm_ignores_code_channel_check(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.is_code_channel", return_value=True) as is_code_channel:
+        _mention(ctx, text="<@BOT1> hi", ts="1.1", channel_type="im")
+        run_turn.assert_called_once()
+        kwargs = run_turn.call_args.kwargs
+        # A DM is never a code channel's channel-level conversation — its own
+        # thread_ts (the message ts) is used regardless of is_code_channel.
+        assert kwargs["thread_ts"] == "1.1"
+        is_code_channel.assert_not_called()
