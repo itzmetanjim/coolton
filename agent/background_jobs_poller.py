@@ -105,7 +105,7 @@ def _notify_finished(job: dict, output: str) -> None:
 
 
 def _wake(channel_id: str, thread_ts: str, user_id: str, job_id: str, command: str, output: str) -> None:
-    banner = f":gear: *Background job finished:* `{command}`"
+    banner = f":gear: _automatic check-in (nobody sent this) — background job finished:_ `{command}`"
     prompt = (
         f"[SYSTEM: your background job `{job_id}` (`{command}`) finished while you "
         f"weren't running a turn. Last output:]\n\n{output}"

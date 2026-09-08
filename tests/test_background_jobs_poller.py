@@ -168,6 +168,16 @@ def test_wake_dispatches_to_slack_for_a_slack_channel(monkeypatch):
     assert calls[0][0] == "slack"
 
 
+def test_wake_banner_makes_clear_it_is_not_from_the_user(monkeypatch):
+    """A human reading the channel (or the model itself) must be able to tell
+    this wasn't typed by anyone — it's an autonomous check-in."""
+    calls = []
+    monkeypatch.setattr(poller, "_wake_slack", lambda *a: calls.append(a))
+    poller._wake("C1", "1.1", "U1", "abcd1234", "npm run build", "done")
+    banner = calls[0][3]
+    assert "not" in banner.lower() or "nobody" in banner.lower() or "automatic" in banner.lower()
+
+
 def test_wake_web_calls_wake_conversation(monkeypatch):
     calls = []
     monkeypatch.setattr("web.runner.wake_conversation", lambda *a: calls.append(a))

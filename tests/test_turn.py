@@ -32,6 +32,7 @@ def mocks(monkeypatch):
         plan_ts=None,
         plan_tasks={},
         should_skip=False,
+        skip_preserve=False,
         halt_reason="",
         model_used="",
         run_started_at=0.0,
@@ -132,6 +133,33 @@ def test_skip_path_deletes_plan_and_does_not_stream(mocks):
     pb.complete_plan_message.assert_not_called()
     mocks.say_stream.assert_not_called()
     turn.conversation_store.set_history.assert_called_once()
+
+    import agent.kevinton as kev
+    kev.spawn_kevinton.assert_not_called()
+
+
+def test_skip_preserve_path_keeps_plan_and_history_but_still_sends_nothing(mocks):
+    """skip(preserve=True) — real work happened this turn (e.g. a background
+    job started) before deciding not to send a final reply. Unlike plain
+    skip(), the plan/thinking block and the turn's history must survive."""
+    import agent.plan_block as pb
+
+    halted = ["msg1", "msg2-tool-result"]
+
+    def fake_run_agent(text, deps, message_history=None, images=None):
+        deps.should_skip = True
+        deps.skip_preserve = True
+        return SimpleNamespace(output="", all_messages=lambda: halted)
+
+    turn.run_agent.side_effect = fake_run_agent
+    _run_turn(mocks, text="do the thing then skip")
+
+    pb.delete_plan_message.assert_not_called()
+    pb.complete_plan_message.assert_called_once()
+    pb.finalize_plan_message.assert_not_called()
+    pb.set_plan_error.assert_not_called()
+    mocks.say_stream.assert_not_called()
+    turn.conversation_store.set_history.assert_called_once_with("C1", "1.1", halted)
 
     import agent.kevinton as kev
     kev.spawn_kevinton.assert_not_called()

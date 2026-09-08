@@ -1873,13 +1873,27 @@ def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread
 
 
 @agent.tool
-def skip(ctx: RunContext[AgentDeps]) -> str:
+def skip(ctx: RunContext[AgentDeps], preserve: bool = False) -> str:
     """Skip sending the final response message at the end of your turn.
-    
+
     Use this when the user's request doesn't need a reply, when you've already
     responded via send_message, or when you have nothing to add.
+
+    Args:
+        preserve: False (default) — this message was never really addressed
+            to you (e.g. someone else's conversation). Call skip as your VERY
+            FIRST tool in this case, before add_emoji_reaction or anything
+            else: the whole turn is discarded, as if it had never happened.
+            True — the message WAS addressed to you and you took real action
+            this turn (started a background job, sent a status update via
+            send_message, ...), you just have nothing more to say right now.
+            That work stays in history for future turns, and the
+            plan/thinking block is kept instead of deleted.
     """
     ctx.deps.should_skip = True
+    ctx.deps.skip_preserve = preserve
+    if preserve:
+        ctx.deps.halted_messages = ctx.deps.last_attempt_messages
     raise HaltRun("skip")
 
 
@@ -2524,9 +2538,12 @@ def run_agent(text, deps, message_history=None, images=None):
             # !stop sets deps.halted_messages to a snapshot of everything up to
             # the halt (see plan_block.before_tool) — use that so the thread
             # doesn't lose the message that triggered this turn (and any tool
-            # round-trips already completed) when the run gets cut off. skip()
-            # never sets it, so that path keeps reverting to the pre-turn history,
-            # which is correct there (a skipped turn has zero side effects).
+            # round-trips already completed) when the run gets cut off.
+            # skip(preserve=True) sets it the same way, for the same reason
+            # (real work happened this turn). Plain skip() (preserve=False,
+            # the default) leaves it unset, so that path still reverts to the
+            # pre-turn history — correct there, since it means the turn truly
+            # never happened.
             history = deps.halted_messages if deps.halted_messages is not None else message_history
             return _SkipResult(history)
     finally:
