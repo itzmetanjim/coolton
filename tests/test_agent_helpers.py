@@ -1322,6 +1322,35 @@ def test_run_background_command_tool_forwards_command_user_and_cwd(monkeypatch):
     assert captured["args"] == ("C1", "1.2", "npm run dev", "U_TEST", "/app")
 
 
+# ---------------------------------------------------------------------------
+# skip(preserve=...) — plain skip() discards the turn (pre-turn history,
+# deleted plan block, matching "called as skip's documented VERY FIRST tool").
+# preserve=True means real work happened first and must survive.
+# ---------------------------------------------------------------------------
+
+
+def test_skip_default_does_not_preserve_history(monkeypatch):
+    ctx = _run_ctx(Mock())
+    ctx.deps.halted_messages = None
+    ctx.deps.last_attempt_messages = ["should not be used"]
+    with pytest.raises(agent_mod.HaltRun):
+        agent_mod.skip(ctx)
+    assert ctx.deps.should_skip is True
+    assert ctx.deps.skip_preserve is False
+    assert ctx.deps.halted_messages is None
+
+
+def test_skip_preserve_true_snapshots_last_attempt_messages(monkeypatch):
+    ctx = _run_ctx(Mock())
+    ctx.deps.halted_messages = None
+    ctx.deps.last_attempt_messages = ["msg1", "tool-result-2"]
+    with pytest.raises(agent_mod.HaltRun):
+        agent_mod.skip(ctx, preserve=True)
+    assert ctx.deps.should_skip is True
+    assert ctx.deps.skip_preserve is True
+    assert ctx.deps.halted_messages == ["msg1", "tool-result-2"]
+
+
 def test_check_background_command_tool_forwards_job_id_and_tail_lines(monkeypatch):
     captured = {}
     monkeypatch.setattr("agent.tools.sandbox_background.check_background_command", _capturing(captured, "status"))

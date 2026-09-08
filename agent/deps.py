@@ -37,6 +37,11 @@ class AgentDeps:
     # everything up to the halt (the user's message, any completed tool
     # round-trips) instead of reverting the thread to its pre-turn state.
     halted_messages: list | None = None
+    # Set by skip(preserve=True) — the turn did real work before deciding not
+    # to send a final reply (started a background job, sent a status update)
+    # and that must stay in history and keep its plan/thinking block, instead
+    # of being discarded as if the turn never happened (skip()'s default).
+    skip_preserve: bool = False
     # Set whenever something needs run_agent's finally block to pause the sandbox for
     # it at the end of the turn, rather than pausing immediately after its own call:
     # computer_use never pauses per-action (a live stream needs the desktop to survive

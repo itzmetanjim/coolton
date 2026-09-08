@@ -180,6 +180,14 @@ def run_agent_turn(
                 # Keep the plan/thinking block and end it in an error state so
                 # the user can see the turn was stopped — don't delete it.
                 set_plan_error(deps, "coolton has been manually stopped")
+            elif deps.skip_preserve:
+                # skip(preserve=True) — real work happened this turn (a
+                # background job started, a status update sent) before
+                # deciding not to send a final reply. Keep the plan/thinking
+                # block showing what actually happened instead of deleting
+                # it as if the turn never occurred.
+                if plan_ts:
+                    complete_plan_message(deps)
             elif plan_ts:
                 delete_plan_message(deps)
         else:

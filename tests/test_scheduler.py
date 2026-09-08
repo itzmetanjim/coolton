@@ -280,7 +280,7 @@ def test_start_scheduler_registers_background_job_polling(monkeypatch, tmp_files
         if c.kwargs.get("id") == "poll_background_jobs"
     ]
     assert len(poll_calls) == 1
-    assert poll_calls[0].kwargs.get("seconds") == 30
+    assert poll_calls[0].kwargs.get("seconds") == 5
 
 
 def test_cannot_pause_other_users_task(tmp_files):

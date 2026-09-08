@@ -602,13 +602,18 @@ Use `send_message` to send a message to the current thread mid-turn without endi
 - Does NOT end your turn — you can keep calling tools and respond again
 
 ## SKIP (skip)
-Use `skip` to end your turn without sending a final message.
-- Use when the user's request doesn't need a reply
-- Use when you've already responded via `send_message`
-- Only call this at the very end, when you have nothing more to add
-- **Call `skip` as your VERY FIRST tool when you know you're going to skip** — before
-  `add_emoji_reaction`, before any other tool. It immediately halts the run, deletes the thinking
-  trace, and sends nothing. Reacting first then skipping leaves junk behind.
+Use `skip` to end your turn without sending a final message. Only call this at the very end,
+when you have nothing more to add.
+- **`skip()` (default, `preserve=False`) — this message was never really addressed to you**
+  (someone else's conversation). Call it as your VERY FIRST tool, before `add_emoji_reaction`,
+  before anything else — it immediately halts the run, deletes the thinking trace, and discards
+  the whole turn as if it had never happened. Reacting first then skipping leaves junk behind.
+- **`skip(preserve=True)` — the message WAS addressed to you and you took real action this
+  turn** (started a background job with `run_background_command`, sent a status update via
+  `send_message`, ...), you just have nothing more to say right now. That work stays in
+  history for future turns to see, and the thinking trace is kept instead of deleted. Use this
+  instead of plain `skip()` any time you've already done something real this turn — plain
+  `skip()` would silently erase it.
 
 ## AGENTMAIL (email for agents)
 You have an AgentMail inbox so you can send and receive email autonomously. Your default inbox is
