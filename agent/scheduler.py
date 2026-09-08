@@ -503,7 +503,7 @@ def start_scheduler(app):
             logger.exception("Background job polling failed")
 
     _scheduler.add_job(check_reminders, "interval", seconds=30, id="check_reminders")
-    _scheduler.add_job(poll_background_jobs_job, "interval", seconds=30, id="poll_background_jobs")
+    _scheduler.add_job(poll_background_jobs_job, "interval", seconds=5, id="poll_background_jobs")
     _scheduler.add_job(check_token_rotation, "interval", seconds=15 * 60, id="check_token_rotation")
     # Runs once immediately (next_run_time=now) so the cache is warm from
     # process start, then every REFRESH_INTERVAL_SECONDS after that — see
