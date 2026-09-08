@@ -158,6 +158,25 @@ def test_wake_dispatches_to_web_for_the_web_channel(monkeypatch):
     assert calls[0][0] == "web"
 
 
+def test_wake_uses_the_automated_sentinel_not_the_real_owner_id(monkeypatch):
+    """Nobody actually sent this turn — deps.user_id must not be the job
+    owner's real id, or coolton treats it as talking to them again (their
+    name, their custom instructions). Applies to both web and Slack."""
+    calls = []
+    monkeypatch.setattr(poller, "_wake_web", lambda *a: calls.append(("web", a)))
+    monkeypatch.setattr(poller, "_wake_slack", lambda *a: calls.append(("slack", a)))
+    from web.runner import WEB_CHANNEL_ID
+
+    poller._wake(WEB_CHANNEL_ID, "convo-1", "U1", "abcd1234", "npm run build", "done")
+    assert calls[0][1][1] == poller.AUTOMATED_USER_ID
+    assert calls[0][1][1] != "U1"
+
+    calls.clear()
+    poller._wake("C1", "1.1", "U1", "abcd1234", "npm run build", "done")
+    assert calls[0][1][2] == poller.AUTOMATED_USER_ID
+    assert calls[0][1][2] != "U1"
+
+
 def test_wake_dispatches_to_slack_for_a_slack_channel(monkeypatch):
     calls = []
     monkeypatch.setattr(poller, "_wake_web", lambda *a: calls.append(("web", a)))
