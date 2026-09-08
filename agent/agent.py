@@ -323,11 +323,18 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str, timeout: int = _
             # A VNC stream (deps.sandbox_keepalive_seconds > 0) needs the sandbox to
             # survive between commands, not pause the instant this one returns — arm a
             # countdown instead (agent.sandbox_keepalive), reset on every action, so it
-            # only actually pauses after real inactivity. Otherwise pause immediately,
-            # same as always.
-            if ctx.deps.sandbox_keepalive_seconds > 0:
+            # only actually pauses after real inactivity. A pending run_background_command
+            # job on this thread needs the same thing for the same reason (see
+            # agent.tools.sandbox_background's module docstring) — an unrelated
+            # run_linux_command call must not freeze it back to zero progress. Otherwise
+            # pause immediately, same as always.
+            from agent.background_jobs_store import has_pending_jobs
+            from agent.tools.sandbox_background import BG_JOB_KEEPALIVE_SECONDS
+            has_bg_jobs = has_pending_jobs(channel_id, thread_ts)
+            if ctx.deps.sandbox_keepalive_seconds > 0 or has_bg_jobs:
                 ctx.deps.keep_sandbox_warm = True
-                sandbox_keepalive.arm(channel_id, thread_ts, ctx.deps.sandbox_keepalive_seconds)
+                seconds = max(ctx.deps.sandbox_keepalive_seconds, BG_JOB_KEEPALIVE_SECONDS) if has_bg_jobs else ctx.deps.sandbox_keepalive_seconds
+                sandbox_keepalive.arm(channel_id, thread_ts, seconds)
             else:
                 sandbox.pause()
         output = []
@@ -352,13 +359,18 @@ def run_background_command_tool(ctx: RunContext[AgentDeps], command: str, cwd: s
     give you its output, use run_linux_command instead — don't background
     something you're only going to immediately wait on.
 
+    You'll be notified automatically when it finishes — mid-turn as a steering
+    note if you're still working, or as a fresh message if you've already
+    finished responding — so there's no need to keep calling
+    check_background_command_tool just to wait on it.
+
     Args:
         command: The shell command to run in the background.
         cwd: Directory to run it from (optional — defaults to the sandbox's
             default working directory).
     """
     from agent.tools.sandbox_background import run_background_command
-    return run_background_command(ctx.deps.channel_id, ctx.deps.thread_ts, command, cwd)
+    return run_background_command(ctx.deps.channel_id, ctx.deps.thread_ts, command, ctx.deps.user_id, cwd)
 
 
 @agent.tool
@@ -748,6 +760,17 @@ _VISION_GATE_ERROR = (
 
 _SCREENSHOT_POST_MIN_INTERVAL_SECONDS = 8
 _STREAM_KEEPALIVE_SECONDS = 120
+
+
+def _should_force_pause_sandbox(channel_id: str, thread_ts: str) -> bool:
+    """False while a run_background_command job is still pending on this
+    thread — run_agent's end-of-turn cleanup otherwise force-pauses the
+    sandbox unconditionally whenever anything armed a keepalive countdown
+    during the turn, which would freeze a background job the instant the
+    turn that started it ends, defeating the entire point of backgrounding
+    it (see agent.tools.sandbox_background's module docstring)."""
+    from agent.background_jobs_store import has_pending_jobs
+    return not has_pending_jobs(channel_id, thread_ts)
 
 
 def _maybe_post_screenshot(ctx: RunContext[AgentDeps], png: bytes) -> None:
@@ -2512,8 +2535,11 @@ def run_agent(text, deps, message_history=None, images=None):
         # and run_linux_command itself skips its own pause whenever a keepalive
         # countdown is active (agent.sandbox_keepalive) — pause it once here instead,
         # however the turn ended. A turn never leaves the sandbox running past its own
-        # end regardless of any pending countdown, so cancel that first.
-        if deps.keep_sandbox_warm:
+        # end regardless of any pending countdown... UNLESS a run_background_command
+        # job is still pending for this thread (_should_force_pause_sandbox), which
+        # needs the opposite: still running *past* this turn's end is the entire
+        # point (agent.background_jobs_poller notifies once it's actually done).
+        if deps.keep_sandbox_warm and _should_force_pause_sandbox(deps.channel_id, deps.thread_ts):
             sandbox_keepalive.cancel(deps.channel_id, deps.thread_ts)
             try:
                 sandbox_id = get_thread_sandbox_id(deps.channel_id, deps.thread_ts)

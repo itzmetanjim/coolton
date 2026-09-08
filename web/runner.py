@@ -104,6 +104,24 @@ def submit_message(conversation_id: str, user_id: str, text: str, attachments: l
     _executor.submit(_run_turn, conversation_id, user_id, text, user_event["seq"], attachments)
 
 
+def wake_conversation(conversation_id: str, user_id: str, banner_text: str, prompt_text: str) -> None:
+    """Start a fresh turn triggered by something other than a real user message
+    (currently: a background job finishing while nothing was active — see
+    agent.background_jobs_poller) instead of a POST to
+    /api/conversations/{id}/messages.
+
+    Only called when is_run_active(WEB_CHANNEL_ID, conversation_id) is already
+    known False — same "don't race a live run" rule submit_message follows,
+    just decided by the caller since it already checked for its own reasons.
+    """
+    from web import conversation_log as log
+
+    event = log.append_event(conversation_id, {
+        "type": "agent_message", "variant": "final", "text": banner_text,
+    })
+    _executor.submit(_run_turn, conversation_id, user_id, prompt_text, event["seq"], [])
+
+
 def _run_turn(conversation_id: str, user_id: str, text: str, message_seq: int, attachments: list[dict]) -> None:
     from listeners.events.turn import run_agent_turn
     from web import conversation_log as log

@@ -317,11 +317,17 @@ that silently matched the wrong line).
 `run_linux_command` blocks until the command finishes — fine for most things, but wrong for
 a dev server, a watcher, or anything meant to keep running while you do other work.
 - `run_background_command(command, cwd="")` — starts `command` detached in the background and
-  returns immediately with a job id. The job keeps running (or waiting, paused with the rest
-  of the sandbox) across tool calls and turns until it exits or you kill it.
+  returns immediately with a job id. The sandbox is kept warm (not paused) for as long as the
+  job is running so it actually makes progress instead of freezing.
 - `check_background_command(job_id, tail_lines=200)` — is it still running, and what has it
-  printed recently.
+  printed recently. You don't need to call this just to wait — see below.
 - `kill_background_command(job_id)` — stop it.
+- **You get notified automatically when a background job finishes — you don't need to poll
+  check_background_command in a loop.** A periodic check runs outside any turn: if you're still
+  working when it finishes, its output arrives as a steering note (the same mechanism a new
+  message from a person uses) that you'll see before your next tool call; if you've already
+  finished responding, it starts a brand new turn for you with the output, as if you'd been
+  pinged about it. Start it, do other things (or end your turn) and it'll come back to you.
 Use this for: `npm run dev`/other dev servers, file watchers, long builds you want to poll
 instead of blocking on. Don't background something you're only going to immediately wait on
 — that's just `run_linux_command` with extra steps.

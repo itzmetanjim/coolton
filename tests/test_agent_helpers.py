@@ -1219,6 +1219,37 @@ def test_run_linux_command_arms_keepalive_instead_of_pausing_when_active(monkeyp
     assert ctx.deps.keep_sandbox_warm is True
 
 
+def test_run_linux_command_stays_warm_for_a_pending_background_job(monkeypatch):
+    """No VNC stream requested this turn (sandbox_keepalive_seconds == 0), but a
+    background job is pending on this thread — must still arm, not pause, and
+    for at least BG_JOB_KEEPALIVE_SECONDS so the job keeps making progress."""
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_commands, fake_sandbox = _fake_sandbox_recording_timeout(monkeypatch)
+    armed = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
+    monkeypatch.setattr("agent.background_jobs_store.has_pending_jobs", lambda c, t: True)
+    ctx = _run_ctx(Mock())
+    ctx.deps.sandbox_keepalive_seconds = 0.0
+    agent_mod.run_linux_command(ctx, "echo hi")
+    assert fake_sandbox.paused == 0
+    from agent.tools.sandbox_background import BG_JOB_KEEPALIVE_SECONDS
+    assert armed == [("C1", "1.2", BG_JOB_KEEPALIVE_SECONDS)]
+    assert ctx.deps.keep_sandbox_warm is True
+
+
+def test_should_force_pause_sandbox_true_with_no_pending_jobs(monkeypatch):
+    monkeypatch.setattr("agent.background_jobs_store.has_pending_jobs", lambda c, t: False)
+    assert agent_mod._should_force_pause_sandbox("C1", "1.1") is True
+
+
+def test_should_force_pause_sandbox_false_with_a_pending_job(monkeypatch):
+    """The whole point of backgrounding a command is that it keeps running past
+    the turn that started it — run_agent's end-of-turn cleanup must not force-
+    pause the sandbox out from under it just because the turn ended."""
+    monkeypatch.setattr("agent.background_jobs_store.has_pending_jobs", lambda c, t: True)
+    assert agent_mod._should_force_pause_sandbox("C1", "1.1") is False
+
+
 # ---------------------------------------------------------------------------
 # Sandbox file/background tool wrappers — each just forwards ctx.deps.channel_id/
 # thread_ts and its own args to the plain function in agent.tools.sandbox_files /
@@ -1283,12 +1314,12 @@ def test_list_sandbox_files_tool_forwards_all_args(monkeypatch):
     assert captured["args"] == ("C1", "1.2", "**/*.py", "/repo", 5)
 
 
-def test_run_background_command_tool_forwards_command_and_cwd(monkeypatch):
+def test_run_background_command_tool_forwards_command_user_and_cwd(monkeypatch):
     captured = {}
     monkeypatch.setattr("agent.tools.sandbox_background.run_background_command", _capturing(captured, "started"))
     ctx = _run_ctx(Mock())
     agent_mod.run_background_command_tool(ctx, "npm run dev", cwd="/app")
-    assert captured["args"] == ("C1", "1.2", "npm run dev", "/app")
+    assert captured["args"] == ("C1", "1.2", "npm run dev", "U_TEST", "/app")
 
 
 def test_check_background_command_tool_forwards_job_id_and_tail_lines(monkeypatch):

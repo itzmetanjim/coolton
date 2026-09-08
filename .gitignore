@@ -71,6 +71,7 @@ ban_store.json
 reminders.json
 scheduled_tasks.json
 thread_sandboxes.json
+background_jobs.json
 byok_key.bin
 byok_store.json
 mcp_server_store.json
