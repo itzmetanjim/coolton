@@ -151,6 +151,13 @@ def run_agent_turn(
             # refreshes every 30s in between — see agent.thread_status.
             thread_status.start(client, channel_id, thread_ts)
 
+            # Warn the thread if HCAI (coolton's primary provider) is about to
+            # fall back to a much worse model — see agent.hcai_status. Runs on
+            # its own background thread so a slow status endpoint never delays
+            # this turn.
+            from agent.hcai_status import check_and_warn_async
+            check_and_warn_async(client, channel_id, thread_ts)
+
         deps = AgentDeps(
             client=client,
             user_id=user_id,
