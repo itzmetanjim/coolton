@@ -15,23 +15,20 @@ def _clear_state():
     hcai_status._last_warned.clear()
 
 
-def _resp(json_body, status_ok=True):
+def _resp(json_body, status_code=200):
     resp = Mock()
+    resp.status_code = status_code
     resp.json.return_value = json_body
-    if status_ok:
-        resp.raise_for_status.return_value = None
-    else:
-        resp.raise_for_status.side_effect = Exception("bad status")
     return resp
 
 
 def test_fetch_status_returns_parsed_json(monkeypatch):
     monkeypatch.setattr(
         hcai_status.requests, "get",
-        lambda url, timeout: _resp({"status": "down", "balanceRemaining": -0.5}),
+        lambda url, timeout: _resp({"status": "up", "balanceRemaining": 5.0}),
     )
     result = hcai_status.fetch_status()
-    assert result == {"status": "down", "balanceRemaining": -0.5}
+    assert result == {"status": "up", "balanceRemaining": 5.0}
 
 
 def test_fetch_status_returns_none_on_request_exception(monkeypatch):
@@ -41,16 +38,30 @@ def test_fetch_status_returns_none_on_request_exception(monkeypatch):
     assert hcai_status.fetch_status() is None
 
 
-def test_fetch_status_returns_none_on_non_2xx(monkeypatch):
+def test_fetch_status_reads_the_body_even_on_a_503(monkeypatch):
+    """Confirmed live: the endpoint itself responds with HTTP 503 whenever
+    status is "down" — the JSON body (with the real balanceRemaining) is
+    still there and must be read, not discarded as a failed request. This
+    was the actual bug: raise_for_status() threw the body away on exactly
+    the response this check exists to catch."""
     monkeypatch.setattr(
         hcai_status.requests, "get",
-        lambda url, timeout: _resp({"balanceRemaining": 5}, status_ok=False),
+        lambda url, timeout: _resp({"status": "down", "balanceRemaining": -0.27}, status_code=503),
     )
-    assert hcai_status.fetch_status() is None
+    result = hcai_status.fetch_status()
+    assert result == {"status": "down", "balanceRemaining": -0.27}
 
 
 def test_fetch_status_returns_none_for_non_dict_body(monkeypatch):
     monkeypatch.setattr(hcai_status.requests, "get", lambda url, timeout: _resp([1, 2, 3]))
+    assert hcai_status.fetch_status() is None
+
+
+def test_fetch_status_returns_none_when_body_is_not_json(monkeypatch):
+    resp = Mock()
+    resp.status_code = 503
+    resp.json.side_effect = ValueError("not json")
+    monkeypatch.setattr(hcai_status.requests, "get", lambda url, timeout: resp)
     assert hcai_status.fetch_status() is None
 
 

@@ -38,11 +38,17 @@ _last_warned: dict[tuple[str, str], float] = {}
 
 def fetch_status() -> dict | None:
     """GET the HCAI /up endpoint. Returns the parsed JSON object, or None on
-    any failure (network error, non-2xx, non-JSON/non-object body) — never
-    raises, so a caller never has to guard this itself."""
+    any failure (network error, non-JSON/non-object body) — never raises, so
+    a caller never has to guard this itself.
+
+    Deliberately does NOT raise_for_status(): the endpoint itself responds
+    with HTTP 503 whenever `status` is "down" (confirmed live —
+    `{"status":"down","balanceRemaining":-0.27,...}` arrives on a 503, not a
+    200), so treating a non-2xx as failure discarded the payload exactly when
+    it mattered most and this check silently never fired.
+    """
     try:
         resp = requests.get(HCAI_STATUS_URL, timeout=_REQUEST_TIMEOUT_SECONDS)
-        resp.raise_for_status()
         data = resp.json()
     except Exception as e:
         logger.warning("HCAI status check failed: %s", e)
