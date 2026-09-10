@@ -10,6 +10,7 @@ import uuid
 import requests
 
 import agent.tool_proxy as tool_proxy
+from agent import redact
 
 BASE = f"http://{tool_proxy.LISTEN_HOST}:{tool_proxy.LISTEN_PORT}{tool_proxy.URL_PREFIX}"
 
@@ -168,6 +169,109 @@ def test_sandbox_module_json_encodes_a_dict_argument_before_sending(monkeypatch)
     assert sent_args[0] == "conversations.members"
     assert sent_args[1] == '{"channel": "C0B7QEK0MQB"}'
     assert isinstance(sent_args[1], str)
+
+
+# ---------------------------------------------------------------------------
+# Redaction — this handler is the ONE place a raw secret returned by a nested
+# tool call (agent_tools.<name>(...) from inside code_mode) ever gets handed
+# back into the sandbox. Every other tool-call path is redacted by
+# agent.plan_block's hooks, but those never see this call at all — code_mode's
+# own outer result *is* redacted there, by a plain substring scan, which is
+# exactly what can't catch a secret the sandboxed code already transformed
+# (base64, split across variables, ...) before printing it. Redacting has to
+# happen here, before the sandbox ever receives the plaintext.
+# ---------------------------------------------------------------------------
+
+
+def test_tool_result_containing_a_secret_is_redacted_before_reaching_the_sandbox(monkeypatch):
+    monkeypatch.setenv("FAKE_TOOL_PROXY_API_KEY", "sk-supersecretvalue")
+    redact.invalidate_secret_cache()
+    try:
+        token, sandbox_id, _, _ = _register(result="here is the key: sk-supersecretvalue")
+        resp = requests.post(
+            f"{BASE}/{sandbox_id}/echo_tool",
+            json={"args": [], "kwargs": {}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        body = resp.json()
+        assert body["ok"] is True
+        assert "sk-supersecretvalue" not in body["result"]
+        assert "***" in body["result"]
+    finally:
+        redact.invalidate_secret_cache()
+
+
+def test_tool_error_containing_a_secret_is_redacted(monkeypatch):
+    secret = "sk-errorpathsecretvalue"
+    monkeypatch.setenv("FAKE_TOOL_PROXY_ERROR_KEY", secret)
+    redact.invalidate_secret_cache()
+    try:
+        token = uuid.uuid4().hex
+        sandbox_id = uuid.uuid4().hex
+
+        def failing_tool(ctx, *a, **k):
+            raise ValueError(f"failed while using {secret}")
+
+        tool_proxy.register_sandbox(sandbox_id, token, object(), lambda n: failing_tool, ["failing_tool"])
+        resp = requests.post(
+            f"{BASE}/{sandbox_id}/failing_tool",
+            json={"args": [], "kwargs": {}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        body = resp.json()
+        assert body["ok"] is False
+        assert secret not in body["error"]
+        assert "***" in body["error"]
+    finally:
+        redact.invalidate_secret_cache()
+
+
+def test_sandbox_code_cannot_launder_a_secret_through_base64(monkeypatch):
+    """The exact scenario this exists for: code_mode code that fetches a tool
+    result and transforms it (base64, here) before printing/returning it.
+    Redacting only code_mode's OWN final output (a substring scan) can't
+    catch a transformed secret — the raw value must never reach the sandbox
+    module in the first place. Exercises the real HTTP round trip (this
+    module's own generated agent_tools code -> the real running server), not
+    a mocked urlopen.
+    """
+    import base64
+    import os
+    import types
+
+    secret = "sk-lauderingtestsecretvalue"
+    monkeypatch.setenv("FAKE_TOOL_PROXY_LAUNDER_KEY", secret)
+    redact.invalidate_secret_cache()
+    try:
+        token, sandbox_id, _, _ = _register(result=f"your token is {secret}")
+
+        monkeypatch.setenv("AGENT_TOOLS_BASE", BASE)
+        monkeypatch.setenv("AGENT_TOOLS_TOKEN", token)
+        monkeypatch.setenv("AGENT_TOOLS_SANDBOX", sandbox_id)
+
+        code = tool_proxy.build_sandbox_module(["echo_tool"], {"echo_tool": "()"})
+        module = types.ModuleType("agent_tools")
+        module.__dict__["os"] = os
+        exec(compile(code, "agent_tools.py", "exec"), module.__dict__)
+
+        raw = module.echo_tool()
+        assert secret not in raw
+        assert "***" in raw
+
+        laundered = base64.b64encode(raw.encode()).decode()
+        assert base64.b64encode(secret.encode()).decode() not in laundered
+    finally:
+        redact.invalidate_secret_cache()
+
+
+def test_tool_result_without_a_secret_is_unaffected():
+    token, sandbox_id, _, _ = _register(result="nothing sensitive here")
+    resp = requests.post(
+        f"{BASE}/{sandbox_id}/echo_tool",
+        json={"args": [], "kwargs": {}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.json()["result"] == "nothing sensitive here"
 
 
 def test_tool_exception_returns_200_with_ok_false():

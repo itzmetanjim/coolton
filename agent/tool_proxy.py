@@ -25,6 +25,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
+from agent.redact import redact as _redact
+
 logger = logging.getLogger(__name__)
 
 LISTEN_HOST = "127.0.0.1"
@@ -127,10 +129,21 @@ class _Handler(BaseHTTPRequestHandler):
                 result = ""
             if not isinstance(result, str):
                 result = str(result)
+            # Every other tool-call path (agent.plan_block's before/after_tool
+            # hooks) redacts before the result is shown anywhere. This one
+            # doesn't go through those hooks at all — the result is handed
+            # straight back into the sandbox, where sandboxed code can freely
+            # transform it (base64, rot13, split across variables, ...) before
+            # code_mode's own output is ever assembled. Redacting the outer
+            # code_mode result afterwards is a plain substring scan and can't
+            # catch a transformed secret, so the only place this actually
+            # works is here — before the sandbox ever sees the raw value.
+            result = _redact(result, context=f"code_mode tool output {tool_name}")
             return self._send_json(200, {"ok": True, "result": result})
         except Exception as e:
             logger.warning("tool_proxy call failed for %s: %s", tool_name, e)
-            return self._send_json(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+            error = _redact(f"{type(e).__name__}: {e}", context=f"code_mode tool error {tool_name}")
+            return self._send_json(200, {"ok": False, "error": error})
 
     def log_message(self, *a):  # silence request logging
         pass
