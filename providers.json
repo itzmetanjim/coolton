@@ -55,6 +55,8 @@
     {"provider": "groq", "model": "groq:openai/gpt-oss-120b", "display": "Groq GPT-OSS-120B", "tags": ["gpt-oss-120b"], "context_window": 131072},
     {"provider": "google", "model": "google:gemini-3.1-flash-lite", "display": "Gemini 3.1 Flash-Lite", "tags": ["gemini-3.1-flash-lite", "vision"], "context_window": 1048576},
     {"provider": "groq", "model": "groq:openai/gpt-oss-20b", "display": "Groq GPT-OSS-20B", "tags": ["gpt-oss-20b"], "context_window": 131072},
-    {"provider": "mistral", "model": "mistral:mistral-large-2512", "display": "Mistral Large 2512", "tags": ["mistral-large-2512", "vision"], "context_window": 262144}
+    {"provider": "mistral", "model": "mistral:mistral-large-2512", "display": "Mistral Large 2512", "tags": ["mistral-large-2512", "vision"], "context_window": 262144},
+    {"provider": "hcai", "model": "google/gemini-3-pro-image-preview", "display": "HCAI Gemini 3 Pro Image (high)", "tags": ["image-high"], "kind": "image"},
+    {"provider": "hcai", "model": "google/gemini-2.5-flash-image-preview", "display": "HCAI Gemini 2.5 Flash Image (low)", "tags": ["image-low"], "kind": "image"}
   ]
 }

@@ -1,7 +1,7 @@
 from .emoji_reaction import add_emoji_reaction
 from .web_search import search_web, fetch_url
 from .vision import analyze_image
-from .image_gen import generate_image_with_byok
+from .image_gen import generate_image
 from .mermaid_tool import render_mermaid
 from .summarize_thread import summarize_thread
 from .list_threads import list_channel_threads
@@ -34,7 +34,7 @@ __all__ = [
     "search_web",
     "fetch_url",
     "analyze_image",
-    "generate_image_with_byok",
+    "generate_image",
     "render_mermaid",
     "summarize_thread",
     "list_channel_threads",
