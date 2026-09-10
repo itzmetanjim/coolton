@@ -252,6 +252,7 @@ everything else in `.env.sample` is optional and additive.
 | `BYOK_ENCRYPTION_KEY` | encrypts per-user BYOK endpoints (auto-generated to `byok_key.bin` if unset). |
 | `COOLTON_USER_ID` / `SLACK_USER_TOKEN` | the "cooltonUser" helper account, used for user-token Slack API calls. |
 | `COOLTON_BOT_ID` | coolton's own bot user id, so it recognizes self-mentions. |
+| `HUDDLEFM_USER_ID` | HuddleFM's Slack user id — DJ tools DM it directly (`agent/tools/huddlefm.py`). coolton's bot id must be allowlisted on HuddleFM's side (`INTEGRATION_USER_IDS`). |
 | `KEVINTON_ENABLED` | set to `false` to disable kevinton entirely (default: on). |
 
 ### 3. python environment
