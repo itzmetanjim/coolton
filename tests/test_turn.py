@@ -48,8 +48,12 @@ def mocks(monkeypatch):
     import agent.kevinton as kev
     monkeypatch.setattr(kev, "spawn_kevinton", Mock())
 
+    import agent.hcai_status as hcai_status
+    hcai_warn = Mock()
+    monkeypatch.setattr(hcai_status, "check_and_warn_async", hcai_warn)
+
     return SimpleNamespace(
-        client=client, say=say, say_stream=say_stream, logger=logger,
+        client=client, say=say, say_stream=say_stream, logger=logger, hcai_warn=hcai_warn,
     )
 
 
@@ -116,6 +120,14 @@ def test_happy_path(mocks):
 
     import agent.kevinton as kev
     kev.spawn_kevinton.assert_called_once()
+
+
+def test_hcai_status_checked_on_a_slack_turn(mocks):
+    """agent.hcai_status.check_and_warn_async runs whenever a Slack turn
+    starts, so a low HCAI balance gets flagged into the thread it's about to
+    degrade — see agent.hcai_status."""
+    _run_turn(mocks)
+    mocks.hcai_warn.assert_called_once_with(mocks.client, "C1", "1.1")
 
 
 def test_skip_path_deletes_plan_and_does_not_stream(mocks):
