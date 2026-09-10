@@ -2146,6 +2146,59 @@ def agentmail_send_email(
 
 
 @agent.tool
+def huddlefm_request_control_tool(
+    ctx: RunContext[AgentDeps], channel: str, permissions: str, events: str = "",
+) -> str:
+    """Request DJ control of a HuddleFM listening session, by DMing HuddleFM
+    (coolton is allowlisted for this). Call this ONCE per session before using
+    huddlefm_command_tool — see the system prompt's HUDDLEFM DJ section for the
+    permission ids and full command reference.
+
+    There is no immediate success reply: the session host gets an approval
+    prompt in Slack and can take up to 5 minutes to respond (or never respond).
+    This call only reports an immediate error (e.g. an invalid channel); after
+    it returns with no error, tell the user you're waiting on the host and
+    only try huddlefm_command_tool again once they say it's approved.
+
+    Args:
+        channel: The huddle's source channel, controls channel, or companion
+            channel — required, and it must be one of those three.
+        permissions: Comma-separated permission ids, e.g. "add,skip,pause,volume".
+        events: Comma-separated event subscription names (optional — usually
+            leave empty; coolton polls with `status` instead of subscribing).
+    """
+    from agent.tools.huddlefm import request_control
+    return request_control(ctx.deps.client, channel, permissions, events)
+
+
+@agent.tool
+def huddlefm_command_tool(
+    ctx: RunContext[AgentDeps], command_type: str, channel: str = "", fields: str = "",
+) -> str:
+    """Send a HuddleFM DJ command (after huddlefm_request_control_tool has been
+    approved for the needed permission) and return its JSON reply.
+
+    Args:
+        command_type: One of: status, search, add, remove, move, clear, skip,
+            previous, toggle, pause, resume, seek, volume, settings, end,
+            release_control. See the system prompt's HUDDLEFM DJ section for
+            which permission each needs and its extra fields.
+        channel: The session's channel — only required if you hold grants on
+            more than one HuddleFM session at once.
+        fields: JSON object string of the command's extra fields, e.g.
+            '{"query": "phonk"}' for search, '{"reference": "..."}' for add,
+            '{"percent": 40}' for volume. Leave empty for commands that take
+            none (status, clear, skip, previous, toggle, pause, resume, end,
+            release_control).
+    """
+    parsed_fields, parse_error = _parse_json_object_param("fields", fields)
+    if parse_error:
+        return parse_error
+    from agent.tools.huddlefm import send_command
+    return send_command(ctx.deps.client, command_type, channel, parsed_fields)
+
+
+@agent.tool
 def delegate_to_subagent(
     ctx: RunContext[AgentDeps],
     target: str,
