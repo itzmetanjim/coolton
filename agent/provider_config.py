@@ -50,10 +50,30 @@ def _get_models() -> list[dict]:
     return _load()["models"]
 
 
+def _is_chat_model(entry: dict) -> bool:
+    """True unless the model entry declares a non-"chat" `kind` (currently
+    only "image" — see the HCAI image-gen models and build_image_provider_order
+    below). Every helper here that picks a model for the ordinary
+    chat/tool-calling pipeline (the fallback order, `[!WITH:tag]` validation,
+    context-window sizing) must filter through this, or an image-only model
+    (which can't hold a normal conversation at all) could get selected as a
+    turn's actual chat model the moment its provider's env var happens to be
+    set — kind defaults to "chat" so every model declared before this field
+    existed is unaffected."""
+    return entry.get("kind", "chat") == "chat"
+
+
 def get_all_tags() -> list[str]:
-    """All distinct model tags declared in providers.json, sorted."""
+    """All distinct model tags declared in providers.json, sorted.
+
+    Chat models only (see _is_chat_model) — an image-gen tag like
+    "image-high" is not a valid `[!WITH:tag]` target (that directive picks
+    the turn's chat model), so it must not appear as a "known tag" there.
+    """
     tags: set[str] = set()
     for m in _get_models():
+        if not _is_chat_model(m):
+            continue
         tags.update(m.get("tags") or [])
     return sorted(tags)
 
@@ -72,6 +92,8 @@ def get_min_context_window(tag: str | None = None, default: int = 128_000) -> in
     pmap = _provider_map()
     windows: list[int] = []
     for model_entry in _get_models():
+        if not _is_chat_model(model_entry):
+            continue
         if tag and tag not in (model_entry.get("tags") or []):
             continue
         pconf = pmap.get(model_entry["provider"])
@@ -163,13 +185,21 @@ def _provider_map() -> dict[str, dict]:
 
 
 def _make_provider_name(provider_id: str, model_index: int) -> str:
-    """Generate a unique name for each (provider, model) entry."""
-    count = sum(1 for m in _get_models() if m["provider"] == provider_id)
+    """Generate a unique name for each (provider, model) entry.
+
+    Scoped to chat models only (see _is_chat_model) — this name is what
+    agent.fallback_cache keys a dead provider under, and it must only ever
+    count/index the entries build_provider_order (its one caller) actually
+    considers. A kind=="image" entry sharing the same provider id must never
+    shift a chat model's generated name (e.g. plain "hcai" silently becoming
+    "hcai_0" the moment an unrelated image model is added for that provider).
+    """
+    count = sum(1 for m in _get_models() if m["provider"] == provider_id and _is_chat_model(m))
     if count <= 1:
         return provider_id
     idx = 0
     for i, m in enumerate(_get_models()):
-        if m["provider"] == provider_id:
+        if m["provider"] == provider_id and _is_chat_model(m):
             if i == model_index:
                 return f"{provider_id}_{idx}"
             idx += 1
@@ -199,6 +229,8 @@ def build_provider_order(user_id: str | None = None, tag: str | None = None) -> 
 
     pmap = _provider_map()
     for model_idx, model_entry in enumerate(_get_models()):
+        if not _is_chat_model(model_entry):
+            continue
         if tag and tag not in (model_entry.get("tags") or []):
             continue
         pid = model_entry["provider"]
@@ -319,6 +351,8 @@ def get_model_from_config(user_id: str | None = None) -> str:
     providers (HCAI/BYOK).
     """
     for model_entry in _get_models():
+        if not _is_chat_model(model_entry):
+            continue
         pid = model_entry["provider"]
         pconf = _provider_map().get(pid, {})
         env_var = pconf.get("api_key_env_var_name")
@@ -352,3 +386,51 @@ def get_model_from_config(user_id: str | None = None) -> str:
         )
         + "."
     )
+
+
+# Image-gen quality -> the providers.json tag that model is declared under.
+# "high" (google/gemini-3-pro-image-preview) and "low"
+# (google/gemini-2.5-flash-image-preview) — see agent.tools.image_gen.
+_IMAGE_QUALITY_TAGS = {"high": "image-high", "low": "image-low"}
+
+
+def build_image_provider_order(quality: str) -> list[dict]:
+    """Ordered list of reachable kind=="image" model configs (see
+    _is_chat_model) for `quality` ("high"/"low", case-insensitive; anything
+    else falls back to "low"): the model tagged for the requested quality
+    comes first, then the model tagged for the OTHER quality — so
+    agent.tools.image_gen can fall back to it if the first one's provider is
+    down, without the caller having to know which model that is. Quality only
+    orders these HCAI-routed candidates; it has no bearing on whether a BYOK
+    endpoint is used at all (the caller checks that separately, first).
+
+    Each dict has {model, base_url, api_key, display} — the same shape
+    build_provider_order's config dicts use, so callers can pass them
+    straight to the same OpenAI-compatible request helper. A model whose
+    provider has no env var set is skipped, same as build_provider_order.
+    """
+    primary_tag = _IMAGE_QUALITY_TAGS.get((quality or "").strip().lower(), _IMAGE_QUALITY_TAGS["low"])
+    other_tag = next(t for t in _IMAGE_QUALITY_TAGS.values() if t != primary_tag)
+
+    pmap = _provider_map()
+    ordered: list[dict] = []
+    for wanted_tag in (primary_tag, other_tag):
+        for model_entry in _get_models():
+            if model_entry.get("kind") != "image":
+                continue
+            if wanted_tag not in (model_entry.get("tags") or []):
+                continue
+            pconf = pmap.get(model_entry["provider"])
+            if not pconf:
+                continue
+            env_var = pconf.get("api_key_env_var_name")
+            api_key = os.environ.get(env_var) if env_var else None
+            if not api_key:
+                continue
+            ordered.append({
+                "model": model_entry["model"],
+                "base_url": pconf.get("api_url"),
+                "api_key": api_key,
+                "display": get_provider_display(model_entry, pmap),
+            })
+    return ordered

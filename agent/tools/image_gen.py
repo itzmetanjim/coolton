@@ -28,10 +28,23 @@ def _resolve_size(size: str, aspect_ratio: str | None) -> str:
     return size
 
 
-def generate_image_with_byok(user_id: str, prompt: str, n: int = 1, size: str = "1024x1024", aspect_ratio: str | None = None) -> str:
-    """Generate images using the user's BYOK image endpoint (any OpenAI-compatible API).
+def generate_image(
+    user_id: str, prompt: str, n: int = 1, size: str = "1024x1024",
+    aspect_ratio: str | None = None, quality: str = "low",
+) -> str:
+    """Generate images, trying in order:
 
-    If no BYOK endpoint is set, falls back to global OPENAI_API_KEY.
+    1. The user's BYOK image endpoint, if one is set — `quality` has no
+       effect here; a user's own endpoint carries no quality tiers of ours
+       to pick between.
+    2. HCAI, model chosen by `quality` (see
+       agent.provider_config.build_image_provider_order) — falls back to
+       the OTHER quality's HCAI model if the requested one's request fails
+       (e.g. HCAI itself is down), before giving up on HCAI entirely.
+    3. The global OPENAI_API_KEY, if set, as a last resort.
+
+    Returns the first attempt's success, or the last attempt's error if
+    every reachable option failed.
     """
     if user_id:
         ep_id = get_image_endpoint_id(user_id)
@@ -40,11 +53,25 @@ def generate_image_with_byok(user_id: str, prompt: str, n: int = 1, size: str = 
             if ep:
                 return _generate_openai_compatible(ep["api_key"], ep["base_url"], ep["model"], prompt, n, size, aspect_ratio)
 
+    from agent.provider_config import build_image_provider_order
+
+    attempts = [(c["api_key"], c["base_url"], c["model"]) for c in build_image_provider_order(quality)]
     global_key = os.environ.get("OPENAI_API_KEY")
     if global_key:
-        return _generate_openai_compatible(global_key, "https://api.openai.com/v1", "dall-e-3", prompt, n, size, aspect_ratio)
+        attempts.append((global_key, "https://api.openai.com/v1", "dall-e-3"))
 
-    return "Error: No image generation API key found. Add an endpoint via BYOK (Home tab) or set OPENAI_API_KEY globally."
+    if not attempts:
+        return (
+            "Error: No image generation API key found. Add an endpoint via "
+            "BYOK (Home tab), configure HCAI_API_KEY, or set OPENAI_API_KEY globally."
+        )
+
+    result = ""
+    for api_key, base_url, model in attempts:
+        result = _generate_openai_compatible(api_key, base_url, model, prompt, n, size, aspect_ratio)
+        if "image(s)" in result:
+            return result
+    return result
 
 
 def _generate_openai_compatible(api_key: str, base_url: str, model: str, prompt: str, n: int, size: str, aspect_ratio: str | None = None) -> str:

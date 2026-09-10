@@ -444,8 +444,16 @@ Use `analyze_image` when you need an AI description of an image (describe, extra
 
 ## IMAGE GENERATION (generate_image_tool)
 Use `generate_image_tool` to generate AI images from text prompts.
-- Uses an OpenAI-compatible image model (user BYOK endpoint or global OPENAI_API_KEY)
-- Args: prompt, n (1-4 images), size (e.g., "1024x1024", "1792x1024"), aspect_ratio (e.g., "16:9", "1:1", "9:16")
+- Tries, in order: the user's BYOK image endpoint if they have one (quality has no
+  effect here — it's their own model, not a choice between ours); otherwise HCAI,
+  using the model `quality` picks — "high" is google/gemini-3-pro-image-preview
+  (slower, better), "low" is google/gemini-2.5-flash-image-preview (faster,
+  default) — automatically falling back to the OTHER quality's HCAI model if the
+  first one's request fails (e.g. HCAI itself is down); otherwise the global
+  OPENAI_API_KEY as a last resort
+- Args: prompt, n (1-4 images), size (e.g., "1024x1024", "1792x1024"), aspect_ratio
+  (e.g., "16:9", "1:1", "9:16"), quality ("high" or "low", default "low" — only ask
+  for "high" when the user actually wants the better/slower model)
 - Images are saved into the sandbox ~/downloads/ when a sandbox is active
 - Upload the saved files using `upload_file_from_sandbox` if the user wants them in Slack
 

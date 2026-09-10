@@ -985,13 +985,19 @@ def generate_image_tool(
     n: int = 1,
     size: str = "1024x1024",
     aspect_ratio: str = "",
+    quality: str = "low",
 ) -> str:
-    """Generate AI images from a text prompt using an OpenAI-compatible image model.
+    """Generate AI images from a text prompt.
+
+    Tries, in order: the user's BYOK image endpoint if they have one set
+    (quality has no effect on this — it's their own model, not a choice
+    between ours); otherwise HCAI, using the model `quality` picks, falling
+    back automatically to the OTHER quality's HCAI model if that one's
+    request fails (e.g. HCAI itself is down); otherwise the global
+    OPENAI_API_KEY as a last resort.
 
     The images are saved into the sandbox ~/downloads/ directory (if a sandbox is active)
     and their URLs are returned. Use upload_file_from_sandbox to send them to Slack.
-
-    Requires the user to have an OpenAI API key (via BYOK or global OPENAI_API_KEY).
 
     Args:
         prompt: Text description of the desired image.
@@ -1000,11 +1006,19 @@ def generate_image_tool(
         aspect_ratio: Optional aspect ratio like "16:9", "1:1", "9:16", "4:3".
             Overrides size when it maps to a known size; otherwise passed through
             to providers that support an `aspect_ratio` field.
+        quality: "high" (HCAI google/gemini-3-pro-image-preview — slower,
+            better) or "low" (HCAI google/gemini-2.5-flash-image-preview —
+            faster, default). Only chooses between HCAI's two models; ignored
+            entirely when a BYOK image endpoint is used instead.
     """
-    from agent.tools.image_gen import generate_image_with_byok, save_images_to_sandbox
+    quality = (quality or "low").strip().lower()
+    if quality not in ("high", "low"):
+        return f"Error: quality must be \"high\" or \"low\", got {quality!r}."
 
-    result = generate_image_with_byok(
-        ctx.deps.user_id, prompt, n, size, aspect_ratio or None
+    from agent.tools.image_gen import generate_image, save_images_to_sandbox
+
+    result = generate_image(
+        ctx.deps.user_id, prompt, n, size, aspect_ratio or None, quality,
     )
     if "image(s)" not in result:
         return result

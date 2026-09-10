@@ -65,9 +65,14 @@ def test_every_configured_model_declares_a_context_window():
     """history_compaction.py sizes its compaction budget off the smallest
     reachable model's context_window — a model added without one silently
     falls back to a generic default instead of actually protecting that
-    model's real limit."""
+    model's real limit. Scoped to chat models (see _is_chat_model) — an
+    image-gen model (kind=="image") never enters the chat/history pipeline
+    at all, so it carries no context_window and shouldn't need one."""
     models = provider_config._get_models()
-    missing = [m["model"] for m in models if not m.get("context_window")]
+    missing = [
+        m["model"] for m in models
+        if provider_config._is_chat_model(m) and not m.get("context_window")
+    ]
     assert missing == []
 
 
@@ -255,3 +260,81 @@ def test_build_vision_chain_skips_unreachable_providers(isolated_config, monkeyp
     })
     monkeypatch.delenv("HCAI_KEY", raising=False)
     assert provider_config.build_vision_chain() == []
+
+
+# ---------------------------------------------------------------------------
+# kind=="image" models (agent.tools.image_gen) — must never leak into the
+# ordinary chat pipeline, and build_image_provider_order must never surface
+# an ordinary chat model.
+# ---------------------------------------------------------------------------
+
+_IMAGE_CONFIG = {
+    "providers": [{"id": "hcai", "api_url": "https://hcai.example/v1", "api_key_env_var_name": "HCAI_KEY"}],
+    "models": [
+        {"provider": "hcai", "model": "chat-model", "context_window": 100_000},
+        {"provider": "hcai", "model": "high-model", "tags": ["image-high"], "kind": "image"},
+        {"provider": "hcai", "model": "low-model", "tags": ["image-low"], "kind": "image"},
+    ],
+}
+
+
+def test_image_models_are_excluded_from_the_chat_provider_order(isolated_config, monkeypatch):
+    isolated_config(_IMAGE_CONFIG)
+    monkeypatch.setenv("HCAI_KEY", "k")
+    order = provider_config.build_provider_order()
+    assert [name for name, _ in order] == ["hcai"]
+    assert order[0][1]["model"] == "chat-model"
+
+
+def test_image_models_are_excluded_from_get_model_from_config(isolated_config, monkeypatch):
+    isolated_config(_IMAGE_CONFIG)
+    monkeypatch.setenv("HCAI_KEY", "k")
+    # get_model_from_config returns an OpenAIChatModel for a base_url provider
+    # (hcai here) — its .model_name attribute is the raw model string.
+    result = provider_config.get_model_from_config()
+    assert result.model_name == "chat-model"
+
+
+def test_image_tags_are_not_known_with_directive_tags(isolated_config, monkeypatch):
+    isolated_config(_IMAGE_CONFIG)
+    monkeypatch.setenv("HCAI_KEY", "k")
+    assert "image-high" not in provider_config.get_all_tags()
+    assert "image-low" not in provider_config.get_all_tags()
+
+
+def test_build_image_provider_order_puts_requested_quality_first(isolated_config, monkeypatch):
+    isolated_config(_IMAGE_CONFIG)
+    monkeypatch.setenv("HCAI_KEY", "k")
+    order = provider_config.build_image_provider_order("high")
+    assert [c["model"] for c in order] == ["high-model", "low-model"]
+
+
+def test_build_image_provider_order_low_quality_puts_low_first(isolated_config, monkeypatch):
+    isolated_config(_IMAGE_CONFIG)
+    monkeypatch.setenv("HCAI_KEY", "k")
+    order = provider_config.build_image_provider_order("low")
+    assert [c["model"] for c in order] == ["low-model", "high-model"]
+
+
+def test_build_image_provider_order_defaults_unknown_quality_to_low(isolated_config, monkeypatch):
+    isolated_config(_IMAGE_CONFIG)
+    monkeypatch.setenv("HCAI_KEY", "k")
+    order = provider_config.build_image_provider_order("bogus")
+    assert [c["model"] for c in order] == ["low-model", "high-model"]
+
+
+def test_build_image_provider_order_is_case_insensitive():
+    assert provider_config._IMAGE_QUALITY_TAGS.get("HIGH".strip().lower()) == "image-high"
+
+
+def test_build_image_provider_order_skips_unreachable_provider(isolated_config, monkeypatch):
+    isolated_config(_IMAGE_CONFIG)
+    monkeypatch.delenv("HCAI_KEY", raising=False)
+    assert provider_config.build_image_provider_order("high") == []
+
+
+def test_build_image_provider_order_never_returns_a_chat_model(isolated_config, monkeypatch):
+    isolated_config(_IMAGE_CONFIG)
+    monkeypatch.setenv("HCAI_KEY", "k")
+    order = provider_config.build_image_provider_order("high")
+    assert "chat-model" not in [c["model"] for c in order]
