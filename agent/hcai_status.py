@@ -25,7 +25,7 @@ _REQUEST_TIMEOUT_SECONDS = 5
 
 WARNING_TEXT = (
     "_HCAI is down, so coolton will fall back to significantly worse "
-    "messages. Expect degraded responses and hallucinations._"
+    "models. Expect degraded responses and hallucinations._"
 )
 
 # Re-warn the same thread at most this often — without this, every single
