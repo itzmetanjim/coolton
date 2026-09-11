@@ -244,7 +244,11 @@ def test_apply_provider_env_empty_key_skipped(monkeypatch, clean_env):
 # ---------------------------------------------------------------------------
 
 
-def test_provider_order_anthropic_only(monkeypatch, clean_env):
+def test_provider_order_anthropic_only(isolated_config, monkeypatch, clean_env):
+    isolated_config({
+        "providers": [{"id": "anthropic", "api_url": None, "api_key_env_var_name": "ANTHROPIC_API_KEY"}],
+        "models": [{"provider": "anthropic", "model": "m1", "context_window": 100_000}],
+    })
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     order = agent_mod._build_provider_order(None)
     assert [name for name, _ in order] == ["anthropic"]
@@ -254,17 +258,17 @@ def test_provider_order_no_config(monkeypatch, clean_env):
     assert agent_mod._build_provider_order(None) == []
 
 
-def test_provider_order_hcai_models(monkeypatch, clean_env):
-    monkeypatch.setenv("HCAI_API_KEY", "h")
+def test_provider_order_multiple_models_get_indexed_names(isolated_config, monkeypatch, clean_env):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": "https://p1.example/v1", "api_key_env_var_name": "P1_KEY"}],
+        "models": [{"provider": "p1", "model": f"m{i}", "context_window": 100_000} for i in range(4)],
+    })
+    monkeypatch.setenv("P1_KEY", "k")
     order = agent_mod._build_provider_order(None)
     names = [name for name, _ in order]
-    assert names[0] == "hcai_0"
-    assert "hcai_1" in names
-    assert "hcai_2" in names
-    assert "hcai_3" in names
-    # HCAI entries carry the explicit base_url
-    hcai = dict(order)["hcai_2"]
-    assert hcai["base_url"] == "https://ai.hackclub.com/proxy/v1"
+    assert names == ["p1_0", "p1_1", "p1_2", "p1_3"]
+    # a base_url provider's entries carry the explicit base_url through
+    assert dict(order)["p1_2"]["base_url"] == "https://p1.example/v1"
 
 
 def test_provider_order_byok_first(monkeypatch, clean_env):
@@ -275,50 +279,59 @@ def test_provider_order_byok_first(monkeypatch, clean_env):
     assert order[0][1]["base_url"] == "https://user"
 
 
-def test_provider_order_tag_filter_restricts_to_tagged_models(monkeypatch, clean_env):
-    monkeypatch.setenv("HCAI_API_KEY", "h")
-    monkeypatch.setenv("OPENROUTER_API_KEY_FALLBACK", "or")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-    order = agent_mod._build_provider_order(None, tag="luna")
-    from agent.provider_config import _get_models
-    assert all("luna" in (m.get("tags") or []) for name, cfg in order for m in _get_models() if m["model"] == cfg["model"])
-    # anthropic (untagged) must not appear when a tag filter is active
-    assert "anthropic" not in [name for name, _ in order]
+def test_provider_order_tag_filter_restricts_to_tagged_models(isolated_config, monkeypatch, clean_env):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [
+            {"provider": "p1", "model": "tagged", "tags": ["mytag"], "context_window": 100_000},
+            {"provider": "p1", "model": "untagged", "context_window": 100_000},
+        ],
+    })
+    monkeypatch.setenv("P1_KEY", "k")
+    order = agent_mod._build_provider_order(None, tag="mytag")
+    assert [cfg["model"] for _, cfg in order] == ["tagged"]
 
 
-def test_provider_order_tag_filter_matches_multiple_providers(monkeypatch, clean_env):
-    monkeypatch.setenv("KILOCODE_API_KEY", "kc")
-    monkeypatch.setenv("OPENROUTER_API_KEY_FALLBACK", "or")
-    order = agent_mod._build_provider_order(None, tag="nemotron-3-ultra")
-    models = [cfg["model"] for _, cfg in order]
-    assert "nvidia/nemotron-3-ultra-550b-a55b:free" in models
-    assert "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free" in models
+def test_provider_order_tag_filter_matches_multiple_providers(isolated_config, monkeypatch, clean_env):
+    isolated_config({
+        "providers": [
+            {"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"},
+            {"id": "p2", "api_url": None, "api_key_env_var_name": "P2_KEY"},
+        ],
+        "models": [
+            {"provider": "p1", "model": "m1", "tags": ["shared"], "context_window": 100_000},
+            {"provider": "p2", "model": "m2", "tags": ["shared"], "context_window": 100_000},
+        ],
+    })
+    monkeypatch.setenv("P1_KEY", "k1")
+    monkeypatch.setenv("P2_KEY", "k2")
+    order = agent_mod._build_provider_order(None, tag="shared")
+    assert [cfg["model"] for _, cfg in order] == ["m1", "m2"]
 
 
-def test_provider_order_tag_filter_vision_matches_configured_vision_models(monkeypatch, clean_env):
+def test_provider_order_tag_filter_vision_matches_configured_vision_models(isolated_config, monkeypatch, clean_env):
     # computer_use's vision gate (provider_config.is_vision_model) depends on this
-    # filter reaching exactly the models tagged "vision" in providers.json — every
-    # provider that has a vision-tagged entry needs its key set for a complete check.
-    monkeypatch.setenv("HCAI_API_KEY", "h")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-    monkeypatch.setenv("OPENAI_API_KEY", "o")
-    monkeypatch.setenv("GOOGLE_API_KEY", "g")
-    monkeypatch.setenv("KILOCODE_API_KEY", "kc")
-    monkeypatch.setenv("OPENROUTER_API_KEY_FALLBACK", "or")
-    monkeypatch.setenv("GROQ_API_KEY", "gr")
-    monkeypatch.setenv("MISTRAL_API_KEY", "m")
-    monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "oz")
+    # filter reaching exactly the models tagged "vision" and nothing else.
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [
+            {"provider": "p1", "model": "sees", "tags": ["vision"], "context_window": 100_000},
+            {"provider": "p1", "model": "blind", "context_window": 100_000},
+        ],
+    })
+    monkeypatch.setenv("P1_KEY", "k")
     order = agent_mod._build_provider_order(None, tag="vision")
-    from agent.provider_config import _get_models
-    vision_models = {m["model"] for m in _get_models() if "vision" in (m.get("tags") or [])}
-    assert {cfg["model"] for _, cfg in order} == vision_models
-    assert vision_models  # sanity: the tag actually exists in current config
+    assert [cfg["model"] for _, cfg in order] == ["sees"]
 
 
-def test_provider_order_tag_filter_excludes_byok(monkeypatch, clean_env):
+def test_provider_order_tag_filter_excludes_byok(isolated_config, monkeypatch, clean_env):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [{"provider": "p1", "model": "m1", "tags": ["mytag"], "context_window": 100_000}],
+    })
     monkeypatch.setattr(agent_mod, "get_user_text_endpoint", lambda uid: {"model": "m", "base_url": "https://user", "api_key": "uk"})
-    monkeypatch.setenv("HCAI_API_KEY", "h")
-    order = agent_mod._build_provider_order("U1", tag="luna")
+    monkeypatch.setenv("P1_KEY", "k")
+    order = agent_mod._build_provider_order("U1", tag="mytag")
     assert "byok" not in [name for name, _ in order]
 
 
@@ -328,23 +341,33 @@ def test_provider_order_unknown_tag_yields_empty_order(monkeypatch, clean_env):
     assert agent_mod._build_provider_order(None, tag="nonexistent-tag") == []
 
 
-def test_resolve_provider_order_tag_skips_fallback_cache_reordering(monkeypatch, clean_env):
+def test_resolve_provider_order_tag_skips_fallback_cache_reordering(isolated_config, monkeypatch, clean_env):
     """A forced tag is deterministic — the fallback cache's "prefer last known
     working provider" reordering must not silently reintroduce a provider
     the tag already excluded, or reorder within it unexpectedly."""
-    monkeypatch.setenv("HCAI_API_KEY", "h")
-    monkeypatch.setenv("OPENROUTER_API_KEY_FALLBACK", "or")
-    monkeypatch.setattr("agent.fallback_cache.get_dead_providers", lambda: {"hcai_0"})
-    monkeypatch.setattr("agent.fallback_cache.get_working_provider", lambda: "openrouter_fb_1")
+    isolated_config({
+        "providers": [
+            {"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"},
+            {"id": "p2", "api_url": None, "api_key_env_var_name": "P2_KEY"},
+        ],
+        "models": [
+            {"provider": "p1", "model": "m1", "tags": ["mytag"], "context_window": 100_000},
+            {"provider": "p2", "model": "m2", "tags": ["mytag"], "context_window": 100_000},
+        ],
+    })
+    monkeypatch.setenv("P1_KEY", "k1")
+    monkeypatch.setenv("P2_KEY", "k2")
+    monkeypatch.setattr("agent.fallback_cache.get_dead_providers", lambda: {"p1"})
+    monkeypatch.setattr("agent.fallback_cache.get_working_provider", lambda: "p2")
 
     untagged_order = agent_mod._resolve_provider_order(None)
-    tagged_order = agent_mod._resolve_provider_order(None, tag="luna")
+    tagged_order = agent_mod._resolve_provider_order(None, tag="mytag")
 
     # Without a tag, the cache logic actively filters/reorders.
-    assert "hcai_0" not in [n for n, _ in untagged_order]
+    assert "p1" not in [n for n, _ in untagged_order]
     # With a tag forced, the raw tag-filtered order is used untouched by the cache.
     from agent.provider_config import build_provider_order
-    assert tagged_order == build_provider_order(None, tag="luna")
+    assert tagged_order == build_provider_order(None, tag="mytag")
 
 
 # ---------------------------------------------------------------------------
@@ -352,10 +375,14 @@ def test_resolve_provider_order_tag_skips_fallback_cache_reordering(monkeypatch,
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_model_string_provider(monkeypatch, clean_env):
+def test_runtime_model_string_provider(isolated_config, monkeypatch, clean_env):
+    isolated_config({
+        "providers": [{"id": "anthropic", "api_url": None, "api_key_env_var_name": "ANTHROPIC_API_KEY"}],
+        "models": [{"provider": "anthropic", "model": "m1", "context_window": 100_000}],
+    })
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     model = agent_mod.get_runtime_model()
-    assert model == "anthropic:claude-sonnet-4-6"
+    assert model == "m1"
 
 
 def test_runtime_model_hcai_returns_model_object(monkeypatch, clean_env):
@@ -463,17 +490,28 @@ def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
     assert agent_mod._resolve_skill("") is None
 
 @pytest.mark.parametrize(
-    ("env_key", "expected"),
+    "env_key",
     [
-        ("ANTHROPIC_API_KEY", "anthropic:claude-sonnet-4-6"),
-        ("OPENAI_API_KEY", "openai:gpt-4.1-mini"),
-        ("OPENROUTER_API_KEY_FALLBACK", "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"),
-        ("GOOGLE_API_KEY", "google:gemma-4-31b-it"),
-        ("GROQ_API_KEY", "groq:qwen/qwen3.6-27b"),
-        ("MISTRAL_API_KEY", "mistral:mistral-small-2603"),
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY_FALLBACK",
+        "GOOGLE_API_KEY",
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
     ],
 )
-def test_get_model_accepts_documented_provider_keys(monkeypatch, clean_env, env_key, expected):
+def test_get_model_accepts_documented_provider_keys(monkeypatch, clean_env, env_key):
+    """Setting any ONE of these documented env vars alone must make get_model()
+    resolve to a real, usable model. The expected model is derived from the
+    live providers.json (whichever it currently lists first for that
+    provider) rather than pinned to a literal string, so adding/removing/
+    reordering models never requires touching this test — only breaking the
+    env-var -> provider wiring itself would."""
+    from agent.provider_config import _get_models, _get_providers, _is_chat_model
+
+    provider_id = next(p["id"] for p in _get_providers() if p.get("api_key_env_var_name") == env_key)
+    expected = next(m["model"] for m in _get_models() if m["provider"] == provider_id and _is_chat_model(m))
+
     monkeypatch.setenv(env_key, "test-key")
     result = agent_mod.get_model()
     if isinstance(result, OpenAIChatModel):
