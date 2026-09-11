@@ -1,8 +1,23 @@
-import json
-
-import pytest
-
 from agent import provider_config
+
+# extract_tag_directive's notion of a "known tag" comes from
+# provider_config.get_all_tags(), which reads the real providers.json — every
+# test below that depends on a tag actually being known (or being able to
+# name every known tag) isolates its own throwaway config via
+# isolated_config (tests/conftest.py) instead of relying on specific tags
+# ("luna", "glm5.2", ...) still existing in the real file. Only the tests
+# that never reach a known-tag lookup at all (no directive, or an escaped
+# one) skip it.
+
+
+def _with_tags(isolated_config, *tags):
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [
+            {"provider": "p1", "model": f"m{i}", "tags": [t], "context_window": 100_000}
+            for i, t in enumerate(tags)
+        ],
+    })
 
 
 def test_extract_tag_directive_no_directive_is_unchanged():
@@ -12,38 +27,44 @@ def test_extract_tag_directive_no_directive_is_unchanged():
     assert error is None
 
 
-def test_extract_tag_directive_strips_valid_directive():
-    text, tag, error = provider_config.extract_tag_directive("hello [!WITH:luna] world")
+def test_extract_tag_directive_strips_valid_directive(isolated_config):
+    _with_tags(isolated_config, "mytag")
+    text, tag, error = provider_config.extract_tag_directive("hello [!WITH:mytag] world")
     assert text == "hello  world"
-    assert tag == "luna"
+    assert tag == "mytag"
     assert error is None
 
 
-def test_extract_tag_directive_is_case_insensitive():
-    text, tag, error = provider_config.extract_tag_directive("[!WITH:LUNA] hi")
-    assert tag == "luna"
+def test_extract_tag_directive_is_case_insensitive(isolated_config):
+    _with_tags(isolated_config, "mytag")
+    text, tag, error = provider_config.extract_tag_directive("[!WITH:MYTAG] hi")
+    assert tag == "mytag"
     assert error is None
 
 
-def test_extract_tag_directive_strips_surrounding_whitespace_in_tag():
-    text, tag, error = provider_config.extract_tag_directive("[!WITH: luna ] hi")
-    assert tag == "luna"
+def test_extract_tag_directive_strips_surrounding_whitespace_in_tag(isolated_config):
+    _with_tags(isolated_config, "mytag")
+    text, tag, error = provider_config.extract_tag_directive("[!WITH: mytag ] hi")
+    assert tag == "mytag"
     assert error is None
 
 
 def test_extract_tag_directive_escaped_strips_only_backslash():
-    text, tag, error = provider_config.extract_tag_directive(r"hello \[!WITH:luna] world")
-    assert text == "hello [!WITH:luna] world"
+    # An escaped directive never reaches the known-tag lookup at all (see
+    # extract_tag_directive's `_sub`), so this needs no config isolation.
+    text, tag, error = provider_config.extract_tag_directive(r"hello \[!WITH:mytag] world")
+    assert text == "hello [!WITH:mytag] world"
     assert tag is None
     assert error is None
 
 
-def test_extract_tag_directive_unknown_tag_returns_error():
+def test_extract_tag_directive_unknown_tag_returns_error(isolated_config):
+    _with_tags(isolated_config, "known-a", "known-b")
     text, tag, error = provider_config.extract_tag_directive("[!WITH:bogus] hi")
     assert tag is None
     assert error is not None
     assert "bogus" in error
-    assert "luna" in error and "glm5.3-flash" in error and "mistral-small-2603" in error
+    assert "known-a" in error and "known-b" in error
     assert r"\[!WITH:bogus]" in error
 
 
@@ -54,9 +75,10 @@ def test_extract_tag_directive_escaped_unknown_tag_is_not_an_error():
     assert error is None
 
 
-def test_extract_tag_directive_only_first_live_directive_wins():
-    text, tag, error = provider_config.extract_tag_directive("[!WITH:luna] and also [!WITH:glm5.3-flash]")
-    assert tag == "luna"
+def test_extract_tag_directive_only_first_live_directive_wins(isolated_config):
+    _with_tags(isolated_config, "tag-a", "tag-b")
+    text, tag, error = provider_config.extract_tag_directive("[!WITH:tag-a] and also [!WITH:tag-b]")
+    assert tag == "tag-a"
     assert error is None
     assert "[!WITH:" not in text
 
@@ -77,22 +99,11 @@ def test_every_configured_model_declares_a_context_window():
 
 
 # ---------------------------------------------------------------------------
-# get_min_context_window — isolated against a throwaway providers.json so
-# these don't depend on (or accidentally mutate expectations about) the real
-# one, or on which real provider env vars happen to be set.
+# get_min_context_window — isolated against a throwaway providers.json (the
+# `isolated_config` fixture, tests/conftest.py) so these don't depend on (or
+# accidentally mutate expectations about) the real one, or on which real
+# provider env vars happen to be set.
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def isolated_config(tmp_path):
-    def _write(data: dict):
-        path = tmp_path / "providers.json"
-        path.write_text(json.dumps(data))
-        provider_config._load_config(str(path))
-        return path
-
-    yield _write
-    provider_config._reset()
 
 
 def test_get_min_context_window_returns_the_smallest_reachable(isolated_config, monkeypatch):

@@ -311,7 +311,19 @@ def test_chunk_text_respects_default_limit():
 # ---------------------------------------------------------------------------
 
 
-def test_valid_tag_directive_is_stripped_and_forces_provider(mocks):
+@pytest.fixture
+def a_known_tag(isolated_config):
+    """[!WITH:tag] validity comes from provider_config.get_all_tags(), which
+    reads the real providers.json — isolate it here so these tests exercise
+    extract_tag_directive's own logic (known vs. unknown tag) rather than
+    depending on "luna" specifically still being a real configured tag."""
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": None, "api_key_env_var_name": "P1_KEY"}],
+        "models": [{"provider": "p1", "model": "m1", "tags": ["luna"], "context_window": 100_000}],
+    })
+
+
+def test_valid_tag_directive_is_stripped_and_forces_provider(mocks, a_known_tag):
     _run_turn(mocks, text="hi [!WITH:luna] there")
 
     call_text = turn.run_agent.call_args.args[0]
@@ -325,7 +337,7 @@ def test_valid_tag_directive_is_stripped_and_forces_provider(mocks):
     turn.conversation_store.set_history.assert_called_once()
 
 
-def test_invalid_tag_directive_short_circuits_before_any_work(mocks):
+def test_invalid_tag_directive_short_circuits_before_any_work(mocks, a_known_tag):
     _run_turn(mocks, text="hi [!WITH:bogus] there")
 
     turn.run_agent.assert_not_called()
@@ -340,7 +352,7 @@ def test_invalid_tag_directive_short_circuits_before_any_work(mocks):
     turn.conversation_store.set_history.assert_not_called()
 
 
-def test_escaped_tag_directive_is_left_literal_with_backslash_stripped(mocks):
+def test_escaped_tag_directive_is_left_literal_with_backslash_stripped(mocks, a_known_tag):
     _run_turn(mocks, text=r"hi \[!WITH:luna] there")
 
     call_text = turn.run_agent.call_args.args[0]
