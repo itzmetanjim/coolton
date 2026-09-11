@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from web import auth, conversation_log as log, conversations
+from web import auth, bot_oauth, conversation_log as log, conversations
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="coolton", lifespan=_lifespan)
 app.include_router(auth.router)
 app.include_router(conversations.router)
+app.include_router(bot_oauth.router)
 
 
 @app.get("/")
