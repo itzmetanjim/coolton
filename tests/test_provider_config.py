@@ -43,7 +43,7 @@ def test_extract_tag_directive_unknown_tag_returns_error():
     assert tag is None
     assert error is not None
     assert "bogus" in error
-    assert "luna" in error and "glm5.2" in error and "glm5.3-flash" in error
+    assert "luna" in error and "glm5.3-flash" in error and "mistral-small-2603" in error
     assert r"\[!WITH:bogus]" in error
 
 
@@ -55,7 +55,7 @@ def test_extract_tag_directive_escaped_unknown_tag_is_not_an_error():
 
 
 def test_extract_tag_directive_only_first_live_directive_wins():
-    text, tag, error = provider_config.extract_tag_directive("[!WITH:luna] and also [!WITH:glm5.2]")
+    text, tag, error = provider_config.extract_tag_directive("[!WITH:luna] and also [!WITH:glm5.3-flash]")
     assert tag == "luna"
     assert error is None
     assert "[!WITH:" not in text
