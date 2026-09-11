@@ -287,12 +287,12 @@ def test_provider_order_tag_filter_restricts_to_tagged_models(monkeypatch, clean
 
 
 def test_provider_order_tag_filter_matches_multiple_providers(monkeypatch, clean_env):
-    monkeypatch.setenv("HCAI_API_KEY", "h")
+    monkeypatch.setenv("KILOCODE_API_KEY", "kc")
     monkeypatch.setenv("OPENROUTER_API_KEY_FALLBACK", "or")
-    order = agent_mod._build_provider_order(None, tag="glm5.2")
+    order = agent_mod._build_provider_order(None, tag="nemotron-3-ultra")
     models = [cfg["model"] for _, cfg in order]
-    assert "z-ai/glm-5.2:free" in models
-    assert "openrouter:z-ai/glm-5.2:free" in models
+    assert "nvidia/nemotron-3-ultra-550b-a55b:free" in models
+    assert "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free" in models
 
 
 def test_provider_order_tag_filter_vision_matches_configured_vision_models(monkeypatch, clean_env):
@@ -467,10 +467,10 @@ def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
     [
         ("ANTHROPIC_API_KEY", "anthropic:claude-sonnet-4-6"),
         ("OPENAI_API_KEY", "openai:gpt-4.1-mini"),
-        ("OPENROUTER_API_KEY_FALLBACK", "openrouter:z-ai/glm-5.3-flash"),
+        ("OPENROUTER_API_KEY_FALLBACK", "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"),
         ("GOOGLE_API_KEY", "google:gemma-4-31b-it"),
         ("GROQ_API_KEY", "groq:qwen/qwen3.6-27b"),
-        ("MISTRAL_API_KEY", "mistral:mistral-large-2512"),
+        ("MISTRAL_API_KEY", "mistral:mistral-small-2603"),
     ],
 )
 def test_get_model_accepts_documented_provider_keys(monkeypatch, clean_env, env_key, expected):
