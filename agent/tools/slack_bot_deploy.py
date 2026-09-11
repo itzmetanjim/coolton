@@ -1,14 +1,70 @@
 """Slack app creation, token registration, and safe Worker deployment helpers."""
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import shlex
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 STORE = Path(os.environ.get("COOLTON_BOT_STORE", "~/.coolton_bots.json")).expanduser()
+
+# Public base URL of the coolton process itself (web/server.py, started by
+# app.py's _start_web_ui) — NOT the Worker being deployed, which doesn't exist
+# yet at manifest-create time. web/bot_oauth.py's callback route lives here.
+PUBLIC_BASE_URL = os.environ.get("COOLTON_PUBLIC_URL", "https://coolton.tanjim.org")
+OAUTH_CALLBACK_PATH = "/bot-oauth/callback"
+_STATE_MAX_AGE_SECONDS = 24 * 3600
+
+
+def oauth_callback_url() -> str:
+    return PUBLIC_BASE_URL.rstrip("/") + OAUTH_CALLBACK_PATH
+
+
+def _state_secret() -> bytes:
+    # Reuses the same secret web/auth.py signs its session cookies with —
+    # there's nothing web-UI-specific about it, it's just coolton's one
+    # general-purpose "sign a short-lived server-issued token" key.
+    return os.environ.get("COOLTON_WEB_SECRET", "").encode()
+
+
+def sign_install_state(app_id: str) -> str:
+    """Sign a short-lived `state` token binding an OAuth install attempt to the
+    app it was created for. web/bot_oauth.py verifies this on the way back
+    from Slack so a forged/foreign `state` can never register a token onto an
+    app it doesn't belong to."""
+    payload = f"{app_id}:{time.time()}"
+    body = base64.urlsafe_b64encode(payload.encode()).rstrip(b"=").decode()
+    sig = hmac.new(_state_secret(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def verify_install_state(state: str) -> str | None:
+    """Inverse of sign_install_state: the app_id if `state` is validly signed
+    and not expired, else None."""
+    if not _state_secret() or not state:
+        return None
+    try:
+        body, sig = state.rsplit(".", 1)
+    except ValueError:
+        return None
+    expected_sig = hmac.new(_state_secret(), body.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected_sig):
+        return None
+    try:
+        padding = "=" * (-len(body) % 4)
+        app_id, ts = base64.urlsafe_b64decode(body + padding).decode().rsplit(":", 1)
+        if time.time() - float(ts) > _STATE_MAX_AGE_SECONDS:
+            return None
+        return app_id
+    except Exception:
+        return None
 
 
 def _load() -> dict[str, Any]:
@@ -55,9 +111,26 @@ def _api(method: str, data: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_slack_bot(manifest: dict) -> str:
-    """Validate and create a Slack app from a manifest without exposing secrets."""
+    """Validate and create a Slack app from a manifest without exposing secrets.
+
+    Bakes coolton's own OAuth callback into the app's redirect_urls, so the
+    returned oauth_authorize_url carries a redirect_uri + signed state and a
+    human never has to dig the bot token out of the Slack UI and hand it back
+    — web/bot_oauth.py captures and registers it automatically. Poll
+    check_bot_install_status(app_id) to know when that's happened.
+    """
     if not isinstance(manifest, dict) or not manifest.get("display_information", {}).get("name"):
         return "Error: manifest.display_information.name is required."
+
+    manifest = dict(manifest)  # don't mutate the caller's dict
+    oauth_config = dict(manifest.get("oauth_config") or {})
+    callback_url = oauth_callback_url()
+    redirect_urls = list(oauth_config.get("redirect_urls") or [])
+    if callback_url not in redirect_urls:
+        redirect_urls.append(callback_url)
+    oauth_config["redirect_urls"] = redirect_urls
+    manifest["oauth_config"] = oauth_config
+
     validated = _api("apps.manifest.validate", {"manifest": manifest})
     if not validated.get("ok"):
         return f"Slack API error: {validated}"
@@ -79,12 +152,43 @@ def create_slack_bot(manifest: dict) -> str:
     # sets it directly. Returning it here would put it in the model's context —
     # from where it could end up in a Slack message or a conversation trace — for
     # no functional benefit.
+    scopes = oauth_config.get("scopes", {})
+    authorize_params = {
+        "client_id": creds.get("client_id", ""),
+        "scope": " ".join(scopes.get("bot", [])),
+        "redirect_uri": callback_url,
+        "state": sign_install_state(app_id),
+    }
+    if scopes.get("user"):
+        authorize_params["user_scope"] = " ".join(scopes["user"])
     result = {
         "uuid": app_id,
         "app_id": app_id,
-        "oauth_authorize_url": created.get("oauth_authorize_url", ""),
+        "oauth_authorize_url": "https://slack.com/oauth/v2/authorize?" + urlencode(authorize_params),
+        "auto_install": True,
     }
     return json.dumps(result)
+
+
+def get_bot_record(uuid: str) -> dict[str, Any] | None:
+    """Read-only lookup for a stored bot's record (credentials, tokens once
+    registered). Used by web/bot_oauth.py during the auto-install callback."""
+    return _load().get(uuid)
+
+
+def check_bot_install_status(uuid: str) -> str:
+    """Report whether a human has completed the OAuth install for this app yet.
+
+    Poll this (rather than asking the user to paste a token back) after
+    handing them the oauth_authorize_url from create_slack_bot — the callback
+    registers the bot token automatically the moment they finish installing.
+    """
+    record = _load().get(uuid)
+    if not record:
+        return f"Error: unknown bot UUID: {uuid}"
+    if record.get("bot_token"):
+        return "installed: the app has been installed and its bot token is registered. Ready to deploy."
+    return "not_installed: still waiting for a human to visit the oauth_authorize_url and complete the install."
 
 
 def update_slack_bot_manifest(uuid: str, manifest: dict) -> str:

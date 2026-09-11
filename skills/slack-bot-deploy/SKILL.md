@@ -18,10 +18,17 @@ URL will fail. Two manifest passes are required:
 1. **Create the app with a MINIMAL manifest** — name, bot user, OAuth scopes only. No
    `slash_commands` or `event_subscriptions` yet (`create_slack_bot_tool`). This returns a UUID
    that tracks the bot internally, plus the signing secret and an OAuth install URL.
-2. **A human installs the app** by visiting the OAuth URL, then hands back the bot token.
-3. **Register the bot token** with the UUID (`register_bot_tokens_tool`).
-4. **Write the Worker code** (TypeScript, using `slack-cloudflare-workers` — NOT `@slack/bolt`,
-   which has no Cloudflare Workers support; see the workflow below for why).
+2. **A human installs the app** by visiting the OAuth URL. The bot token is captured and
+   registered AUTOMATICALLY the moment they finish — `create_slack_bot_tool` bakes coolton's own
+   OAuth callback into the app's redirect URLs, so there's no token to copy/paste. Poll
+   `check_bot_install_status_tool(uuid)` until it reports `installed`.
+3. ~~Register the bot token~~ — not needed anymore, step 2 does it automatically.
+   `register_bot_tokens_tool` still exists as a manual fallback (e.g. the user hands you a token
+   unprompted, or the automatic capture fails for some reason).
+4. **Clone `coolton-agent/slack-bot-template`** and customize it (TypeScript, using
+   `slack-cloudflare-workers` — NOT `@slack/bolt`, which has no Cloudflare Workers support; see
+   the workflow below for why, and why a verified-working template beats writing this from
+   scratch each time).
 5. **Deploy with `wrangler_bot_deploy_tool`** — it retrieves the bot's tokens from the UUID,
    writes them to a temporary `.env_slack`, runs `npx wrangler@latest deploy --temporary --secrets-file .env_slack`,
    then deletes the file immediately. Tokens are never exposed. This gives you the real,
@@ -39,13 +46,18 @@ URL will fail. Two manifest passes are required:
 
 ## Tools (exact names as exposed to the agent)
 
-- `create_slack_bot_tool(manifest: dict)` — Creates the Slack app. Returns UUID, app_id,
-  credentials (including `signing_secret`), and an OAuth authorize URL. Stores everything in an
-  internal JSON store on the HOST (not inside the sandbox — see Security Notes).
-- `register_bot_tokens_tool(uuid, bot_token, app_token="")` — Associates tokens with the UUID.
-  `bot_token` (xoxb-) is required. `app_token` (xapp-) is OPTIONAL — it's a Socket Mode-only
-  credential generated manually in the app's Basic Information page, not via OAuth install, so
-  omit it entirely for the HTTP-mode Workers this skill deploys.
+- `create_slack_bot_tool(manifest: dict)` — Creates the Slack app. Returns UUID, app_id, and an
+  OAuth authorize URL that already carries coolton's own callback + a signed state, so the install
+  is captured automatically. Stores everything in an internal JSON store on the HOST (not inside
+  the sandbox — see Security Notes).
+- `check_bot_install_status_tool(uuid)` — Poll this after sharing the OAuth URL. Returns
+  `installed` once the human has finished installing and the bot token is registered, or
+  `not_installed` while still waiting.
+- `register_bot_tokens_tool(uuid, bot_token, app_token="")` — Manual FALLBACK only; installs are
+  captured automatically (see above). `bot_token` (xoxb-) is required if you do need it.
+  `app_token` (xapp-) is OPTIONAL — it's a Socket Mode-only credential generated manually in the
+  app's Basic Information page, not via OAuth install, so omit it entirely for the HTTP-mode
+  Workers this skill deploys.
 - `update_slack_bot_manifest_tool(uuid, manifest)` — Updates an already-created app's manifest
   (`apps.manifest.update`). The manifest passed REPLACES the app's entire config, so it must
   include every field, not just the one URL you're changing. Use this after deploy to wire in the
@@ -89,45 +101,45 @@ upfront:
 
 Call `create_slack_bot_tool(manifest=my_manifest)`. You'll get back JSON with:
 - `uuid` — save this; every later step is keyed by it.
-- `signing_secret` — save this too; you'll need it again in step 5.
 - `oauth_authorize_url` — a human (the workspace admin, or whoever asked for this bot) must visit
-  this to install the app. There is no automated callback that captures this for you — it's
-  always a manual step today. Tell the user to visit the URL and send back the bot token shown
-  on the app's **OAuth & Permissions** page after installing.
+  this to install the app. Tell them to click it; once they finish, the bot token is captured and
+  registered automatically — nothing to copy/paste, no page to dig a token out of.
 
-### 2. Register the bot token
+### 2. Wait for the install
 
-Once the human hands back the `xoxb-...` token: `register_bot_tokens_tool(uuid=<uuid>,
-bot_token="xoxb-...")`. Do NOT pass an `app_token` — Socket Mode is off in this manifest, so no
-`xapp-` token exists to give it; passing one would just be rejected if malformed, and there's
-nothing to pass if the human never generated one (which they haven't, since nothing in this flow
-asks them to).
+Poll `check_bot_install_status_tool(uuid=<uuid>)` (space it out — every 10-20s is plenty) until it
+reports `installed`. If it's taking a while, that just means the human hasn't clicked through yet;
+nudge them rather than retrying faster. Only fall back to `register_bot_tokens_tool` if the user
+says the automatic capture didn't work (e.g. they hit an error page) or hands you a token
+unprompted — and even then, do NOT pass an `app_token`: Socket Mode is off in this manifest, so no
+`xapp-` token exists to give it.
 
-### 3. Scaffold and write the Worker code
+### 3. Clone the template and write the bot logic
 
-Use the `cf-wrangler` skill to scaffold a Worker project, then write the bot logic using
-**`slack-cloudflare-workers`** (NOT `@slack/bolt` — Bolt's `App` class has no Cloudflare Workers
-support: no `.receive(request, env)` method, and its default receiver needs a Node/Express server
-that doesn't run in the Workers V8 isolate at all. `slack-cloudflare-workers` is purpose-built for
-this environment).
+Don't scaffold a Worker project or write the Slack wiring from scratch — clone
+[`coolton-agent/slack-bot-template`](https://github.com/coolton-agent/slack-bot-template), a
+verified-working starting point (confirmed: typechecks, actually deploys with
+`wrangler deploy --temporary`, and its signature verification / `url_verification` handshake /
+slash-command routing were all confirmed against a real deployed Worker before it was published).
+It already uses **`slack-cloudflare-workers`** correctly (NOT `@slack/bolt` — Bolt's `App` class
+has no Cloudflare Workers support: no `.receive(request, env)` method, and its default receiver
+needs a Node/Express server that doesn't run in the Workers V8 isolate at all).
 
 ```bash
 # In sandbox:
-mkdir -p /home/user/bots/calculator-bot && cd /home/user/bots/calculator-bot
-npm init -y
-npm install slack-cloudflare-workers
-npm install -D typescript @cloudflare/workers-types wrangler
+mkdir -p /home/user/bots && cd /home/user/bots
+git clone https://github.com/coolton-agent/slack-bot-template.git calculator-bot
+cd calculator-bot
+rm -rf .git   # this bot gets its own history, not the template's
+npm install
 ```
 
-Write `wrangler.toml`:
+Edit `wrangler.toml`'s `name` to match the bot (`name = "calculator-bot"`) — everything else in
+it can stay as-is.
 
-```toml
-name = "calculator-bot"
-main = "src/index.ts"
-compatibility_date = "2026-07-01"
-```
-
-Write `src/index.ts`:
+Edit `src/index.ts` — keep the wiring (the `.command`/`.event` registration, `app.run(request,
+ctx)`, the 3-second-ack pattern), replace the handler bodies with the actual bot logic. For a
+`/calculate` slash command:
 
 ```typescript
 import { SlackApp, SlackEdgeAppEnv } from "slack-cloudflare-workers";
@@ -170,7 +182,8 @@ export default {
 
 The library reads `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` off `env` itself — no manual
 signature verification code needed, that's the entire point of using a Workers-native library
-instead of Bolt.
+instead of Bolt (and of starting from the template instead of writing this wiring by hand each
+time). Run `npx tsc --noEmit` in the sandbox before deploying to catch typos early.
 
 ### 4. Deploy
 
@@ -272,9 +285,9 @@ Cloudflare account, repeat this step with the new URL.
   (which is everything this skill deploys, since Workers are HTTP, not Socket Mode).
 - **Don't use `@slack/bolt` in the Worker code.** It has no Cloudflare Workers support — use
   `slack-cloudflare-workers` (see step 3).
-- If `create_slack_bot_tool` returns an OAuth URL but `wrangler_bot_deploy_tool` errors that no
-  bot token is registered, the human hasn't completed the OAuth install + handed back the token
-  yet — there's no automated callback for this, it's always a manual step today.
+- If `wrangler_bot_deploy_tool` errors that no bot token is registered, the human hasn't finished
+  the OAuth install yet — check `check_bot_install_status_tool(uuid)` and wait/nudge them rather
+  than assuming something is broken.
 - `--temporary` creates a throwaway Cloudflare account valid for ~60 minutes. Always give the
   user the **claim URL** printed by wrangler so they can keep the deployment.
 - If wrangler isn't installed globally in the sandbox, `npx wrangler@latest` will download it
@@ -282,12 +295,18 @@ Cloudflare account, repeat this step with the new URL.
 - For thread support, read `thread_ts` (falling back to `ts`) off the incoming event/payload and
   pass it through explicitly — `slack-cloudflare-workers` doesn't infer it for you the way some
   Bolt helpers do.
+- `create_slack_bot_tool` injects coolton's own callback into `oauth_config.redirect_urls` before
+  creating the app — that's what makes automatic install capture work. `update_slack_bot_manifest_tool`
+  REPLACES the entire config, so if you hand-build the step-6 manifest from scratch instead of
+  reusing the step-1 manifest + additions, don't drop `oauth_config.redirect_urls` — it's harmless
+  to leave in and only matters again if the app is ever reinstalled.
 
 ## Integration with cf-wrangler skill
 
-The `cf-wrangler` skill covers scaffolding and deploying Workers generally. Use it for:
-- Initial `wrangler init`
-- Writing `wrangler.toml` and project structure
+The `cf-wrangler` skill covers scaffolding and deploying Workers generally — for Slack bots
+specifically, cloning `coolton-agent/slack-bot-template` (step 3 above) replaces the scaffolding
+part of that flow, since it's already a working `wrangler.toml` + project structure. Still lean on
+`cf-wrangler` for:
 - Understanding the `--temporary` deployment flow
 - Getting the claim URL to the user
 

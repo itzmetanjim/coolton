@@ -1753,11 +1753,14 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_para
 
 @agent.tool
 def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: str) -> str:
-    """Create a Slack app from a manifest. Returns app_id and OAuth install URL.
+    """Create a Slack app from a manifest. Returns app_id and an OAuth install URL.
 
     Uses the xoxe config token. The manifest must include display_information.name.
-    After creating, visit the oauth_authorize_url to install the app, then use
-    register_bot_tokens to store the resulting bot/app tokens.
+    After creating, tell the user to visit the oauth_authorize_url to install the
+    app — the bot token is captured and registered AUTOMATICALLY once they do (no
+    one needs to dig it out of the Slack UI and hand it back). Poll
+    check_bot_install_status_tool with the returned app_id until it reports
+    "installed", then move on to wrangler_bot_deploy_tool.
 
     Args:
         manifest: JSON-encoded Slack app manifest object, as a plain STRING (with
@@ -1771,9 +1774,29 @@ def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: str) -> str:
 
 
 @agent.tool
+def check_bot_install_status_tool(ctx: RunContext[AgentDeps], uuid: str) -> str:
+    """Check whether a human has finished installing a bot created with create_slack_bot_tool.
+
+    The install is captured automatically (see create_slack_bot_tool) — call this
+    periodically after sharing the oauth_authorize_url instead of asking the user
+    to paste a token back. Once it reports "installed", the bot token is already
+    registered and you can go straight to wrangler_bot_deploy_tool.
+
+    Args:
+        uuid: The app_id returned by create_slack_bot.
+    """
+    from agent.tools.slack_bot_deploy import check_bot_install_status
+    return check_bot_install_status(uuid)
+
+
+@agent.tool
 def register_bot_tokens_tool(ctx: RunContext[AgentDeps], uuid: str, bot_token: str, app_token: str = "", signing_secret: str = "") -> str:
-    """Store bot tokens for a created Slack app. Only xoxb- bot tokens (and, if given, xapp- app
-    tokens) are accepted.
+    """Manually store bot tokens for a created Slack app. Only xoxb- bot tokens (and, if
+    given, xapp- app tokens) are accepted.
+
+    This is a FALLBACK — installs normally complete automatically (see
+    create_slack_bot_tool / check_bot_install_status_tool). Only use this if the
+    user says the automatic capture didn't work, or hands you a token unprompted.
 
     Args:
         uuid: The app_id returned by create_slack_bot.

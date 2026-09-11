@@ -1,6 +1,15 @@
+import json
 from unittest.mock import Mock
+from urllib.parse import parse_qs, quote, urlparse
+
+import pytest
 
 from agent.tools import slack_bot_deploy as sbd
+
+
+@pytest.fixture(autouse=True)
+def web_secret(monkeypatch):
+    monkeypatch.setenv("COOLTON_WEB_SECRET", "test-secret")
 
 
 def _seed_bot(monkeypatch, uuid="app123", bot_token="xoxb-1", app_token="xapp-1"):
@@ -45,6 +54,80 @@ def test_register_bot_tokens_rejects_malformed_app_token_when_given(monkeypatch)
     monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123"}})
     result = sbd.register_bot_tokens("app123", "xoxb-1", "not-an-xapp-token")
     assert "app_token must start with xapp-" in result
+
+
+# ---------------------------------------------------------------------------
+# sign_install_state / verify_install_state — binds an OAuth install attempt
+# to the app it was created for, so a forged/foreign `state` can't register a
+# captured token onto an app it doesn't belong to.
+# ---------------------------------------------------------------------------
+
+
+def test_state_round_trips_to_the_signed_app_id():
+    state = sbd.sign_install_state("A123")
+    assert sbd.verify_install_state(state) == "A123"
+
+
+def test_state_rejects_garbage():
+    assert sbd.verify_install_state("not-a-real-state") is None
+    assert sbd.verify_install_state("") is None
+
+
+def test_state_rejects_a_tampered_signature():
+    state = sbd.sign_install_state("A123")
+    body = state.rsplit(".", 1)[0]
+    forged_sig = sbd.sign_install_state("ATTACKER").rsplit(".", 1)[1]
+    assert sbd.verify_install_state(f"{body}.{forged_sig}") is None
+
+
+def test_state_rejects_expiry(monkeypatch):
+    monkeypatch.setattr(sbd, "_STATE_MAX_AGE_SECONDS", 0)
+    state = sbd.sign_install_state("A123")
+    assert sbd.verify_install_state(state) is None
+
+
+def test_state_fails_closed_with_no_secret_configured(monkeypatch):
+    monkeypatch.delenv("COOLTON_WEB_SECRET", raising=False)
+    state = sbd.sign_install_state("A123")
+    assert sbd.verify_install_state(state) is None
+
+
+# ---------------------------------------------------------------------------
+# check_bot_install_status
+# ---------------------------------------------------------------------------
+
+
+def test_check_bot_install_status_unknown_uuid(monkeypatch):
+    monkeypatch.setattr(sbd, "_load", lambda: {})
+    result = sbd.check_bot_install_status("nope")
+    assert "unknown bot UUID" in result
+
+
+def test_check_bot_install_status_not_yet_installed(monkeypatch):
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123"}})
+    result = sbd.check_bot_install_status("app123")
+    assert result.startswith("not_installed")
+
+
+def test_check_bot_install_status_installed(monkeypatch):
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "bot_token": "xoxb-1"}})
+    result = sbd.check_bot_install_status("app123")
+    assert result.startswith("installed")
+
+
+# ---------------------------------------------------------------------------
+# get_bot_record — read-only lookup web/bot_oauth.py uses during the callback
+# ---------------------------------------------------------------------------
+
+
+def test_get_bot_record_returns_the_stored_record(monkeypatch):
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "bot_token": "xoxb-1"}})
+    assert sbd.get_bot_record("app123") == {"app_id": "app123", "bot_token": "xoxb-1"}
+
+
+def test_get_bot_record_none_for_unknown_uuid(monkeypatch):
+    monkeypatch.setattr(sbd, "_load", lambda: {})
+    assert sbd.get_bot_record("nope") is None
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +181,71 @@ def test_create_slack_bot_does_not_return_signing_secret(monkeypatch, tmp_path):
     # ...but it's still persisted to disk for wrangler_bot_deploy to fall back to.
     stored = sbd._load()
     assert stored["A123"]["credentials"]["signing_secret"] == "very-secret"
+
+
+def test_create_slack_bot_injects_the_oauth_callback_into_redirect_urls(monkeypatch, tmp_path):
+    monkeypatch.setattr(sbd, "STORE", tmp_path / "bots.json")
+    calls = []
+
+    def fake_api(method, data):
+        calls.append((method, data))
+        if method == "apps.manifest.create":
+            return {"ok": True, "app_id": "A123", "credentials": {"client_id": "cid"}}
+        return {"ok": True}
+
+    monkeypatch.setattr(sbd, "_api", fake_api)
+    manifest = {"display_information": {"name": "Test Bot"}}
+    sbd.create_slack_bot(manifest)
+
+    for method, data in calls:
+        assert sbd.oauth_callback_url() in data["manifest"]["oauth_config"]["redirect_urls"]
+    # the caller's dict is never mutated in place
+    assert "oauth_config" not in manifest
+
+
+def test_create_slack_bot_preserves_existing_redirect_urls(monkeypatch, tmp_path):
+    monkeypatch.setattr(sbd, "STORE", tmp_path / "bots.json")
+    calls = []
+
+    def fake_api(method, data):
+        calls.append((method, data))
+        if method == "apps.manifest.create":
+            return {"ok": True, "app_id": "A123", "credentials": {"client_id": "cid"}}
+        return {"ok": True}
+
+    monkeypatch.setattr(sbd, "_api", fake_api)
+    manifest = {
+        "display_information": {"name": "Test Bot"},
+        "oauth_config": {"redirect_urls": ["https://existing.example.com/callback"]},
+    }
+    sbd.create_slack_bot(manifest)
+
+    sent = calls[0][1]["manifest"]["oauth_config"]["redirect_urls"]
+    assert "https://existing.example.com/callback" in sent
+    assert sbd.oauth_callback_url() in sent
+
+
+def test_create_slack_bot_returns_an_authorize_url_with_redirect_and_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(sbd, "STORE", tmp_path / "bots.json")
+
+    def fake_api(method, data):
+        if method == "apps.manifest.create":
+            return {"ok": True, "app_id": "A123", "credentials": {"client_id": "cid123"}}
+        return {"ok": True}
+
+    monkeypatch.setattr(sbd, "_api", fake_api)
+    manifest = {
+        "display_information": {"name": "Test Bot"},
+        "oauth_config": {"scopes": {"bot": ["chat:write", "commands"]}},
+    }
+    result = json.loads(sbd.create_slack_bot(manifest))
+
+    url = result["oauth_authorize_url"]
+    assert result["auto_install"] is True
+    assert "client_id=cid123" in url
+    assert f"redirect_uri={quote(sbd.oauth_callback_url(), safe='')}" in url
+    state = parse_qs(urlparse(url).query)["state"][0]
+    assert sbd.verify_install_state(state) == "A123"
 
 
 # ---------------------------------------------------------------------------
