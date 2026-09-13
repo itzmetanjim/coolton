@@ -996,8 +996,10 @@ def generate_image_tool(
     request fails (e.g. HCAI itself is down); otherwise the global
     OPENAI_API_KEY as a last resort.
 
-    The images are saved into the sandbox ~/downloads/ directory (if a sandbox is active)
-    and their URLs are returned. Use upload_file_from_sandbox to send them to Slack.
+    Saves the generated image(s) into a sandbox (starting one for this thread if it doesn't
+    have one yet) and returns their sandbox paths — never the raw image bytes, which would
+    otherwise dump megabytes of base64 into your own context. Use upload_file_from_sandbox
+    to send them to Slack.
 
     Args:
         prompt: Text description of the desired image.
@@ -1007,7 +1009,7 @@ def generate_image_tool(
             Overrides size when it maps to a known size; otherwise passed through
             to providers that support an `aspect_ratio` field.
         quality: "high" (HCAI google/gemini-3-pro-image-preview — slower,
-            better) or "low" (HCAI google/gemini-2.5-flash-image-preview —
+            better) or "low" (HCAI google/gemini-2.5-flash-image —
             faster, default). Only chooses between HCAI's two models; ignored
             entirely when a BYOK image endpoint is used instead.
     """
@@ -1023,20 +1025,26 @@ def generate_image_tool(
     if "image(s)" not in result:
         return result
 
-    if os.environ.get("E2B_API_KEY"):
-        sandbox = None
-        sandbox_id = get_thread_sandbox_id(ctx.deps.channel_id, ctx.deps.thread_ts)
-        if sandbox_id:
-            try:
-                sandbox = Sandbox.connect(sandbox_id)
-            except Exception:
-                sandbox = None
-        if sandbox:
-            urls = [line.split(". ", 1)[-1] for line in result.splitlines()[1:] if line]
-            saved = save_images_to_sandbox(sandbox, urls)
-            if saved:
-                return result + "\n\nSaved to sandbox:\n" + "\n".join(f"- {p}" for p in saved)
-    return result
+    urls = [line.split(". ", 1)[-1] for line in result.splitlines()[1:] if line]
+
+    if not os.environ.get("E2B_API_KEY"):
+        # No sandbox capability at all in this deployment — the raw result
+        # (which may be a large base64 data: URI) is the only option left.
+        return result
+
+    try:
+        sandbox, _ = get_or_create_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
+    except Exception as e:
+        logger.warning("generate_image_tool: couldn't get/create a sandbox: %s", e)
+        return result
+
+    saved = save_images_to_sandbox(sandbox, urls)
+    if not saved:
+        return result
+    return (
+        f"Generated {len(saved)} image(s), saved to the following files:\n"
+        + "\n".join(f"- {p}" for p in saved)
+    )
 
 
 def _post_image_to_channel(channel_id: str, thread_ts: str, image_url: str, alt_text: str) -> str | None:
