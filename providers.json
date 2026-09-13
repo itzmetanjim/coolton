@@ -44,6 +44,6 @@
     {"provider": "mistral", "model": "mistral:mistral-small-2603", "display": "Mistral Small 2603", "tags": ["mistral-small-2603", "vision"], "context_window": 262144},
     {"provider": "mistral", "model": "mistral:mistral-medium-3", "display": "Mistral Medium 3", "tags": ["mistral-medium-3", "vision"], "context_window": 262144},
     {"provider": "hcai", "model": "google/gemini-3-pro-image-preview", "display": "HCAI Gemini 3 Pro Image (high)", "tags": ["image-high"], "kind": "image"},
-    {"provider": "hcai", "model": "google/gemini-2.5-flash-image-preview", "display": "HCAI Gemini 2.5 Flash Image (low)", "tags": ["image-low"], "kind": "image"}
+    {"provider": "hcai", "model": "google/gemini-2.5-flash-image", "display": "HCAI Gemini 2.5 Flash Image (low)", "tags": ["image-low"], "kind": "image"}
   ]
 }
