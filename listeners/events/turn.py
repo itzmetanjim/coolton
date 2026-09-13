@@ -134,7 +134,9 @@ def run_agent_turn(
 
     deps = None
     from agent.active_runs import mark_run_finished, mark_run_started
+    from agent.inflight_runs import record_finished as _record_inflight_finished, record_start as _record_inflight_start
     mark_run_started(channel_id, thread_ts, time.time())
+    _record_inflight_start(channel_id, thread_ts, message_ts=message_ts, user_id=user_id, text=text, is_slack=is_slack)
     try:
         from agent.provider_config import extract_tag_directive
         text, tag_filter, tag_error = extract_tag_directive(text)
@@ -287,6 +289,7 @@ def run_agent_turn(
         # any message.py/app_mentioned.py check from here on should start a
         # fresh turn rather than queuing as a steer for a run that's over.
         mark_run_finished(channel_id, thread_ts)
+        _record_inflight_finished(channel_id, thread_ts)
         if is_slack:
             thread_status.stop(channel_id, thread_ts)
 
@@ -331,3 +334,79 @@ def run_agent_turn(
                 history=conversation_store.get_history(channel_id, thread_ts),
                 _stranded_recursion_depth=_stranded_recursion_depth + 1,
             )
+
+
+_RESUME_NOTICE = "_coolton restarted mid-response — picking this back up..._"
+
+
+def resume_orphaned_runs(client: WebClient, logger: Logger) -> set[str]:
+    """Re-run any turn that was still in flight when the process last died.
+
+    `systemctl restart` (SIGTERM's default disposition) kills the process
+    immediately — no `finally` block runs, so a run_agent_turn call that
+    never reached its own `finally` (agent.inflight_runs.record_finished)
+    left a record behind. Call once at startup, before handling new events;
+    each resume runs on its own background thread so this never blocks
+    startup, and a slow/stuck resume can't block another one.
+
+    Returns the set of web conversation ids being resumed — the caller
+    (app.py) must hand this to web.conversation_log.set_resuming_conversation_ids
+    BEFORE starting the web server, so its own startup repair
+    (repair_orphaned_turns) never races this function and marks a
+    being-resumed conversation as errored out instead.
+    """
+    import threading
+
+    from agent.inflight_runs import pop_all
+
+    resumed_web_ids: set[str] = set()
+    orphaned = pop_all()
+    for entry in orphaned:
+        channel_id = entry["channel_id"]
+        thread_ts = entry["thread_ts"]
+        message_ts = entry["message_ts"]
+        user_id = entry["user_id"]
+        text = entry["text"]
+        is_slack = entry["is_slack"]
+        logger.warning("Resuming a turn orphaned by a restart: %s/%s", channel_id, thread_ts)
+
+        if is_slack:
+
+            def _resume(channel_id=channel_id, thread_ts=thread_ts, message_ts=message_ts, user_id=user_id, text=text):
+                try:
+                    client.chat_postMessage(channel=channel_id, thread_ts=thread_ts or None, text=_RESUME_NOTICE)
+                except Exception:
+                    logger.exception("Resume: failed to post the restart notice to %s/%s", channel_id, thread_ts)
+                run_agent_turn(
+                    client=client, logger=logger, channel_id=channel_id, thread_ts=thread_ts,
+                    message_ts=message_ts, user_id=user_id, user_token=None, text=text,
+                    history=conversation_store.get_history(channel_id, thread_ts),
+                )
+
+            threading.Thread(target=_resume, daemon=True, name="resume-orphaned-turn").start()
+        else:
+            try:
+                message_seq = int(message_ts)
+            except (TypeError, ValueError):
+                logger.error(
+                    "Resume: skipping web conversation %s — bad message_ts %r", thread_ts, message_ts,
+                )
+                continue
+
+            resumed_web_ids.add(thread_ts)
+
+            def _resume_web(conversation_id=thread_ts, user_id=user_id, text=text, message_seq=message_seq):
+                from web import conversation_log as log
+                from web.runner import resume_turn
+
+                try:
+                    log.append_event(conversation_id, {
+                        "type": "agent_message", "variant": "final", "text": _RESUME_NOTICE,
+                    })
+                except Exception:
+                    logger.exception("Resume: failed to log the restart notice for conversation %s", conversation_id)
+                resume_turn(conversation_id, user_id, text, message_seq)
+
+            threading.Thread(target=_resume_web, daemon=True, name="resume-orphaned-turn").start()
+
+    return resumed_web_ids

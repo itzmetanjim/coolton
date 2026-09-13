@@ -8,6 +8,7 @@ def tmp_store(monkeypatch, tmp_path):
     monkeypatch.setattr(log, "STORE_DIR", str(tmp_path / "web_conversations"))
     log._locks.clear()
     log._last_seq.clear()
+    log.set_resuming_conversation_ids(set())
     with log._subscribers_guard:
         log._subscribers.clear()
     return tmp_path
@@ -118,6 +119,35 @@ def test_repair_orphaned_turns_handles_a_second_turn_after_a_completed_one():
     log.append_event(cid, {"type": "turn_end", "state": "complete"})
     log.append_event(cid, {"type": "turn_start"})
     assert log.repair_orphaned_turns() == 1
+
+
+def test_repair_orphaned_turns_skips_a_conversation_being_resumed():
+    """A conversation listeners.events.turn.resume_orphaned_runs is already
+    re-running must not also get a synthetic error appended — the two would
+    otherwise race (see agent.inflight_runs / app.py's startup ordering)."""
+    cid = log.create_conversation("U1")
+    log.append_event(cid, {"type": "turn_start"})
+    assert log.repair_orphaned_turns(skip_conversation_ids={cid}) == 0
+    events = log.read_events(cid)
+    assert events[-1]["type"] == "turn_start"
+
+
+def test_repair_orphaned_turns_still_repairs_conversations_not_in_the_skip_set():
+    cid1 = log.create_conversation("U1")
+    cid2 = log.create_conversation("U1")
+    log.append_event(cid1, {"type": "turn_start"})
+    log.append_event(cid2, {"type": "turn_start"})
+    assert log.repair_orphaned_turns(skip_conversation_ids={cid1}) == 1
+    assert log.read_events(cid1)[-1]["type"] == "turn_start"
+    assert log.read_events(cid2)[-1]["type"] == "turn_end"
+
+
+def test_resuming_conversation_ids_round_trip():
+    assert log.get_resuming_conversation_ids() == set()
+    log.set_resuming_conversation_ids({"conv1", "conv2"})
+    assert log.get_resuming_conversation_ids() == {"conv1", "conv2"}
+    log.set_resuming_conversation_ids([])
+    assert log.get_resuming_conversation_ids() == set()
 
 
 def test_delete_conversation_removes_the_index_entry_and_the_log():

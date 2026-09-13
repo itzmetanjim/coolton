@@ -26,7 +26,7 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    log.repair_orphaned_turns()
+    log.repair_orphaned_turns(skip_conversation_ids=log.get_resuming_conversation_ids())
     yield
 
 

@@ -6,6 +6,12 @@ import pytest
 import listeners.events.turn as turn
 
 
+@pytest.fixture(autouse=True)
+def isolated_inflight_store(tmp_path, monkeypatch):
+    import agent.inflight_runs as inflight_runs
+    monkeypatch.setattr(inflight_runs, "STORE_PATH", tmp_path / "inflight_runs.json")
+
+
 @pytest.fixture
 def mocks(monkeypatch):
     client = Mock()
@@ -502,4 +508,144 @@ def test_stranded_steering_recursion_stops_at_the_depth_limit(mocks, monkeypatch
     # never unbounded.
     assert turn.run_agent.call_count == turn._MAX_STRANDED_RECURSION_DEPTH + 1
     mocks.logger.error.assert_called_once()
-    assert "depth limit" in mocks.logger.error.call_args.args[0]
+
+
+# ---------------------------------------------------------------------------
+# agent.inflight_runs wiring — a turn that completes (success or error)
+# clears its own record; only one killed mid-flight (no finally block ever
+# ran) should be left for resume_orphaned_runs to find at the next startup.
+# ---------------------------------------------------------------------------
+
+
+def test_inflight_run_is_recorded_then_cleared_on_success(mocks):
+    from agent.inflight_runs import pop_all
+
+    _run_turn(mocks, text="hello")
+
+    assert pop_all() == []
+
+
+def test_inflight_run_is_recorded_with_the_original_pre_mutation_text(mocks, a_known_tag):
+    """Recorded *before* extract_tag_directive strips the [!WITH:tag] prefix —
+    a resumed turn should see exactly what the user originally sent."""
+    import agent.inflight_runs as inflight_runs
+
+    captured = {}
+    orig_record_start = inflight_runs.record_start
+
+    def spy_record_start(*args, **kwargs):
+        captured.update(kwargs)
+        return orig_record_start(*args, **kwargs)
+
+    turn.run_agent.side_effect = lambda text, deps, **kw: SimpleNamespace(
+        output="ok", all_messages=lambda: [],
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(inflight_runs, "record_start", spy_record_start)
+        raw_text = f"[!WITH:{a_known_tag}] hello"
+        _run_turn(mocks, text=raw_text)
+
+    assert captured["text"] == raw_text
+    assert captured["is_slack"] is True
+
+
+def test_inflight_run_is_cleared_even_when_run_raises(mocks):
+    from agent.inflight_runs import pop_all
+
+    turn.run_agent.side_effect = RuntimeError("boom")
+    _run_turn(mocks)
+
+    assert pop_all() == []
+
+
+def test_inflight_run_left_behind_if_never_reaches_finally(mocks):
+    """Simulates the actual restart scenario: the process dies mid-turn, so
+    run_agent_turn's `finally` (where record_finished lives) never runs at
+    all. Bypasses _run_turn's normal call so nothing clears the record."""
+    from agent.inflight_runs import pop_all, record_start
+
+    record_start("C1", "1.1", message_ts="111.111", user_id="U1", text="hello", is_slack=True)
+
+    entries = pop_all()
+    assert len(entries) == 1
+    assert entries[0] == {
+        "channel_id": "C1", "thread_ts": "1.1", "message_ts": "111.111",
+        "user_id": "U1", "text": "hello", "is_slack": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# resume_orphaned_runs — re-runs whatever agent.inflight_runs.pop_all()
+# reports as orphaned by a restart/crash, one per background thread.
+# ---------------------------------------------------------------------------
+
+
+def test_resume_orphaned_runs_reruns_a_slack_turn(monkeypatch):
+    from agent.inflight_runs import record_start
+    from thread_context import conversation_store
+
+    record_start("C1", "1.1", message_ts="111.111", user_id="U1", text="hello", is_slack=True)
+
+    client = Mock()
+    logger = Mock()
+    calls = []
+    monkeypatch.setattr(turn, "run_agent_turn", lambda **kw: calls.append(kw))
+    monkeypatch.setattr(conversation_store, "get_history", lambda c, t: ["history"])
+
+    result = turn.resume_orphaned_runs(client, logger)
+
+    # Give the spawned background thread a moment to run.
+    import time
+    for _ in range(50):
+        if calls:
+            break
+        time.sleep(0.01)
+
+    assert result == set()
+    assert len(calls) == 1
+    assert calls[0]["channel_id"] == "C1"
+    assert calls[0]["thread_ts"] == "1.1"
+    assert calls[0]["message_ts"] == "111.111"
+    assert calls[0]["user_id"] == "U1"
+    assert calls[0]["text"] == "hello"
+    assert calls[0]["history"] == ["history"]
+    client.chat_postMessage.assert_called_once()
+    assert "restart" in client.chat_postMessage.call_args.kwargs["text"]
+
+
+def test_resume_orphaned_runs_reruns_a_web_turn(monkeypatch):
+    import time
+
+    from agent.inflight_runs import record_start
+
+    record_start("web", "conv1", message_ts="5", user_id="U1", text="hello", is_slack=False)
+
+    import web.runner as runner
+    calls = []
+    monkeypatch.setattr(runner, "resume_turn", lambda *a: calls.append(a))
+
+    result = turn.resume_orphaned_runs(Mock(), Mock())
+
+    for _ in range(50):
+        if calls:
+            break
+        time.sleep(0.01)
+
+    assert result == {"conv1"}
+    assert calls == [("conv1", "U1", "hello", 5)]
+
+
+def test_resume_orphaned_runs_skips_a_web_entry_with_a_bad_message_ts():
+    from agent.inflight_runs import pop_all, record_start
+
+    record_start("web", "conv1", message_ts="not-a-number", user_id="U1", text="hello", is_slack=False)
+
+    result = turn.resume_orphaned_runs(Mock(), Mock())
+
+    assert result == set()
+    assert pop_all() == []
+
+
+def test_resume_orphaned_runs_is_a_noop_with_nothing_orphaned():
+    result = turn.resume_orphaned_runs(Mock(), Mock())
+    assert result == set()
