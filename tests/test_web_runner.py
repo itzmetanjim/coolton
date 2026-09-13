@@ -34,6 +34,23 @@ def conversation_id():
     return log.create_conversation("U1")
 
 
+def test_resume_turn_submits_run_turn_without_a_new_user_message_event(conversation_id, monkeypatch):
+    """Unlike submit_message, resume_turn must NOT append a new user_message
+    event — the original message (at message_seq) is already in the log from
+    before the crash; re-appending it would duplicate it."""
+    from web import runner
+
+    submitted = []
+    monkeypatch.setattr(runner._executor, "submit", lambda fn, *a: submitted.append((fn, a)))
+    runner.resume_turn(conversation_id, "U1", "hello", 3)
+
+    assert log.read_events(conversation_id) == []
+    assert len(submitted) == 1
+    fn, args = submitted[0]
+    assert fn is runner._run_turn
+    assert args == (conversation_id, "U1", "hello", 3, [])
+
+
 def test_submit_message_records_a_user_message_event(conversation_id, monkeypatch):
     from web import runner
 

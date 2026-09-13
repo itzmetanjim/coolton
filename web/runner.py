@@ -104,6 +104,20 @@ def submit_message(conversation_id: str, user_id: str, text: str, attachments: l
     _executor.submit(_run_turn, conversation_id, user_id, text, user_event["seq"], attachments)
 
 
+def resume_turn(conversation_id: str, user_id: str, text: str, message_seq: int) -> None:
+    """Re-run a turn that was still in flight when the process died mid-turn
+    (see agent.inflight_runs / listeners.events.turn.resume_orphaned_runs).
+
+    Unlike submit_message, this does NOT append a new user_message event —
+    the original one (at `message_seq`) is already in the log from before the
+    crash; re-appending it would duplicate the user's message in the
+    conversation. Also skips the is_run_active/steering check submit_message
+    does: this only ever runs once, right at startup, before anything else
+    could have started a run for this conversation.
+    """
+    _executor.submit(_run_turn, conversation_id, user_id, text, message_seq, [])
+
+
 def wake_conversation(conversation_id: str, user_id: str, banner_text: str, prompt_text: str) -> None:
     """Start a fresh turn triggered by something other than a real user message
     (currently: a background job finishing while nothing was active — see

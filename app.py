@@ -91,6 +91,25 @@ def _start_web_ui() -> None:
     threading.Thread(target=run_web_server, daemon=True, name="coolton-web-ui").start()
 
 
+def _resume_orphaned_runs() -> None:
+    """Pick back up any Slack or web turn that was still running the last
+    time this process died (crash, or `systemctl restart` mid-response) —
+    see agent.inflight_runs / listeners.events.turn.resume_orphaned_runs.
+
+    Must run BEFORE _start_web_ui(): its own startup repair
+    (web.conversation_log.repair_orphaned_turns, run from the web server's
+    lifespan) needs to already know which conversations are being resumed
+    here, or it would race this function and mark one of them errored out
+    right as it's being resumed instead.
+    """
+    from listeners.events.turn import resume_orphaned_runs
+    from web import conversation_log as log
+
+    resumed_web_ids = resume_orphaned_runs(app.client, logging.getLogger(__name__))
+    log.set_resuming_conversation_ids(resumed_web_ids)
+
+
+_resume_orphaned_runs()
 _start_web_ui()
 
 if __name__ == "__main__":

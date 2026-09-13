@@ -37,6 +37,22 @@ _subscribers: dict[str, list[Callable[[dict], None]]] = {}
 _subscribers_guard = threading.Lock()
 _index_lock = threading.Lock()
 
+# Conversation ids listeners.events.turn.resume_orphaned_runs is already
+# re-running as of this process's startup — set synchronously from app.py
+# before the web server (and its startup lifespan, which calls
+# repair_orphaned_turns) is even started, so there's no race window where a
+# conversation could be seen as both "being resumed" and "not yet resumed."
+_resuming_conversation_ids: set[str] = set()
+
+
+def set_resuming_conversation_ids(ids) -> None:
+    global _resuming_conversation_ids
+    _resuming_conversation_ids = set(ids)
+
+
+def get_resuming_conversation_ids() -> set[str]:
+    return set(_resuming_conversation_ids)
+
 
 def _lock_for(conversation_id: str) -> threading.Lock:
     with _locks_guard:
@@ -260,18 +276,28 @@ def _notify_subscribers(conversation_id: str, event: dict) -> None:
             logger.exception("Web conversation subscriber callback failed for %s", conversation_id)
 
 
-def repair_orphaned_turns() -> int:
+def repair_orphaned_turns(skip_conversation_ids: set[str] | None = None) -> int:
     """Startup repair: any conversation whose last turn_start has no matching
     turn_end (the server died mid-turn) gets a synthetic error turn_end appended,
     so a restart can never leave a spinner stuck forever. Returns how many
-    conversations were repaired."""
+    conversations were repaired.
+
+    `skip_conversation_ids` excludes conversations that listeners.events.turn.
+    resume_orphaned_runs (agent.inflight_runs) is already re-running instead of
+    erroring out — set once, synchronously, before the web server (and this
+    function's caller, its startup lifespan) ever starts, so there's no race
+    between "mark it errored" and "it's actively being resumed."
+    """
     if not os.path.isdir(STORE_DIR):
         return 0
+    skip_conversation_ids = skip_conversation_ids or set()
     repaired = 0
     for name in os.listdir(STORE_DIR):
         if not name.endswith(".jsonl"):
             continue
         conversation_id = name[: -len(".jsonl")]
+        if conversation_id in skip_conversation_ids:
+            continue
         events = read_events(conversation_id)
         last_start = None
         last_end = None
