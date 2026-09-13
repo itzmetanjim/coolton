@@ -74,3 +74,82 @@ def test_aspect_ratio_passed_as_none_when_empty(monkeypatch):
     )
     agent_mod.generate_image_tool(_ctx(), prompt="a cat", aspect_ratio="16:9")
     assert called["aspect_ratio"] == "16:9"
+
+
+def test_without_e2b_the_raw_result_is_returned_unchanged(monkeypatch):
+    """No sandbox capability at all in this deployment — the raw result (which
+    may be a large base64 data: URI) is the only thing left to hand back."""
+    _no_e2b(monkeypatch)
+    huge_b64_result = "Generated 1 image(s):\n1. data:image/png;base64," + "A" * 5000
+    monkeypatch.setattr("agent.tools.image_gen.generate_image", lambda *a, **k: huge_b64_result)
+    result = agent_mod.generate_image_tool(_ctx(), prompt="a cat")
+    assert result == huge_b64_result
+
+
+def test_with_e2b_the_image_is_saved_to_sandbox_and_raw_bytes_never_returned(monkeypatch):
+    """The whole point: a huge base64 data: URI must never reach the model's
+    context once a sandbox can hold the actual file instead."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    huge_b64 = "A" * 5000
+    monkeypatch.setattr(
+        "agent.tools.image_gen.generate_image",
+        lambda *a, **k: f"Generated 1 image(s):\n1. data:image/png;base64,{huge_b64}",
+    )
+    fake_sandbox = object()
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda channel_id, thread_ts: (fake_sandbox, {}))
+    monkeypatch.setattr(
+        "agent.tools.image_gen.save_images_to_sandbox",
+        lambda sandbox, urls: ["~/downloads/coolton-image-1.png"] if sandbox is fake_sandbox else [],
+    )
+
+    result = agent_mod.generate_image_tool(_ctx(), prompt="a cat")
+
+    assert huge_b64 not in result
+    assert "~/downloads/coolton-image-1.png" in result
+    assert "Generated 1 image(s), saved to the following files" in result
+
+
+def test_sandbox_creation_failure_falls_back_to_the_raw_result(monkeypatch):
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    raw_result = "Generated 1 image(s):\n1. https://img.example/a.png"
+    monkeypatch.setattr("agent.tools.image_gen.generate_image", lambda *a, **k: raw_result)
+
+    def _boom(channel_id, thread_ts):
+        raise RuntimeError("no sandbox for you")
+
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", _boom)
+    result = agent_mod.generate_image_tool(_ctx(), prompt="a cat")
+    assert result == raw_result
+
+
+def test_empty_save_result_falls_back_to_the_raw_result(monkeypatch):
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    raw_result = "Generated 1 image(s):\n1. https://img.example/a.png"
+    monkeypatch.setattr("agent.tools.image_gen.generate_image", lambda *a, **k: raw_result)
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda channel_id, thread_ts: (object(), {}))
+    monkeypatch.setattr("agent.tools.image_gen.save_images_to_sandbox", lambda sandbox, urls: [])
+
+    result = agent_mod.generate_image_tool(_ctx(), prompt="a cat")
+    assert result == raw_result
+
+
+def test_get_or_create_sandbox_is_called_even_without_a_prior_thread_sandbox(monkeypatch):
+    """Regression: the old code only saved to sandbox if one already existed
+    for the thread (get_thread_sandbox_id); it must now start one instead of
+    silently dumping raw bytes when there isn't one yet."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "agent.tools.image_gen.generate_image",
+        lambda *a, **k: "Generated 1 image(s):\n1. data:image/png;base64,AAAA",
+    )
+    calls = []
+
+    def fake_get_or_create(channel_id, thread_ts):
+        calls.append((channel_id, thread_ts))
+        return object(), {}
+
+    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", fake_get_or_create)
+    monkeypatch.setattr("agent.tools.image_gen.save_images_to_sandbox", lambda sandbox, urls: ["~/downloads/x.png"])
+
+    agent_mod.generate_image_tool(_ctx(), prompt="a cat")
+    assert calls == [("C1", "1.1")]

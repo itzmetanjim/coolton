@@ -390,7 +390,7 @@ def get_model_from_config(user_id: str | None = None) -> str:
 
 # Image-gen quality -> the providers.json tag that model is declared under.
 # "high" (google/gemini-3-pro-image-preview) and "low"
-# (google/gemini-2.5-flash-image-preview) — see agent.tools.image_gen.
+# (google/gemini-2.5-flash-image) — see agent.tools.image_gen.
 _IMAGE_QUALITY_TAGS = {"high": "image-high", "low": "image-low"}
 
 
