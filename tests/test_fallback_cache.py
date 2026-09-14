@@ -129,6 +129,58 @@ def test_refresh_does_not_touch_untested_providers(clock):
     assert fc.get_dead_providers() == {"mistral": "previously down, not part of this refresh"}
 
 
+# ---------------------------------------------------------------------------
+# mark_family_dead / get_dead_families — a family-wide outage (e.g. HCAI's
+# whole account hitting its daily spending cap), distinct from the per-model
+# dead cache above.
+# ---------------------------------------------------------------------------
+
+
+def test_family_empty_initially(clock):
+    assert fc.get_dead_families() == {}
+
+
+def test_mark_family_dead_and_reason(clock):
+    fc.mark_family_dead("hcai", "daily spending limit of $3 reached")
+    assert fc.get_dead_families() == {"hcai": "daily spending limit of $3 reached"}
+
+
+def test_family_dead_ttl_expires(clock):
+    fc.mark_family_dead("hcai", "boom")
+    clock(fc.DEAD_TTL_SECONDS + 1)
+    assert fc.get_dead_families() == {}
+
+
+def test_family_reason_truncated(clock):
+    fc.mark_family_dead("hcai", "x" * 500)
+    assert len(fc.get_dead_families()["hcai"]) == 300
+
+
+def test_mark_family_dead_clears_working_for_a_member_of_that_family(clock):
+    fc.set_working_provider("hcai_2")
+    fc.mark_family_dead("hcai", "boom")
+    assert fc.get_working_provider() is None
+
+
+def test_mark_family_dead_leaves_working_for_a_different_provider(clock):
+    fc.set_working_provider("anthropic")
+    fc.mark_family_dead("hcai", "boom")
+    assert fc.get_working_provider() == "anthropic"
+
+
+def test_per_model_dead_and_family_dead_are_independent(clock):
+    fc.mark_dead("hcai_0", "one bad model")
+    fc.mark_family_dead("hcai", "whole account capped")
+    assert fc.get_dead_providers() == {"hcai_0": "one bad model"}
+    assert fc.get_dead_families() == {"hcai": "whole account capped"}
+
+
+def test_clear_cache_also_clears_dead_families(clock):
+    fc.mark_family_dead("hcai", "boom")
+    fc.clear_cache()
+    assert fc.get_dead_families() == {}
+
+
 def test_refresh_extends_working_ttl_so_it_does_not_go_stale_between_cycles(clock):
     """The whole point: a repeated refresh keeps bumping the timestamp so the
     entry never organically expires as long as the background job keeps

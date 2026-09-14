@@ -349,3 +349,21 @@ def test_build_image_provider_order_never_returns_a_chat_model(isolated_config, 
     monkeypatch.setenv("HCAI_KEY", "k")
     order = provider_config.build_image_provider_order("high")
     assert "chat-model" not in [c["model"] for c in order]
+
+
+def test_build_image_provider_order_tags_each_entry_with_its_provider_id(isolated_config, monkeypatch):
+    """agent.tools.image_gen keys family-wide-outage skipping off this field —
+    see agent.fallback_cache.mark_family_dead."""
+    isolated_config(_IMAGE_CONFIG)
+    monkeypatch.setenv("HCAI_KEY", "k")
+    order = provider_config.build_image_provider_order("high")
+    assert [c["provider"] for c in order] == ["hcai", "hcai"]
+
+
+def test_provider_family_strips_the_generated_index_suffix():
+    assert provider_config.provider_family("hcai_2") == "hcai"
+
+
+def test_provider_family_leaves_an_unindexed_name_alone():
+    assert provider_config.provider_family("hcai") == "hcai"
+    assert provider_config.provider_family("byok") == "byok"

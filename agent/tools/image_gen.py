@@ -18,6 +18,20 @@ ASPECT_TO_SIZE = {
 }
 
 
+# Substring of HCAI's own error text when its one shared account hits its
+# daily spending cap — every HCAI model (chat and image) fails the same way
+# until the cap resets, so seeing this from ANY of them should stop us from
+# wasting the rest of this call (and future ones, within the cooldown) trying
+# every other HCAI model one by one. See agent.agent._run_with_provider_chain
+# for the matching chat-side check.
+_FAMILY_OUTAGE_MARKERS = ["daily spending limit"]
+
+
+def _family_outage(result: str) -> bool:
+    r = result.lower()
+    return any(m in r for m in _FAMILY_OUTAGE_MARKERS)
+
+
 def _resolve_size(size: str, aspect_ratio: str | None) -> str:
     if aspect_ratio:
         normalized = aspect_ratio.strip().lower()
@@ -53,12 +67,18 @@ def generate_image(
             if ep:
                 return _generate_openai_compatible(ep["api_key"], ep["base_url"], ep["model"], prompt, n, size, aspect_ratio)
 
+    from agent.fallback_cache import get_dead_families, mark_family_dead
     from agent.provider_config import build_image_provider_order
 
-    attempts = [(c["api_key"], c["base_url"], c["model"]) for c in build_image_provider_order(quality)]
+    dead_families = set(get_dead_families())
+    attempts = [
+        (c["api_key"], c["base_url"], c["model"], c.get("provider"))
+        for c in build_image_provider_order(quality)
+        if c.get("provider") not in dead_families
+    ]
     global_key = os.environ.get("OPENAI_API_KEY")
     if global_key:
-        attempts.append((global_key, "https://api.openai.com/v1", "dall-e-3"))
+        attempts.append((global_key, "https://api.openai.com/v1", "dall-e-3", "openai"))
 
     if not attempts:
         return (
@@ -67,10 +87,15 @@ def generate_image(
         )
 
     result = ""
-    for api_key, base_url, model in attempts:
+    for api_key, base_url, model, provider in attempts:
+        if provider in dead_families:
+            continue  # a sibling attempt above just marked this family dead
         result = _generate_openai_compatible(api_key, base_url, model, prompt, n, size, aspect_ratio)
         if "image(s)" in result:
             return result
+        if provider and _family_outage(result):
+            mark_family_dead(provider, result)
+            dead_families.add(provider)
     return result
 
 
