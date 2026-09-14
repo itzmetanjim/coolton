@@ -370,6 +370,37 @@ def test_resolve_provider_order_tag_skips_fallback_cache_reordering(isolated_con
     assert tagged_order == build_provider_order(None, tag="mytag")
 
 
+def test_resolve_provider_order_skips_a_dead_family_regardless_of_tag_or_byok(isolated_config, monkeypatch, clean_env):
+    """A family-wide outage (agent.fallback_cache.mark_family_dead — e.g. HCAI's
+    whole account hitting its daily spending cap) applies no matter what
+    routed us here: every model in that family is guaranteed to fail the same
+    way, so unlike the per-model dead cache this must not be skipped just
+    because a tag was forced."""
+    isolated_config({
+        "providers": [
+            {"id": "hcai", "api_url": "https://hcai.example/v1", "api_key_env_var_name": "HCAI_KEY"},
+            {"id": "p2", "api_url": None, "api_key_env_var_name": "P2_KEY"},
+        ],
+        "models": [
+            {"provider": "hcai", "model": "m1", "tags": ["mytag"], "context_window": 100_000},
+            {"provider": "hcai", "model": "m2", "tags": ["othertag"], "context_window": 100_000},
+            {"provider": "p2", "model": "m3", "tags": ["mytag"], "context_window": 100_000},
+        ],
+    })
+    monkeypatch.setenv("HCAI_KEY", "k1")
+    monkeypatch.setenv("P2_KEY", "k2")
+    monkeypatch.setattr("agent.fallback_cache.get_dead_families", lambda: {"hcai": "daily spending limit"})
+    monkeypatch.setattr("agent.fallback_cache.get_dead_providers", lambda: {})
+    monkeypatch.setattr("agent.fallback_cache.get_working_provider", lambda: None)
+
+    tagged_order = agent_mod._resolve_provider_order(None, tag="mytag")
+    assert [n for n, _ in tagged_order] == ["p2"]
+
+    untagged_order = agent_mod._resolve_provider_order(None)
+    assert "hcai_0" not in [n for n, _ in untagged_order]
+    assert "hcai_1" not in [n for n, _ in untagged_order]
+
+
 # ---------------------------------------------------------------------------
 # get_runtime_model
 # ---------------------------------------------------------------------------
@@ -854,6 +885,56 @@ def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatc
 
     assert provider == "anthropic"
     assert shown_models == ["hcai_0 / openai/gpt-5.6-luna", "anthropic / anthropic:claude-sonnet-4-6"]
+
+
+def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(monkeypatch, clean_env):
+    """HCAI's daily spending cap fails EVERY model routed through its one
+    shared account with a 429 — and "429" is in retryable_errors, so before
+    this check existed the same dead model got retried with exponential
+    backoff (up to its configured max_retries), and then the NEXT hcai_*
+    model repeated that same slow, guaranteed-to-fail cycle. This must
+    instead mark the whole family dead immediately, skip past every other
+    hcai_* entry with no further attempt, and fall straight through to the
+    next real provider."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_mod, "_resolve_provider_order",
+        lambda user_id, tag=None: [
+            ("hcai_0", {"model": "openai/gpt-5.6-luna", "api_key": "k", "max_retries": 5}),
+            ("hcai_1", {"model": "z-ai/glm-5.3-flash", "api_key": "k", "max_retries": 5}),
+            ("anthropic", {"model": "anthropic:claude-sonnet-4-6", "api_key": "k"}),
+        ],
+    )
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.fallback_cache.get_dead_families", lambda: {})
+    marked = []
+    monkeypatch.setattr("agent.fallback_cache.mark_family_dead", lambda family, reason: marked.append(family))
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+    slept = []
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: slept.append(s))
+
+    attempted = []
+
+    def fake_run_sync(**kwargs):
+        attempted.append(kwargs.get("model"))
+        if len(attempted) == 1:
+            raise RuntimeError(
+                "Error code: 429 - Daily spending limit of $3 reached. Need a higher limit? hey@mahadk.com"
+            )
+        return SimpleNamespace(output="ok")
+
+    fake_agent = SimpleNamespace(run_sync=fake_run_sync)
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
+
+    result, provider = agent_mod._run_with_provider_chain(fake_agent, {}, deps)
+
+    assert provider == "anthropic"
+    # hcai_0 attempted once and failed; hcai_1 never attempted at all (skipped
+    # in-loop once the family was marked dead); anthropic then succeeds.
+    assert len(attempted) == 2
+    assert marked == ["hcai"]
+    assert slept == []  # no exponential-backoff retry against a guaranteed-dead model
 
 
 def test_run_with_provider_chain_forces_single_tool_call_for_minimax(monkeypatch, clean_env):

@@ -176,11 +176,24 @@ def _resolve_provider_order(deps_user_id: str | None = None, tag: str | None = N
     cache's own reordering — a forced tag should not get silently overridden
     by "last known working provider."
     """
-    from agent.fallback_cache import get_dead_providers, get_working_provider
+    from agent.fallback_cache import get_dead_families, get_dead_providers, get_working_provider
 
     provider_order = _build_provider_order(deps_user_id, tag)
     if not provider_order:
         raise RuntimeError("No AI provider configured.")
+
+    # A family-wide outage (e.g. HCAI's whole account hitting its daily
+    # spending cap) applies no matter what routed us here — unlike the
+    # per-model dead cache below, skip it even under a forced [!WITH:tag] or
+    # ahead of BYOK, since every model in that family is guaranteed to fail
+    # the same way.
+    dead_families = get_dead_families()
+    if dead_families:
+        alive = [
+            (n, c) for n, c in provider_order
+            if provider_config.provider_family(n) not in dead_families
+        ]
+        provider_order = alive or provider_order
 
     has_byok = provider_order[0][0] == "byok"
     if not has_byok and not tag:
@@ -2725,11 +2738,31 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
     Uses the global fallback cache: skips providers known to be dead and prefers the
     last-known-good provider first.
     """
-    from agent.fallback_cache import set_working_provider, mark_dead
+    from agent.fallback_cache import get_dead_families, mark_dead, mark_family_dead, set_working_provider
     from agent.plan_block import set_model_task
 
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
     provider_order = _resolve_provider_order(deps.user_id, tag=deps.provider_tag_filter)
+
+    # Family-wide outage markers checked BEFORE the generic retryable/hard-error
+    # logic below — this deliberately overrides "429" being in retryable_errors.
+    # HCAI's daily spending cap surfaces as a 429 on EVERY model routed through
+    # that one shared account, so treating it as an ordinary rate limit meant
+    # retrying the same dead model with exponential backoff (up to 5x for
+    # HCAI's configured max_retries) before even moving to the next of its ~7
+    # chat models, each repeating the same slow, guaranteed-to-fail cycle.
+    family_outage_markers = [
+        "daily spending limit",
+    ]
+
+    def family_outage_marker(error: Exception) -> str | None:
+        error_str = str(error).lower()
+        return next((m for m in family_outage_markers if m in error_str), None)
+
+    # Refreshed in-loop (not just at the top) so marking a family dead mid-turn
+    # immediately skips its remaining models too, instead of only affecting
+    # future turns.
+    dead_families_this_turn = set(get_dead_families())
 
     # Retry configuration
     max_retries = 3
@@ -2795,6 +2828,10 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
     base_model_settings = run_kwargs.get("model_settings") or {}
 
     for provider_name, prov_config in provider_order:
+        family = provider_config.provider_family(provider_name)
+        if family in dead_families_this_turn:
+            logger.info(f"Skipping {provider_name}: '{family}' family marked dead this turn")
+            continue
         provider_max_retries = prov_config.get("max_retries", max_retries)
         model_name = prov_config["model"]
         # Shown live, before the attempt even starts — not just after the whole
@@ -2889,6 +2926,15 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                     run_kwargs["message_history"] = deps.last_attempt_messages
                     run_kwargs["user_prompt"] = None
                     checkpoint_baseline = deps.last_attempt_messages
+                outage_marker = family_outage_marker(e)
+                if outage_marker and provider_name != "byok":
+                    mark_family_dead(family, err)
+                    dead_families_this_turn.add(family)
+                    logger.warning(
+                        f"{provider_name} hit a family-wide outage ('{outage_marker}') — "
+                        f"marked '{family}' dead, skipping its remaining models: {err}"
+                    )
+                    break  # Don't retry or try siblings in this family; move past it
                 if is_hard_error(e):
                     if provider_name != "byok":
                         mark_dead(provider_name, err)

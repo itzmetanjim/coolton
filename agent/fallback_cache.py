@@ -89,6 +89,46 @@ def mark_dead(provider_name: str, reason: str):
     logger.warning(f"Fallback cache: marked {provider_name} dead ({reason[:120]})")
 
 
+def _in_family(provider_name: str, family: str) -> bool:
+    return provider_name == family or provider_name.startswith(f"{family}_")
+
+
+def mark_family_dead(family: str, reason: str) -> None:
+    """Mark an entire provider family (e.g. every HCAI model, chat AND
+    image) dead for DEAD_TTL_SECONDS — for an outage that isn't per-model,
+    like HCAI's one shared account hitting its daily spending cap. One model
+    failing that way says nothing about just that model: every other model
+    routed through the same account/key is equally broken until the cap
+    resets, so marking a single generated name (e.g. "hcai_2") dead would
+    just burn time working through the rest of that provider's models one at
+    a time before ever reaching a real alternative.
+    """
+    with _cache_lock:
+        cache = _load_cache()
+        cache.setdefault("dead_families", {})[family] = {
+            "since": time.time(),
+            "reason": reason[:300],
+        }
+        working = cache.get("working")
+        if working and _in_family(working["provider"], family):
+            cache.pop("working", None)
+        _save_cache(cache)
+    logger.warning(f"Fallback cache: marked entire '{family}' family dead ({reason[:120]})")
+
+
+def get_dead_families() -> dict:
+    """Provider families currently in cooldown, family -> reason."""
+    with _cache_lock:
+        cache = _load_cache()
+        dead = cache.get("dead_families", {})
+        now = time.time()
+        return {
+            name: info.get("reason", "failed")
+            for name, info in dead.items()
+            if now - info.get("since", 0) < DEAD_TTL_SECONDS
+        }
+
+
 def refresh_from_results(results: list[tuple[str, bool]]) -> None:
     """Atomically rewrite working/dead from a full-chain background probe.
 

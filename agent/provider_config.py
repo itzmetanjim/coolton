@@ -180,6 +180,16 @@ def extract_tag_directive(text: str) -> tuple[str, str | None, str | None]:
     return cleaned, found_tag, None
 
 
+def provider_family(provider_name: str) -> str:
+    """The provider id encoded in a generated fallback-chain name (see
+    _make_provider_name): "hcai_2" -> "hcai", "hcai" -> "hcai", "byok" ->
+    "byok". Lets a caller recognize a family-wide outage (e.g. HCAI's whole
+    account hitting its daily spending cap) no matter which of its several
+    tagged models happened to be the one that surfaced it.
+    """
+    return re.sub(r"_\d+$", "", provider_name)
+
+
 def _provider_map() -> dict[str, dict]:
     return {p["id"]: p for p in _get_providers()}
 
@@ -404,8 +414,10 @@ def build_image_provider_order(quality: str) -> list[dict]:
     orders these HCAI-routed candidates; it has no bearing on whether a BYOK
     endpoint is used at all (the caller checks that separately, first).
 
-    Each dict has {model, base_url, api_key, display} — the same shape
-    build_provider_order's config dicts use, so callers can pass them
+    Each dict has {model, base_url, api_key, display, provider} — the same
+    shape build_provider_order's config dicts use (plus the raw provider id,
+    so a caller can recognize a family-wide outage the way
+    agent.agent._run_with_provider_chain does), so callers can pass them
     straight to the same OpenAI-compatible request helper. A model whose
     provider has no env var set is skipped, same as build_provider_order.
     """
@@ -420,7 +432,8 @@ def build_image_provider_order(quality: str) -> list[dict]:
                 continue
             if wanted_tag not in (model_entry.get("tags") or []):
                 continue
-            pconf = pmap.get(model_entry["provider"])
+            pid = model_entry["provider"]
+            pconf = pmap.get(pid)
             if not pconf:
                 continue
             env_var = pconf.get("api_key_env_var_name")
@@ -432,5 +445,6 @@ def build_image_provider_order(quality: str) -> list[dict]:
                 "base_url": pconf.get("api_url"),
                 "api_key": api_key,
                 "display": get_provider_display(model_entry, pmap),
+                "provider": pid,
             })
     return ordered
