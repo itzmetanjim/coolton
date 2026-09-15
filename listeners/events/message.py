@@ -13,6 +13,7 @@ from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel
 from agent.leave_thread_store import is_thread_engaged
 from agent.steering_store import queue_steering_message
 from agent.stop_store import is_stop_command, request_stop
+from agent.stopped_threads_store import is_thread_stopped, mark_thread_stopped
 from thread_context import conversation_store
 from listeners.events.turn import run_agent_turn
 
@@ -95,6 +96,15 @@ def handle_message(
     thread_ts = CODE_CHANNEL_THREAD_TS if at_channel_level else (event.get("thread_ts") or event["ts"])
     user_id = context.user_id
 
+    # RFC i rule 2: a thread stopped with `@coolton !stop` (or a bare !stop in
+    # a DM / at a code channel's channel level) is ignored entirely — every
+    # later message here is dropped without a reply, mentioned or not, for the
+    # lifetime of the process (see agent.stopped_threads_store). Checked before
+    # command parsing so nothing in a stopped thread is ever processed.
+    if is_thread_stopped(channel_id, event.get("thread_ts")):
+        logger.info(f"Ignoring message in stopped thread {thread_ts} ({channel_id})")
+        return
+
     # !stop: immediately halt every coolton run in this thread. Only honored
     # when the bot is explicitly @-mentioned (that path lives in
     # handle_app_mentioned), in a DM, or at a code channel's channel level —
@@ -108,8 +118,13 @@ def handle_message(
             logger.info("Ignoring '!stop' without an @mention")
         else:
             request_stop(channel_id, thread_ts)
+            # RFC i rule 2: beyond halting in-flight runs, the thread itself
+            # is now stopped — ALL later messages in it are ignored (see
+            # above). Keyed on the raw event thread_ts so a DM-level stop
+            # covers the whole DM, not just one message's ts.
+            mark_thread_stopped(channel_id, event.get("thread_ts"))
             say(
-                text="⏹️ stopping all your running coolton instances…",
+                text="⏹️ stopping — coolton will ignore this thread from here on.",
                 thread_ts=thread_ts,
             )
         return
