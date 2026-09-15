@@ -1470,6 +1470,95 @@ def test_skip_preserve_true_snapshots_last_attempt_messages(monkeypatch):
     assert ctx.deps.halted_messages == ["msg1", "tool-result-2"]
 
 
+# ---------------------------------------------------------------------------
+# wait_tool — a one-off pause/resume, ends the turn the same way skip(preserve=True)
+# does on success, but returns a plain error string (no HaltRun) on failure.
+# ---------------------------------------------------------------------------
+
+
+def test_wait_tool_excluded_from_code_mode():
+    """Like skip, wait_tool raises HaltRun to end the whole top-level turn —
+    calling it from inside a code_mode sandboxed loop makes no sense."""
+    assert "wait_tool" in agent_mod.CODE_MODE_EXCLUDED_TOOLS
+
+
+def test_wait_tool_ends_the_turn_like_skip_preserve_on_success(monkeypatch):
+    ctx = _run_ctx(Mock())
+    ctx.deps.halted_messages = None
+    ctx.deps.last_attempt_messages = ["msg1"]
+    monkeypatch.setattr("agent.scheduler.create_wait", lambda *a: "abcd1234")
+
+    with pytest.raises(agent_mod.HaltRun):
+        agent_mod.wait_tool(ctx, 60, "the build to finish")
+
+    assert ctx.deps.should_skip is True
+    assert ctx.deps.skip_preserve is True
+    assert ctx.deps.halted_messages == ["msg1"]
+
+
+def test_wait_tool_forwards_deps_to_create_wait(monkeypatch):
+    ctx = _run_ctx(Mock())
+    ctx.deps.halted_messages = None
+    ctx.deps.last_attempt_messages = None
+    captured = {}
+    monkeypatch.setattr(
+        "agent.scheduler.create_wait",
+        lambda user_id, channel_id, thread_ts, reason, seconds: captured.update(
+            user_id=user_id, channel_id=channel_id, thread_ts=thread_ts, reason=reason, seconds=seconds
+        ) or "abcd1234",
+    )
+    with pytest.raises(agent_mod.HaltRun):
+        agent_mod.wait_tool(ctx, 90, "the deploy")
+    assert captured == {
+        "user_id": "U_TEST", "channel_id": "C1", "thread_ts": "1.2", "reason": "the deploy", "seconds": 90,
+    }
+
+
+def test_wait_tool_returns_the_error_without_halting_the_turn(monkeypatch):
+    ctx = _run_ctx(Mock())
+    monkeypatch.setattr("agent.scheduler.create_wait", lambda *a: "Error: seconds must be positive.")
+
+    result = agent_mod.wait_tool(ctx, 0, "reason")
+
+    assert result == "Error: seconds must be positive."
+    assert not hasattr(ctx.deps, "should_skip") or ctx.deps.should_skip is not True
+
+
+# ---------------------------------------------------------------------------
+# submit_feedback_tool / upload_emoji_tool — thin delegating wrappers
+# ---------------------------------------------------------------------------
+
+
+def test_submit_feedback_tool_forwards_deps(monkeypatch):
+    ctx = _run_ctx(Mock())
+    captured = {}
+    monkeypatch.setattr(
+        "agent.tools.feedback.submit_feedback",
+        lambda user_id, channel_id, kind, body: captured.update(
+            user_id=user_id, channel_id=channel_id, kind=kind, body=body
+        ) or "Logged bug feedback. Thanks!",
+    )
+    result = agent_mod.submit_feedback_tool(ctx, "bug", "it broke")
+    assert result == "Logged bug feedback. Thanks!"
+    assert captured == {"user_id": "U_TEST", "channel_id": "C1", "kind": "bug", "body": "it broke"}
+
+
+def test_upload_emoji_tool_forwards_deps(monkeypatch):
+    ctx = _run_ctx(Mock())
+    captured = {}
+    monkeypatch.setattr(
+        "agent.tools.slack_emoji.upload_emoji",
+        lambda channel_id, thread_ts, name, path, alias_for: captured.update(
+            channel_id=channel_id, thread_ts=thread_ts, name=name, path=path, alias_for=alias_for
+        ) or "Added :party:.",
+    )
+    result = agent_mod.upload_emoji_tool(ctx, "party", path="/home/user/party.png")
+    assert result == "Added :party:."
+    assert captured == {
+        "channel_id": "C1", "thread_ts": "1.2", "name": "party", "path": "/home/user/party.png", "alias_for": "",
+    }
+
+
 def test_check_background_command_tool_forwards_job_id_and_tail_lines(monkeypatch):
     captured = {}
     monkeypatch.setattr("agent.tools.sandbox_background.check_background_command", _capturing(captured, "status"))

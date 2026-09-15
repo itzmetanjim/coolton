@@ -70,6 +70,7 @@ leave_thread_store.json
 ban_store.json
 reminders.json
 scheduled_tasks.json
+wait_tasks.json
 thread_sandboxes.json
 background_jobs.json
 byok_key.bin
