@@ -23,6 +23,30 @@ import json
 import pytest
 
 from agent import provider_config
+from agent import stopped_threads_store
+
+
+@pytest.fixture(autouse=True)
+def clean_stopped_threads_store():
+    """RFC i rule 2 tests mark threads stopped in the real in-process store;
+    clear it around every test so marked threads can't leak across tests."""
+    stopped_threads_store._stopped_threads.clear()
+    yield
+    stopped_threads_store._stopped_threads.clear()
+
+
+@pytest.fixture(autouse=True)
+def isolated_file_stores(monkeypatch, tmp_path):
+    """File-backed stores must never be read from or written to the working
+    directory during tests. Handler tests call real join_thread()/is_banned()/
+    is_code_channel() — without this, one test's join persists to the real
+    gitignored store file and silently changes what every LATER test run
+    (and every other test) sees. Point each store at a throwaway file."""
+    from agent import ban_store, code_channel_store, leave_thread_store
+
+    monkeypatch.setattr(leave_thread_store, "LEAVE_THREAD_STORE_FILE", str(tmp_path / "leave_thread_store.json"))
+    monkeypatch.setattr(ban_store, "BAN_STORE_FILE", str(tmp_path / "ban_store.json"))
+    monkeypatch.setattr(code_channel_store, "CODE_CHANNEL_STORE_FILE", str(tmp_path / "code_channels.json"))
 
 
 @pytest.fixture
