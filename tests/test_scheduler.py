@@ -9,6 +9,7 @@ from agent import scheduler
 def tmp_files(monkeypatch, tmp_path):
     monkeypatch.setattr(scheduler, "REMINDERS_FILE", str(tmp_path / "reminders.json"))
     monkeypatch.setattr(scheduler, "SCHEDULED_TASKS_FILE", str(tmp_path / "scheduled_tasks.json"))
+    monkeypatch.setattr(scheduler, "WAIT_TASKS_FILE", str(tmp_path / "wait_tasks.json"))
     return tmp_path
 
 
@@ -436,3 +437,177 @@ def test_create_scheduled_task_enforces_the_per_user_cap(tmp_files):
     # Cap is per-user — a different user is unaffected.
     other_msg = scheduler.create_scheduled_task(OTHER, "C1", "1.1", "theirs", "0 9 * * *")
     assert other_msg.startswith("Created scheduled task ")
+
+
+# ---------------------------------------------------------------------------
+# One-off waits — a short "pause this conversation and resume it later"
+# distinct from create_scheduled_task (recurring) and schedule_reminder
+# (a static DM with no further reasoning).
+# ---------------------------------------------------------------------------
+
+
+def test_create_wait_returns_id_and_saves(tmp_files):
+    wait_id = scheduler.create_wait(OWNER, "C1", "1.1", "the build to finish", 60)
+    assert len(wait_id) == 8
+    data = scheduler._load_waits()
+    assert len(data["waits"]) == 1
+    assert data["waits"][0]["id"] == wait_id
+    assert data["waits"][0]["reason"] == "the build to finish"
+    assert data["waits"][0]["fired"] is False
+
+
+def test_create_wait_rejects_non_positive_seconds(tmp_files):
+    assert scheduler.create_wait(OWNER, "C1", "1.1", "reason", 0).startswith("Error:")
+    assert scheduler.create_wait(OWNER, "C1", "1.1", "reason", -5).startswith("Error:")
+    assert scheduler._load_waits()["waits"] == []
+
+
+def test_create_wait_rejects_too_long_a_delay(tmp_files):
+    msg = scheduler.create_wait(OWNER, "C1", "1.1", "reason", scheduler.MAX_WAIT_SECONDS + 1)
+    assert msg.startswith("Error:")
+    assert "schedule_reminder" in msg
+    assert "create_scheduled_task" in msg
+    assert scheduler._load_waits()["waits"] == []
+
+
+def test_create_wait_allows_exactly_the_max(tmp_files):
+    wait_id = scheduler.create_wait(OWNER, "C1", "1.1", "reason", scheduler.MAX_WAIT_SECONDS)
+    assert len(wait_id) == 8
+
+
+def test_create_wait_rejects_empty_reason(tmp_files):
+    assert scheduler.create_wait(OWNER, "C1", "1.1", "  ", 60).startswith("Error:")
+    assert scheduler.create_wait(OWNER, "C1", "1.1", "", 60).startswith("Error:")
+
+
+def test_create_wait_registers_an_apscheduler_date_job(tmp_files, monkeypatch):
+    fake_scheduler = Mock()
+    monkeypatch.setattr(scheduler, "_scheduler", fake_scheduler)
+
+    wait_id = scheduler.create_wait(OWNER, "C1", "1.1", "reason", 60)
+
+    fake_scheduler.add_job.assert_called_once()
+    call = fake_scheduler.add_job.call_args
+    assert call.args[0] is scheduler._fire_wait
+    assert call.args[1] == "date"
+    assert call.kwargs.get("id") == f"wait:{wait_id}"
+    assert call.kwargs.get("args") == [wait_id]
+    assert call.kwargs.get("misfire_grace_time") is None
+
+
+def test_fire_wait_missing_or_already_fired_is_a_noop(tmp_files, monkeypatch):
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: False)
+    monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: False)
+    submitted = []
+    monkeypatch.setattr("agent.background_jobs_poller._wake_executor.submit", lambda *a: submitted.append(a))
+
+    scheduler._fire_wait("does-not-exist")  # must not raise
+
+    wait_id = scheduler.create_wait(OWNER, "C1", "1.1", "reason", 60)
+    scheduler._fire_wait(wait_id)
+    assert scheduler._load_waits()["waits"][0]["fired"] is True
+    assert len(submitted) == 1
+    # Firing again (e.g. a duplicate APScheduler trigger) must not re-dispatch.
+    scheduler._fire_wait(wait_id)
+    assert len(submitted) == 1
+
+
+def test_fire_wait_marks_fired_before_dispatching(tmp_files, monkeypatch):
+    monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: False)
+    monkeypatch.setattr("agent.background_jobs_poller._wake_executor.submit", lambda *a: None)
+    wait_id = scheduler.create_wait(OWNER, "C1", "1.1", "reason", 60)
+
+    scheduler._fire_wait(wait_id)
+
+    assert scheduler._load_waits()["waits"][0]["fired"] is True
+
+
+def test_fire_wait_banned_owner_is_skipped_entirely(tmp_files, monkeypatch):
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: True)
+    submitted = []
+    monkeypatch.setattr("agent.background_jobs_poller._wake_executor.submit", lambda *a: submitted.append(a))
+    wait_id = scheduler.create_wait(OWNER, "C1", "1.1", "reason", 60)
+
+    scheduler._fire_wait(wait_id)
+
+    assert submitted == []
+
+
+def test_fire_wait_steers_into_an_active_run_instead_of_starting_a_new_one(tmp_files, monkeypatch):
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: False)
+    monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: True)
+    queued = []
+    monkeypatch.setattr("agent.steering_store.queue_steering_message", lambda *a, **k: queued.append((a, k)))
+    submitted = []
+    monkeypatch.setattr("agent.background_jobs_poller._wake_executor.submit", lambda *a: submitted.append(a))
+    wait_id = scheduler.create_wait(OWNER, "C1", "1.1", "the deploy", 60)
+
+    scheduler._fire_wait(wait_id)
+
+    assert submitted == []
+    assert len(queued) == 1
+    args, kwargs = queued[0]
+    assert args[0] == "C1"
+    assert args[1] == "1.1"
+    assert "the deploy" in args[2]
+    assert kwargs.get("user_id") == ""
+
+
+def test_fire_wait_dispatches_a_wake_when_nothing_is_active(tmp_files, monkeypatch):
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: False)
+    monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: False)
+    submitted = []
+    monkeypatch.setattr("agent.background_jobs_poller._wake_executor.submit", lambda *a: submitted.append(a))
+    wait_id = scheduler.create_wait(OWNER, "C1", "1.1", "the deploy", 60)
+
+    scheduler._fire_wait(wait_id)
+
+    assert len(submitted) == 1
+    from agent.background_jobs_poller import AUTOMATED_USER_ID, _dispatch_wake
+    fn, channel_id, thread_ts, user_id, banner, prompt = submitted[0]
+    assert fn is _dispatch_wake
+    assert channel_id == "C1"
+    assert thread_ts == "1.1"
+    assert user_id == AUTOMATED_USER_ID
+    assert "the deploy" in banner
+    assert "the deploy" in prompt
+
+
+def test_sync_wait_jobs_reregisters_unfired_waits_on_restart(tmp_files, monkeypatch):
+    scheduler.create_wait(OWNER, "C1", "1.1", "reason", 60)
+    fake_scheduler = Mock()
+    monkeypatch.setattr(scheduler, "_scheduler", fake_scheduler)
+
+    scheduler._sync_wait_jobs()
+
+    fake_scheduler.add_job.assert_called_once()
+    assert fake_scheduler.add_job.call_args.kwargs.get("misfire_grace_time") is None
+
+
+def test_sync_wait_jobs_skips_already_fired_waits(tmp_files, monkeypatch):
+    wait_id = scheduler.create_wait(OWNER, "C1", "1.1", "reason", 60)
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: False)
+    monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: False)
+    monkeypatch.setattr("agent.background_jobs_poller._wake_executor.submit", lambda *a: None)
+    scheduler._fire_wait(wait_id)
+
+    fake_scheduler = Mock()
+    monkeypatch.setattr(scheduler, "_scheduler", fake_scheduler)
+    scheduler._sync_wait_jobs()
+
+    fake_scheduler.add_job.assert_not_called()
+
+
+def test_start_scheduler_syncs_wait_jobs(monkeypatch, tmp_files):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    fake_scheduler = Mock()
+    monkeypatch.setattr(
+        "apscheduler.schedulers.background.BackgroundScheduler", lambda: fake_scheduler
+    )
+    monkeypatch.setattr(scheduler, "_sync_cron_jobs", lambda: None)
+    synced = []
+    monkeypatch.setattr(scheduler, "_sync_wait_jobs", lambda: synced.append(True))
+
+    scheduler.start_scheduler(app=Mock())
+
+    assert synced == [True]

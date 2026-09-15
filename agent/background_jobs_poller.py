@@ -119,12 +119,22 @@ def _wake(channel_id: str, thread_ts: str, user_id: str, job_id: str, command: s
         f"[SYSTEM: your background job `{job_id}` (`{command}`) finished while you "
         f"weren't running a turn. Last output:]\n\n{output}"
     )
+    _dispatch_wake(channel_id, thread_ts, AUTOMATED_USER_ID, banner, prompt)
 
+
+def _dispatch_wake(channel_id: str, thread_ts: str, user_id: str, banner: str, prompt: str) -> None:
+    """Post `banner` then run a fresh turn from `prompt` in (channel_id,
+    thread_ts), dispatching to the web or Slack runner as appropriate.
+
+    Factored out of _wake so agent.scheduler's one-off `wait` tool can reuse
+    the exact same web-vs-Slack dispatch instead of a second copy of it —
+    _wake itself only adds the background-job-specific banner/prompt text.
+    """
     from web.runner import WEB_CHANNEL_ID
     if channel_id == WEB_CHANNEL_ID:
-        _wake_web(thread_ts, AUTOMATED_USER_ID, banner, prompt)
+        _wake_web(thread_ts, user_id, banner, prompt)
     else:
-        _wake_slack(channel_id, thread_ts, AUTOMATED_USER_ID, banner, prompt)
+        _wake_slack(channel_id, thread_ts, user_id, banner, prompt)
 
 
 def _wake_web(conversation_id: str, user_id: str, banner: str, prompt: str) -> None:

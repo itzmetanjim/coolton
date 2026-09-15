@@ -438,6 +438,7 @@ CODE_MODE_EXCLUDED_TOOLS = {
     "computer_use",
     "computer_stream_tool",
     "skip",
+    "wait_tool",
     "leave_thread_tool",
     "join_thread_tool",
     "add_emoji_reaction",
@@ -1308,6 +1309,39 @@ def remove_reaction_tool(ctx: RunContext[AgentDeps], emoji_name: str, timestamp:
 
 
 @agent.tool
+def upload_emoji_tool(ctx: RunContext[AgentDeps], name: str, path: str = "", alias_for: str = "") -> str:
+    """Add a custom Slack emoji. Pass `path` (a sandbox image file — starts a sandbox for this
+    thread if it doesn't have one yet) to upload a new emoji, or `alias_for` (an existing emoji
+    name) to create an alias instead. Exactly one of the two is required. Only available if
+    EMOJI_PROXY_TOKEN is configured; says so plainly if it isn't.
+
+    Args:
+        name: The new emoji name, without colons (lowercase letters/numbers/dashes/underscores only).
+        path: Sandbox path to the image to upload as a new emoji.
+        alias_for: Name of an existing emoji to alias, instead of uploading a new image.
+    """
+    from agent.tools.slack_emoji import upload_emoji
+    return upload_emoji(ctx.deps.channel_id, ctx.deps.thread_ts, name, path, alias_for)
+
+
+@agent.tool
+def submit_feedback_tool(ctx: RunContext[AgentDeps], kind: str, body: str) -> str:
+    """Record feedback about coolton itself so it reaches the maintainer. Use this when someone
+    reports that you're broken or wrong, praises something you did, or asks for a change or new
+    capability — as a conversational alternative to the thumbs up/down buttons under a specific
+    reply. Write `body` in your own words as a self-contained report: what they were doing, what
+    happened, and what they expected. Do not use this for anything other than feedback about
+    coolton, and do not use it as a substitute for actually answering the person.
+
+    Args:
+        kind: One of "bug", "praise", "suggestion", "other".
+        body: Self-contained feedback report.
+    """
+    from agent.tools.feedback import submit_feedback
+    return submit_feedback(ctx.deps.user_id, ctx.deps.channel_id, kind, body)
+
+
+@agent.tool
 def search_slack_tool(ctx: RunContext[AgentDeps], query: str, count: int = 5) -> str:
     """Search Slack messages across the workspace (channels, DMs, files) with the user token.
 
@@ -2007,6 +2041,32 @@ def skip(ctx: RunContext[AgentDeps], preserve: bool = False) -> str:
     if preserve:
         ctx.deps.halted_messages = ctx.deps.last_attempt_messages
     raise HaltRun("skip")
+
+
+@agent.tool
+def wait_tool(ctx: RunContext[AgentDeps], seconds: int, reason: str) -> str:
+    """Pause this conversation and automatically resume it later, without blocking. Use this for a
+    one-time delay, spaced-out polling, or giving a background job/external event time to progress —
+    NOT for anything recurring (use create_scheduled_task_tool) or a delay longer than 21600s/6h (use
+    schedule_reminder_tool instead, though that only sends a static DM with no further reasoning).
+
+    Before calling this, send a short message (via send_message) telling the user what you're waiting
+    for — the typing indicator clears the moment your turn ends, so that message is the only lasting
+    sign you're still on it. Call this LAST: it always ends your turn immediately, the same as `skip`,
+    and you'll be woken up automatically in this same conversation once the wait is over.
+
+    Args:
+        seconds: How many seconds to wait (max 21600 = 6h).
+        reason: What you're waiting for, and what to do once it resumes.
+    """
+    from agent.scheduler import create_wait
+    result = create_wait(ctx.deps.user_id, ctx.deps.channel_id, ctx.deps.thread_ts, reason, seconds)
+    if result.startswith("Error:"):
+        return result
+    ctx.deps.should_skip = True
+    ctx.deps.skip_preserve = True
+    ctx.deps.halted_messages = ctx.deps.last_attempt_messages
+    raise HaltRun("wait")
 
 
 _SKILL_INSTALL_MAX_DEPTH = 6

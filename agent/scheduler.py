@@ -429,6 +429,154 @@ def delete_scheduled_task(user_id: str, task_id: str) -> str:
     return f"Deleted scheduled task {task_id}."
 
 
+# ---------------------------------------------------------------------------
+# One-off waits: "pause this conversation for N seconds, then let the agent
+# keep reasoning in it" — distinct from create_scheduled_task (recurring,
+# 30-minute floor) and schedule_reminder (a static DM with no further
+# reasoning). Modeled on gorkie's `wait` tool. Built on the same
+# BackgroundScheduler, but a "date" trigger (fires once) instead of cron.
+# ---------------------------------------------------------------------------
+
+WAIT_TASKS_FILE = "wait_tasks.json"
+wait_tasks_lock = threading.Lock()
+# Longer than this and it's not really a "wait" anymore — point the model at
+# schedule_reminder_tool (one-time, no further reasoning) or
+# create_scheduled_task_tool (recurring) instead.
+MAX_WAIT_SECONDS = 6 * 3600
+WAIT_RETENTION_SECONDS = 7 * 86400
+
+
+def _load_waits() -> dict:
+    try:
+        with open(WAIT_TASKS_FILE, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or "waits" not in data:
+            return {"waits": []}
+        return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"waits": []}
+
+
+def _save_waits(data: dict):
+    temp = f"{WAIT_TASKS_FILE}.tmp"
+    with open(temp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(temp, WAIT_TASKS_FILE)
+
+
+def _prune_fired_waits(data: dict) -> None:
+    now = time.time()
+    data["waits"] = [
+        w for w in data["waits"]
+        if not w.get("fired") or now - w.get("fire_at", now) < WAIT_RETENTION_SECONDS
+    ]
+
+
+def _add_wait_job(wait: dict) -> None:
+    if _scheduler is None:
+        return
+    job_id = f"wait:{wait['id']}"
+    try:
+        _scheduler.remove_job(job_id)
+    except Exception:
+        pass
+    if wait.get("fired"):
+        return
+    from datetime import datetime, timezone
+    run_date = datetime.fromtimestamp(wait["fire_at"], timezone.utc)
+    # misfire_grace_time=None: always fire regardless of how overdue — a wait
+    # that was already due when the process restarted must still resume the
+    # conversation, not silently vanish because it missed some default grace
+    # window.
+    _scheduler.add_job(
+        _fire_wait, "date", run_date=run_date, args=[wait["id"]],
+        id=job_id, replace_existing=True, misfire_grace_time=None,
+    )
+
+
+def _sync_wait_jobs():
+    """Reconcile APScheduler jobs with stored waits (safe to call anytime) —
+    same pattern as _sync_cron_jobs, so a wait started before a restart still
+    fires instead of being lost."""
+    if _scheduler is None:
+        return
+    with wait_tasks_lock:
+        data = _load_waits()
+    for wait in data["waits"]:
+        if not wait.get("fired"):
+            _add_wait_job(wait)
+
+
+def _fire_wait(wait_id: str) -> None:
+    with wait_tasks_lock:
+        data = _load_waits()
+        wait = next((w for w in data["waits"] if w["id"] == wait_id), None)
+        if not wait or wait.get("fired"):
+            return
+        wait["fired"] = True
+        _prune_fired_waits(data)
+        _save_waits(data)
+
+    from agent.ban_store import is_banned
+    if is_banned(wait["user_id"]):
+        logger.info("Wait %s: owner %s is banned; not firing", wait_id, wait["user_id"])
+        return
+
+    channel_id, thread_ts = wait["channel_id"], wait["thread_ts"]
+    prompt = (
+        f"[SYSTEM: your {int(wait.get('seconds', 0))}s wait is over (you were waiting for: "
+        f"{wait['reason']}). Continue and respond in this same conversation.]"
+    )
+    banner = f":alarm_clock: _wait over (nobody sent this) — {wait['reason']}_"
+
+    from agent.active_runs import is_run_active
+    if is_run_active(channel_id, thread_ts):
+        # Same rule agent.background_jobs_poller._notify_finished follows: a
+        # turn already running on this thread picks the wait-over prompt up
+        # as a steering message on its next tool call instead of racing a
+        # second turn against it.
+        from agent.steering_store import queue_steering_message
+        queue_steering_message(channel_id, thread_ts, prompt, user_id="", message_ts="")
+        return
+
+    from agent.background_jobs_poller import AUTOMATED_USER_ID, _dispatch_wake, _wake_executor
+    _wake_executor.submit(_dispatch_wake, channel_id, thread_ts, AUTOMATED_USER_ID, banner, prompt)
+
+
+def create_wait(user_id: str, channel_id: str, thread_ts: str, reason: str, seconds: int) -> str:
+    """Schedule a one-off wake-up of this exact conversation. Returns the
+    wait id, or an "Error: ..." string."""
+    if seconds <= 0:
+        return "Error: seconds must be positive."
+    if seconds > MAX_WAIT_SECONDS:
+        hours = MAX_WAIT_SECONDS // 3600
+        return (
+            f"Error: max wait is {MAX_WAIT_SECONDS}s (~{hours}h). For a longer one-time delay use "
+            f"schedule_reminder_tool; for anything recurring use create_scheduled_task_tool."
+        )
+    if not reason or not reason.strip():
+        return "Error: reason is required."
+
+    wait_id = str(uuid.uuid4())[:8]
+    wait = {
+        "id": wait_id,
+        "user_id": user_id,
+        "channel_id": channel_id,
+        "thread_ts": thread_ts or "",
+        "reason": reason.strip(),
+        "seconds": seconds,
+        "fire_at": time.time() + seconds,
+        "fired": False,
+    }
+    with wait_tasks_lock:
+        data = _load_waits()
+        _prune_fired_waits(data)
+        data["waits"].append(wait)
+        _save_waits(data)
+    _add_wait_job(wait)
+    return wait_id
+
+
 def start_scheduler(app):
     global _scheduler
     try:
@@ -521,4 +669,5 @@ def start_scheduler(app):
     )
     _scheduler.start()
     _sync_cron_jobs()
+    _sync_wait_jobs()
     logger.info("Reminder scheduler started")
