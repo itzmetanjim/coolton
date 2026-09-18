@@ -59,15 +59,56 @@ def _client_secret() -> str:
     return os.environ.get("HCA_CLIENT_SECRET", "")
 
 
-def _redirect_uri() -> str:
-    return os.environ.get("HCA_REDIRECT_URI", "http://localhost:8000/oauth/callback")
+def _redirect_uris() -> list[str]:
+    """Every callback URL registered with Hack Club Auth for this client, as a
+    comma-separated HCA_REDIRECT_URI (e.g. coolton is reachable at both
+    coolton.tanjim.org and coolton.lily.hackclub.app, each independently
+    registered) — see _redirect_uri, which picks the one matching the current
+    request. A single value (or the unset default) still works exactly as
+    before this supported more than one.
+    """
+    raw = os.environ.get("HCA_REDIRECT_URI", "http://localhost:8000/oauth/callback")
+    return [u.strip() for u in raw.split(",") if u.strip()]
 
 
-def _secure_cookies() -> bool:
+def _request_host(request: Request | None) -> str:
+    """The hostname the browser is actually on. Prefer X-Forwarded-Host over
+    the raw Host header: coolton.tanjim.org reaches this app through a chain
+    (Caddy, then a discovery-based relay proxy on another box) that resolves
+    the ultimate upstream by its OWN hostname (e.g. "tanjim.org") and forwards
+    THAT as Host, while carrying the original external hostname separately in
+    X-Forwarded-Host — the raw Host header alone would never match any
+    registered redirect URI.
+    """
+    if request is None:
+        return ""
+    return (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(":")[0].lower()
+
+
+def _redirect_uri(request: Request | None = None) -> str:
+    """The registered HCA callback URL to use for this request — whichever
+    configured one (see _redirect_uris) matches the host the browser is
+    actually on, so /oauth/login and /oauth/callback always round-trip
+    through the SAME hostname (HCA rejects a token exchange whose redirect_uri
+    doesn't match the one the code was issued for). Falls back to the first
+    configured URL when there's no request or its host matches none of them.
+    """
+    from urllib.parse import urlparse
+
+    uris = _redirect_uris()
+    host = _request_host(request)
+    if host:
+        for uri in uris:
+            if urlparse(uri).hostname == host:
+                return uri
+    return uris[0]
+
+
+def _secure_cookies(redirect_uri: str) -> bool:
     # A browser silently drops a `Secure` cookie sent over plain HTTP, which is
     # exactly the local-dev case (http://localhost:8000) — derive this from the
     # registered redirect URI instead of a separate env var to set.
-    return _redirect_uri().startswith("https://")
+    return redirect_uri.startswith("https://")
 
 
 def _secret() -> bytes:
@@ -138,12 +179,12 @@ def require_slack_id(request: Request) -> str | None:
     return session["slack_id"] if session else None
 
 
-def _authorize_url(state: str) -> str:
+def _authorize_url(state: str, redirect_uri: str) -> str:
     from urllib.parse import urlencode
 
     params = {
         "client_id": _client_id(),
-        "redirect_uri": _redirect_uri(),
+        "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": "slack_id",
         "state": state,
@@ -151,13 +192,13 @@ def _authorize_url(state: str) -> str:
     return f"{AUTHORIZE_URL}?{urlencode(params)}"
 
 
-def _exchange_code(code: str) -> dict:
+def _exchange_code(code: str, redirect_uri: str) -> dict:
     resp = requests.post(
         TOKEN_URL,
         data={
             "client_id": _client_id(),
             "client_secret": _client_secret(),
-            "redirect_uri": _redirect_uri(),
+            "redirect_uri": redirect_uri,
             "code": code,
             "grant_type": "authorization_code",
         },
@@ -187,11 +228,12 @@ def _fetch_slack_id(access_token: str) -> str | None:
 
 
 @router.get("/oauth/login")
-def login():
+def login(request: Request):
+    redirect_uri = _redirect_uri(request)
     state = secrets.token_urlsafe(24)
-    response = RedirectResponse(_authorize_url(state), status_code=302)
+    response = RedirectResponse(_authorize_url(state, redirect_uri), status_code=302)
     response.set_cookie(
-        STATE_COOKIE, state, max_age=600, httponly=True, secure=_secure_cookies(), samesite="lax",
+        STATE_COOKIE, state, max_age=600, httponly=True, secure=_secure_cookies(redirect_uri), samesite="lax",
     )
     return response
 
@@ -203,8 +245,9 @@ def callback(request: Request, code: str = "", state: str = ""):
         logger.warning("HCA callback rejected: missing/mismatched state")
         return RedirectResponse("/?auth_error=state", status_code=302)
 
+    redirect_uri = _redirect_uri(request)
     try:
-        token_data = _exchange_code(code)
+        token_data = _exchange_code(code, redirect_uri)
         access_token = token_data["access_token"]
         slack_id = _fetch_slack_id(access_token)
     except Exception:
@@ -219,7 +262,7 @@ def callback(request: Request, code: str = "", state: str = ""):
     response.delete_cookie(STATE_COOKIE)
     response.set_cookie(
         SESSION_COOKIE, create_session_token(slack_id),
-        max_age=SESSION_MAX_AGE_SECONDS, httponly=True, secure=_secure_cookies(), samesite="lax",
+        max_age=SESSION_MAX_AGE_SECONDS, httponly=True, secure=_secure_cookies(redirect_uri), samesite="lax",
     )
     return response
 
