@@ -70,14 +70,17 @@ def test_require_slack_id_returns_the_id_when_signed_in():
 
 
 def test_authorize_url_requests_only_the_slack_id_scope():
-    url = auth._authorize_url("some-state")
+    url = auth._authorize_url("some-state", "https://coolton.example/oauth/callback")
     assert "scope=slack_id" in url
     assert "client_id=client-id" in url
     assert "some-state" in url
 
 
-def test_login_sets_a_state_cookie_and_redirects_to_hackclub():
-    response = auth.login()
+def test_login_sets_a_state_cookie_and_redirects_to_hackclub(monkeypatch):
+    monkeypatch.setenv("HCA_REDIRECT_URI", "https://coolton.tanjim.org/oauth/callback")
+    request = Mock()
+    request.headers = {}
+    response = auth.login(request)
     assert response.status_code == 302
     assert response.headers["location"].startswith(auth.AUTHORIZE_URL)
     assert "oauth_state=" in response.headers.get("set-cookie", "")
@@ -100,6 +103,7 @@ def test_logout_clears_the_session_cookie_and_lands_on_signed_out():
 def test_callback_rejects_a_mismatched_state():
     request = Mock()
     request.cookies = {auth.STATE_COOKIE: "expected"}
+    request.headers = {}
     response = auth.callback(request, code="abc", state="different")
     assert response.status_code == 302
     assert "auth_error" in response.headers["location"]
@@ -108,6 +112,7 @@ def test_callback_rejects_a_mismatched_state():
 def test_callback_rejects_a_missing_code():
     request = Mock()
     request.cookies = {auth.STATE_COOKIE: "expected"}
+    request.headers = {}
     response = auth.callback(request, code="", state="expected")
     assert "auth_error" in response.headers["location"]
 
@@ -115,6 +120,7 @@ def test_callback_rejects_a_missing_code():
 def test_callback_sets_a_session_cookie_on_success():
     request = Mock()
     request.cookies = {auth.STATE_COOKIE: "expected"}
+    request.headers = {}
     with patch.object(auth, "_exchange_code", return_value={"access_token": "tok"}), \
          patch.object(auth, "_fetch_slack_id", return_value="U42"):
         response = auth.callback(request, code="abc", state="expected")
@@ -127,6 +133,7 @@ def test_callback_sets_a_session_cookie_on_success():
 def test_callback_redirects_with_error_when_no_slack_id_comes_back():
     request = Mock()
     request.cookies = {auth.STATE_COOKIE: "expected"}
+    request.headers = {}
     with patch.object(auth, "_exchange_code", return_value={"access_token": "tok"}), \
          patch.object(auth, "_fetch_slack_id", return_value=None):
         response = auth.callback(request, code="abc", state="expected")
@@ -135,11 +142,106 @@ def test_callback_redirects_with_error_when_no_slack_id_comes_back():
     assert not any(auth.SESSION_COOKIE in c for c in set_cookies)
 
 
-def test_secure_cookies_false_for_localhost_redirect_uri(monkeypatch):
+def test_secure_cookies_false_for_localhost_redirect_uri():
+    assert auth._secure_cookies("http://localhost:8000/oauth/callback") is False
+
+
+def test_secure_cookies_true_for_https_redirect_uri():
+    assert auth._secure_cookies("https://coolton.tanjim.org/oauth/callback") is True
+
+
+# ---------------------------------------------------------------------------
+# Multi-host redirect_uri selection — coolton.tanjim.org and
+# coolton.lily.hackclub.app are both independently registered with Hack Club
+# Auth, and the app is reachable at both (see _redirect_uri/_request_host).
+# ---------------------------------------------------------------------------
+
+_MULTI_HOST_URI = "https://coolton.tanjim.org/oauth/callback,https://coolton.lily.hackclub.app/oauth/callback"
+
+
+def test_redirect_uris_parses_a_comma_separated_list(monkeypatch):
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    assert auth._redirect_uris() == [
+        "https://coolton.tanjim.org/oauth/callback",
+        "https://coolton.lily.hackclub.app/oauth/callback",
+    ]
+
+
+def test_redirect_uri_matches_x_forwarded_host(monkeypatch):
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    request = Mock()
+    request.headers = {"x-forwarded-host": "coolton.lily.hackclub.app"}
+    assert auth._redirect_uri(request) == "https://coolton.lily.hackclub.app/oauth/callback"
+
+
+def test_redirect_uri_prefers_x_forwarded_host_over_host(monkeypatch):
+    """coolton.tanjim.org is reached through a relay that resolves the real
+    upstream by ITS OWN hostname and puts that in the plain Host header,
+    while carrying the original external hostname in X-Forwarded-Host — the
+    raw Host header must never win when both are present."""
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    request = Mock()
+    request.headers = {"x-forwarded-host": "coolton.lily.hackclub.app", "host": "tanjim.org:8056"}
+    assert auth._redirect_uri(request) == "https://coolton.lily.hackclub.app/oauth/callback"
+
+
+def test_redirect_uri_falls_back_to_host_without_x_forwarded_host(monkeypatch):
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    request = Mock()
+    request.headers = {"host": "coolton.tanjim.org"}
+    assert auth._redirect_uri(request) == "https://coolton.tanjim.org/oauth/callback"
+
+
+def test_redirect_uri_ignores_a_port_on_the_host_header(monkeypatch):
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    request = Mock()
+    request.headers = {"host": "coolton.tanjim.org:443"}
+    assert auth._redirect_uri(request) == "https://coolton.tanjim.org/oauth/callback"
+
+
+def test_redirect_uri_is_case_insensitive(monkeypatch):
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    request = Mock()
+    request.headers = {"host": "Coolton.Tanjim.Org"}
+    assert auth._redirect_uri(request) == "https://coolton.tanjim.org/oauth/callback"
+
+
+def test_redirect_uri_falls_back_to_the_first_configured_when_host_matches_none(monkeypatch):
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    request = Mock()
+    request.headers = {"host": "some-other-domain.example"}
+    assert auth._redirect_uri(request) == "https://coolton.tanjim.org/oauth/callback"
+
+
+def test_redirect_uri_falls_back_to_the_first_configured_with_no_request(monkeypatch):
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    assert auth._redirect_uri(None) == "https://coolton.tanjim.org/oauth/callback"
+
+
+def test_redirect_uri_single_value_still_works_exactly_as_before(monkeypatch):
     monkeypatch.setenv("HCA_REDIRECT_URI", "http://localhost:8000/oauth/callback")
-    assert auth._secure_cookies() is False
+    request = Mock()
+    request.headers = {"host": "localhost:8000"}
+    assert auth._redirect_uri(request) == "http://localhost:8000/oauth/callback"
+    assert auth._redirect_uri(None) == "http://localhost:8000/oauth/callback"
 
 
-def test_secure_cookies_true_for_https_redirect_uri(monkeypatch):
-    monkeypatch.setenv("HCA_REDIRECT_URI", "https://coolton.tanjim.org/oauth/callback")
-    assert auth._secure_cookies() is True
+def test_login_and_callback_use_the_matching_host_end_to_end(monkeypatch):
+    """The whole point: signing in via coolton.lily.hackclub.app must send
+    HCA that host's redirect_uri on BOTH the authorize request and the token
+    exchange, not whatever host happened to be configured first."""
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    login_request = Mock()
+    login_request.headers = {"x-forwarded-host": "coolton.lily.hackclub.app"}
+    login_response = auth.login(login_request)
+    assert "coolton.lily.hackclub.app" in login_response.headers["location"]
+    assert "coolton.tanjim.org" not in login_response.headers["location"]
+
+    callback_request = Mock()
+    callback_request.cookies = {auth.STATE_COOKIE: "expected"}
+    callback_request.headers = {"x-forwarded-host": "coolton.lily.hackclub.app"}
+    captured = {}
+    with patch.object(auth, "_exchange_code", side_effect=lambda code, redirect_uri: captured.update(redirect_uri=redirect_uri) or {"access_token": "tok"}), \
+         patch.object(auth, "_fetch_slack_id", return_value="U42"):
+        auth.callback(callback_request, code="abc", state="expected")
+    assert captured["redirect_uri"] == "https://coolton.lily.hackclub.app/oauth/callback"
