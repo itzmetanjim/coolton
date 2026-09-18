@@ -72,17 +72,30 @@ def _redirect_uris() -> list[str]:
 
 
 def _request_host(request: Request | None) -> str:
-    """The hostname the browser is actually on. Prefer X-Forwarded-Host over
-    the raw Host header: coolton.tanjim.org reaches this app through a chain
-    (Caddy, then a discovery-based relay proxy on another box) that resolves
-    the ultimate upstream by its OWN hostname (e.g. "tanjim.org") and forwards
-    THAT as Host, while carrying the original external hostname separately in
-    X-Forwarded-Host — the raw Host header alone would never match any
-    registered redirect URI.
+    """The hostname the browser is actually on.
+
+    coolton is reachable through a chain (a discovery-based relay proxy on
+    another box, then Caddy) that resolves the ultimate upstream by its OWN
+    hostname (e.g. "tanjim.org") and forwards THAT as Host. The relay also
+    sets X-Forwarded-Host to the true original external hostname (e.g.
+    coolton.tanjim.org vs coolton.lily.hackclub.app) - but Caddy's own
+    reverse_proxy recomputes and overwrites X-Forwarded-Host on its next hop
+    rather than trusting one from an upstream it has no reason to trust, so
+    that value never survives to here either. X-Lily-Forwarded-Host is the
+    relay's own custom header carrying the same information under a name
+    Caddy doesn't recognize as one of its "forwarded" headers, so it passes
+    through untouched - prefer it, then fall back to the (Caddy-rewritten,
+    only reliable for a direct, non-relayed hit) X-Forwarded-Host, then Host.
     """
     if request is None:
         return ""
-    return (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(":")[0].lower()
+    host = (
+        request.headers.get("x-lily-forwarded-host")
+        or request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or ""
+    )
+    return host.split(":")[0].lower()
 
 
 def _redirect_uri(request: Request | None = None) -> str:
