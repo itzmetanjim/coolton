@@ -167,18 +167,30 @@ def test_redirect_uris_parses_a_comma_separated_list(monkeypatch):
     ]
 
 
-def test_redirect_uri_matches_x_forwarded_host(monkeypatch):
+def test_redirect_uri_matches_x_lily_forwarded_host(monkeypatch):
     monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
     request = Mock()
-    request.headers = {"x-forwarded-host": "coolton.lily.hackclub.app"}
+    request.headers = {"x-lily-forwarded-host": "coolton.lily.hackclub.app"}
     assert auth._redirect_uri(request) == "https://coolton.lily.hackclub.app/oauth/callback"
 
 
-def test_redirect_uri_prefers_x_forwarded_host_over_host(monkeypatch):
-    """coolton.tanjim.org is reached through a relay that resolves the real
-    upstream by ITS OWN hostname and puts that in the plain Host header,
-    while carrying the original external hostname in X-Forwarded-Host — the
-    raw Host header must never win when both are present."""
+def test_redirect_uri_prefers_x_lily_forwarded_host_over_x_forwarded_host(monkeypatch):
+    """The real-world case this exists for: Caddy recomputes and overwrites
+    X-Forwarded-Host on its own hop rather than trusting the relay's value,
+    so by the time a request reaches this app X-Forwarded-Host holds the
+    relay's OWN internal hostname (tanjim.org:8056), not the hostname the
+    browser actually used — X-Lily-Forwarded-Host is the relay's untouched
+    custom header carrying the real one, and must win."""
+    monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    request = Mock()
+    request.headers = {
+        "x-lily-forwarded-host": "coolton.lily.hackclub.app",
+        "x-forwarded-host": "tanjim.org:8056",
+    }
+    assert auth._redirect_uri(request) == "https://coolton.lily.hackclub.app/oauth/callback"
+
+
+def test_redirect_uri_falls_back_to_x_forwarded_host_without_x_lily_forwarded_host(monkeypatch):
     monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
     request = Mock()
     request.headers = {"x-forwarded-host": "coolton.lily.hackclub.app", "host": "tanjim.org:8056"}
@@ -229,17 +241,22 @@ def test_redirect_uri_single_value_still_works_exactly_as_before(monkeypatch):
 def test_login_and_callback_use_the_matching_host_end_to_end(monkeypatch):
     """The whole point: signing in via coolton.lily.hackclub.app must send
     HCA that host's redirect_uri on BOTH the authorize request and the token
-    exchange, not whatever host happened to be configured first."""
+    exchange, not whatever host happened to be configured first. Headers
+    mirror what actually reaches this app in production (see
+    _request_host): X-Forwarded-Host is present but holds the relay's own
+    internal hostname, not the one the browser used."""
     monkeypatch.setenv("HCA_REDIRECT_URI", _MULTI_HOST_URI)
+    real_headers = {"x-lily-forwarded-host": "coolton.lily.hackclub.app", "x-forwarded-host": "tanjim.org:8056"}
+
     login_request = Mock()
-    login_request.headers = {"x-forwarded-host": "coolton.lily.hackclub.app"}
+    login_request.headers = real_headers
     login_response = auth.login(login_request)
     assert "coolton.lily.hackclub.app" in login_response.headers["location"]
     assert "coolton.tanjim.org" not in login_response.headers["location"]
 
     callback_request = Mock()
     callback_request.cookies = {auth.STATE_COOKIE: "expected"}
-    callback_request.headers = {"x-forwarded-host": "coolton.lily.hackclub.app"}
+    callback_request.headers = real_headers
     captured = {}
     with patch.object(auth, "_exchange_code", side_effect=lambda code, redirect_uri: captured.update(redirect_uri=redirect_uri) or {"access_token": "tok"}), \
          patch.object(auth, "_fetch_slack_id", return_value="U42"):
