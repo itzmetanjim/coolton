@@ -1275,10 +1275,11 @@ def post_message_tool(ctx: RunContext[AgentDeps], channel_id: str, text: str, th
         text: Message text (Markdown supported).
         thread_ts: Optional thread timestamp to post into.
     """
+    from agent.attribution import attribute_text
     from agent.tools.slack_info import post_message_to_target
     name, pfp = _get_user_display_info(ctx.deps.user_id)
     return post_message_to_target(
-        channel_id=channel_id, text=text, thread_ts=thread_ts,
+        channel_id=channel_id, text=attribute_text(text, ctx.deps.user_id), thread_ts=thread_ts,
         from_user=ctx.deps.user_id, current_channel=ctx.deps.channel_id,
         username=name, icon_url=pfp,
     )
@@ -1757,6 +1758,9 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str)
     parsed_parameters, parse_error = _parse_api_parameters(api_parameters)
     if parse_error:
         return parse_error
+    from agent.attribution import attribute_api_params, is_valid_method
+    if not is_valid_method(method):
+        return f"Error: invalid Slack API method {method!r} — pass just the method name, e.g. 'chat.postMessage'."
     if method.startswith("apps.manifest."):
         return f"Error: {method} requires a Slack App Configuration Token (xoxe), not a user token. Use the create_slack_bot tool instead."
     if method == "chat.postMessage":
@@ -1765,6 +1769,7 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str)
         if not parsed_parameters.get("text"):
             return "Error: chat.postMessage requires a 'text' param — use the chat_postMessage tool instead."
         parsed_parameters = _inject_poster(dict(parsed_parameters), ctx.deps.user_id)
+    parsed_parameters = attribute_api_params(method, parsed_parameters, ctx.deps.user_id)
     url = f"https://slack.com/api/{method}"
     headers = {"Authorization": f"Bearer {user_token}"}
     form = {
@@ -1800,8 +1805,12 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_para
     parsed_parameters, parse_error = _parse_api_parameters(api_parameters)
     if parse_error:
         return parse_error
+    from agent.attribution import attribute_api_params, is_valid_method
+    if not is_valid_method(method):
+        return f"Error: invalid Slack API method {method!r} — pass just the method name, e.g. 'chat.postMessage'."
     if method == "chat.postMessage":
         parsed_parameters = _inject_poster(dict(parsed_parameters), ctx.deps.user_id)
+    parsed_parameters = attribute_api_params(method, parsed_parameters, ctx.deps.user_id)
     from agent.tools.slack_bot_api import slack_api_call_as_bot
     return slack_api_call_as_bot(method, parsed_parameters)
 
@@ -2006,7 +2015,8 @@ def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread
     if not text:
         return "Error: text is required — provide the message content."
     try:
-        kwargs = {"channel": channel, "markdown_text": _redact(text, context="chat_postMessage")}
+        from agent.attribution import attribute_text
+        kwargs = {"channel": channel, "markdown_text": attribute_text(_redact(text, context="chat_postMessage"), ctx.deps.user_id)}
         if thread_ts:
             kwargs["thread_ts"] = thread_ts
         kwargs = _inject_poster(kwargs, ctx.deps.user_id)
