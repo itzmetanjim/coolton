@@ -10,7 +10,7 @@
     {"id": "kilocode", "api_url": "https://api.kilo.ai/api/gateway", "api_key_env_var_name": "KILOCODE_API_KEY", "displayname": "Kilo Code"}
   ],
   "models": [
-    {"provider": "hcai", "model": "openai/gpt-5.6-luna", "display": "HCAI GPT-5.6 Luna", "tags": ["luna", "vision"], "context_window": 272000},
+    {"provider": "hcai", "model": "openai/gpt-6-luna", "display": "HCAI GPT-6 Luna", "tags": ["luna", "vision"], "context_window": 1050000},
     {"provider": "hcai", "model": "z-ai/glm-5.3-flash", "display": "HCAI GLM-5.3 Flash", "tags": ["glm5.3-flash", "vision"], "context_window": 1048576},
     {"provider": "hcai", "model": "deepseek/deepseek-v4-flash", "display": "HCAI DeepSeek V4 Flash", "tags": ["deepseek-v4-flash"], "context_window": 1310720},
     {"provider": "hcai", "model": "qwen/qwen3.8-flash", "display": "HCAI Qwen3.8 Flash", "tags": ["qwen3.8-flash", "vision"], "context_window": 1000000},
