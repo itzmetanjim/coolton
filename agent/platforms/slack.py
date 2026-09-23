@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
+from pydantic_ai.toolsets import FilteredToolset
 
 from agent.platform import PlatformAdapter
 
@@ -25,6 +26,8 @@ logger = logging.getLogger(__name__)
 # a real embedded newline, corrupting the example. Plain text has no such double
 # interpretation. Otherwise keep this file's content stable turn to turn — an actually
 # changed system prompt breaks provider-side prompt caching for every open thread.
+BLOCKED_SLACK_MCP_TOOLS = {"slack_send_message"}
+
 _SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "system_prompt.md"
 
 
@@ -122,7 +125,13 @@ class SlackPlatform(PlatformAdapter):
                     "https://mcp.slack.com/mcp",
                     headers={"Authorization": f"Bearer {token}"},
                 )
-                toolsets.append(MCPToolset(transport))
+                # slack_send_message is removed outright: it posts as cooltonUser to
+                # any channel with no way to enforce the "(sent from <@user>)"
+                # footer the native posting tools add (see agent/attribution.py).
+                toolsets.append(FilteredToolset(
+                    MCPToolset(transport),
+                    lambda ctx, tool_def: tool_def.name not in BLOCKED_SLACK_MCP_TOOLS,
+                ))
             except Exception as e:
                 logger.exception("Failed to create MCP server")
                 from agent.admin_alerts import notify_admin
