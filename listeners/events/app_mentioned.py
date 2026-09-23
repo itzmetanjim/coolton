@@ -11,7 +11,9 @@ from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import join_thread
 from agent.steering_store import queue_steering_message
 from agent.stop_store import is_stop_command, request_stop
+from agent.stopped_threads_store import is_thread_stopped, mark_thread_stopped
 from thread_context import conversation_store
+from listeners.events.message import PING_GROUP_MENTION_RE
 from listeners.events.turn import run_agent_turn
 
 
@@ -65,14 +67,35 @@ def handle_app_mentioned(
         user_id = context.user_id
         bot_id = os.environ.get("COOLTON_BOT_ID", "")
 
+        # RFC i rule 2: a thread stopped with `@coolton !stop` is ignored
+        # entirely — every later message here is dropped without a reply,
+        # mentioned or not, for the lifetime of the process (see
+        # agent.stopped_threads_store). Checked before command parsing so a
+        # second !stop can't re-trigger the ack either.
+        if is_thread_stopped(channel_id, event.get("thread_ts")):
+            logger.info(f"Ignoring message in stopped thread {thread_ts} ({channel_id})")
+            return
+
+        # RFC i rule 3 (defense in depth): a ping-group / broadcast mention
+        # without the bot's own direct mention is not addressed to us. The
+        # app_mention event is only supposed to fire on a direct mention, so
+        # this guards odd API edge cases (workflows, replayed payloads) rather
+        # than normal traffic.
+        if bot_id and PING_GROUP_MENTION_RE.search(text) and f"<@{bot_id}>" not in text:
+            logger.info(f"Ignoring ping-group mention without direct bot mention: {text[:80]}")
+            return
+
         # !stop: immediately halt every coolton run in this thread. Must be the
         # message's entire content aside from the mention (see is_stop_command) —
         # a normal prompt that merely contains the word "!stop" must not halt
         # anything.
         if is_stop_command(text, bot_id):
             request_stop(channel_id, thread_ts)
+            # RFC i rule 2: beyond halting in-flight runs, the thread itself is
+            # now stopped — ALL later messages in it are ignored (see above).
+            mark_thread_stopped(channel_id, event.get("thread_ts"))
             say(
-                text="⏹️ stopping all your running coolton instances…",
+                text="⏹️ stopping — coolton will ignore this thread from here on.",
                 thread_ts=thread_ts,
             )
             return

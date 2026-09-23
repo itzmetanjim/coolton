@@ -1025,3 +1025,102 @@ def test_mention_in_dm_ignores_code_channel_check(ctx):
         # thread_ts (the message ts) is used regardless of is_code_channel.
         assert kwargs["thread_ts"] == "1.1"
         is_code_channel.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# RFC i rule 2: persistent stopped threads — `@coolton !stop` makes the bot
+# ignore ALL later messages in that thread for the lifetime of the process
+# ---------------------------------------------------------------------------
+
+
+def test_stop_marks_thread_stopped_for_later_mentions(ctx, monkeypatch):
+    monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
+    """After !stop, a later direct mention in the same thread gets nothing —
+    no new turn, no canned reply, no ack."""
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
+        _mention(ctx, text="<@BOT1> !stop", ts="222.222", thread_ts="2.2")
+        ctx.say.assert_called_once()
+        _mention(ctx, text="<@BOT1> hello again", ts="333.333", thread_ts="2.2")
+        run_turn.assert_not_called()
+        # Still exactly one say call: the original stop ack.
+        ctx.say.assert_called_once()
+
+
+def test_stop_marks_thread_stopped_for_later_plain_messages(ctx, monkeypatch):
+    monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
+    """A later non-mentioned reply in a stopped thread is dropped before
+    engagement, consent, steering, or any turn logic."""
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn"):
+        _mention(ctx, text="<@BOT1> !stop", ts="222.222", thread_ts="2.2")
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.message.is_thread_engaged", return_value=True), \
+         patch("listeners.events.message.request_stop") as request_stop:
+        _msg(ctx, text="anyone there?", channel_type="channel", thread_ts="2.2", ts="444.444")
+        run_turn.assert_not_called()
+        request_stop.assert_not_called()
+        # Still exactly one say call: the stop ack from the mention.
+        ctx.say.assert_called_once()
+
+
+def test_stop_in_dm_ignores_all_later_dm_messages(ctx):
+    """A DM-level !stop covers the whole DM: the next message carries a
+    brand-new ts but must still count as 'in the stopped thread'."""
+    from unittest.mock import patch
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn:
+        _msg(ctx, text="!stop", channel_type="im", ts="555.555")
+        ctx.say.assert_called_once()
+        _msg(ctx, text="hello?", channel_type="im", ts="666.666")
+        run_turn.assert_not_called()
+        ctx.say.assert_called_once()
+
+
+def test_second_stop_in_stopped_thread_does_not_re_ack(ctx, monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+        _mention(ctx, text="<@BOT1> !stop", ts="222.222", thread_ts="2.2")
+        ctx.say.assert_called_once()
+        _mention(ctx, text="<@BOT1> !stop", ts="333.333", thread_ts="2.2")
+        request_stop.assert_called_once()  # only the first stop halts runs
+        ctx.say.assert_called_once()       # and only the first stop acks
+        run_turn.assert_not_called()
+
+
+def test_other_threads_are_not_affected_by_a_stop(ctx, monkeypatch):
+    monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
+        _mention(ctx, text="<@BOT1> !stop", ts="222.222", thread_ts="2.2")
+        _mention(ctx, text="<@BOT1> other thread", ts="333.333", thread_ts="3.3")
+        assert run_turn.call_count == 1
+
+
+def test_ping_group_only_mention_with_stop_is_ignored(ctx, monkeypatch):
+    """Rule 3, defense in depth: a ping-group mention without the bot's own
+    direct mention must not stop the thread either."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+        _mention(ctx, text="<!subteam^S123|ops> !stop", ts="222.222", thread_ts="2.2")
+        request_stop.assert_not_called()
+        run_turn.assert_not_called()
+        ctx.say.assert_not_called()
+
+
+def test_ping_group_with_direct_mention_still_processed(ctx, monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
+        _mention(ctx, text="<@BOT1> <!subteam^S123|ops> hello", ts="222.222", thread_ts="2.2")
+        run_turn.assert_called_once()
