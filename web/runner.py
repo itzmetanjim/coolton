@@ -72,12 +72,12 @@ def submit_message(conversation_id: str, user_id: str, text: str, attachments: l
     # to post interactive opt-in buttons into, which the web surface has none
     # of — check the cheap, file-backed has_consent() directly and point the
     # user at the Slack flow instead of trying to reproduce it here.
-    from agent.policy_consent import has_consent
+    from agent.policy_consent import POLICY_URL, has_consent
     if not has_consent(user_id):
         log.append_event(conversation_id, {
             "type": "agent_message", "variant": "final",
             "text": (
-                "you need to opt in to the Coolton policy before using coolton here. "
+                f"you need to opt in to the [Coolton policy]({POLICY_URL}) before using coolton here. "
                 "DM coolton on Slack once to opt in, then come back."
             ),
         })

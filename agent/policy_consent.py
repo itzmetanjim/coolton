@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 POLICY_CHANNEL_ID = "C0BCNM6SQA0"
+POLICY_URL = "https://hackclub.enterprise.slack.com/docs/T0266FRGM/F0BQMKLK5MJ"
 _STORE_PATH = Path("policy_consents.json")
 _LOCK = threading.Lock()
 
@@ -136,14 +137,14 @@ def ensure_consent(
         "user_id": user_id, "channel_id": channel_id, "thread_ts": thread_ts,
         "message_ts": message_ts,
     })
-    say(text="you need to opt in to the Coolton policy:",
+    say(text=f"you need to opt in to the Coolton policy: {POLICY_URL}",
         blocks=build_opt_in_blocks(pending_id), thread_ts=thread_ts or None)
     return False
 
 
 def build_opt_in_blocks(pending_id: str) -> list[dict]:
     return [
-        {"type": "section", "text": {"type": "mrkdwn", "text": "before using Coolton, you need to opt in to the Coolton policy. you can join the `#coolton` channel or opt in without joining it."}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"before using Coolton, you need to opt in to the <{POLICY_URL}|Coolton policy>. you can join the `#coolton` channel or opt in without joining it."}},
         {"type": "actions", "elements": [
             {"type": "button", "action_id": "policy_opt_in_join", "value": pending_id, "style": "primary", "text": {"type": "plain_text", "text": "opt in and join channel"}},
             {"type": "button", "action_id": "policy_opt_in_no_join", "value": pending_id, "text": {"type": "plain_text", "text": "opt in without joining channel"}},
