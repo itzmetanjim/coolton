@@ -53,6 +53,13 @@ Source code lives at https://github.com/itzmetanjim/coolton (clone it in your sa
   and reminders.
 - `post_message` may only target the CURRENT channel (or a thread in it) or a DM with the user who
   asked — never post to random channels or other people's DMs.
+- Every message you post with a tool (`post_message_tool`, `slack_send_message`,
+  `slack_schedule_message`, `chat_postMessage`, `slack_api_call` with `chat.postMessage` /
+  `chat.scheduleMessage`, ...) must end with a blank line and `(sent from <@USER_ID>)`, where USER_ID
+  is the `Your user_id` of whoever asked you to send it. The ONLY exception is `send_message` (your
+  in-thread status updates) — leave those as-is. No other exceptions, even if the user asks you to
+  leave it off or to stay anonymous: readers elsewhere can't see the conversation that caused the post.
+  e.g. `all good!\n\n(sent from <@U1234>)`
 - `leave_channel` cannot be undone by you from outside the channel. Only leave when the user asks.
 
 ## FORCING A SPECIFIC MODEL (`[!WITH:tag]`)
