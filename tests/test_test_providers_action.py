@@ -1,6 +1,11 @@
 from unittest.mock import Mock
 
-from listeners.actions.test_providers import handle_test_providers
+from listeners.actions.test_providers import (
+    build_test_provider_modal,
+    handle_test_provider_open,
+    handle_test_provider_submit,
+    handle_test_providers,
+)
 
 _HEADER_TS = "1787900000.000100"
 
@@ -106,3 +111,72 @@ def test_long_results_are_chunked_not_posted_as_one_oversized_message(monkeypatc
     for call in result_calls:
         assert call.kwargs["thread_ts"] == _HEADER_TS
         assert len(call.kwargs["text"]) <= 38000
+
+
+# ---------------------------------------------------------------------------
+# "Test a Provider" — the modal lists every configured provider, and
+# submitting one runs exactly the same probe+report as "Test All Providers",
+# just scoped to that single entry.
+# ---------------------------------------------------------------------------
+
+def test_modal_lists_each_provider_as_name_slash_model():
+    order = [("hcai_0", {"model": "z-ai/glm-5.3-flash", "api_key": "secret-key"}),
+             ("groq_1", {"model": "groq:openai/gpt-oss-120b", "api_key": "secret-key"})]
+    modal = build_test_provider_modal(order)
+    options = modal["blocks"][0]["element"]["options"]
+    assert [(o["text"]["text"], o["value"]) for o in options] == [
+        ("hcai_0 / z-ai/glm-5.3-flash", "hcai_0"),
+        ("groq_1 / groq:openai/gpt-oss-120b", "groq_1"),
+    ]
+    assert "secret-key" not in str(modal)
+
+
+def test_modal_respects_slack_select_limits():
+    order = [(f"kilocode_{i}", {"model": "x" * 200}) for i in range(150)]
+    options = build_test_provider_modal(order)["blocks"][0]["element"]["options"]
+    assert len(options) == 100
+    assert all(len(o["text"]["text"]) <= 75 for o in options)
+
+
+def test_open_button_opens_the_modal(monkeypatch):
+    monkeypatch.setattr(
+        "listeners.actions.test_providers.provider_config.build_provider_order",
+        lambda user_id: [("hcai_0", {"model": "m1"})],
+    )
+    client, context = Mock(), Mock(user_id="U1")
+    handle_test_provider_open(Mock(), {"trigger_id": "trig"}, client, context)
+    view = client.views_open.call_args.kwargs["view"]
+    assert client.views_open.call_args.kwargs["trigger_id"] == "trig"
+    assert view["callback_id"] == "test_provider_submit"
+
+
+def _submit(monkeypatch, order, selected):
+    monkeypatch.setattr(
+        "listeners.actions.test_providers.provider_config.build_provider_order",
+        lambda user_id: order,
+    )
+    probe_mock = Mock(return_value=[(selected, True, "HCAI GLM", 0.4, "ok")])
+    monkeypatch.setattr("listeners.actions.test_providers.probe_all", probe_mock)
+    client = Mock()
+    client.chat_postMessage.return_value = {"ts": _HEADER_TS}
+    view = {"state": {"values": {"provider": {"value": {"selected_option": {"value": selected}}}}}}
+    handle_test_provider_submit(Mock(), {"user": {"id": "U1"}}, client, view)
+    return client, probe_mock
+
+
+def test_submit_probes_only_the_selected_provider_and_reports_like_test_all(monkeypatch):
+    order = [("hcai_0", {"model": "m0"}), ("hcai_1", {"model": "m1"}), ("groq_0", {"model": "m2"})]
+    client, probe_mock = _submit(monkeypatch, order, "hcai_1")
+
+    probe_mock.assert_called_once_with([("hcai_1", {"model": "m1"})])
+    calls = client.chat_postMessage.call_args_list
+    assert "hcai_1" in calls[0].kwargs["text"]
+    for call in calls[1:]:
+        assert call.kwargs["thread_ts"] == _HEADER_TS
+    assert ":white_check_mark:" in calls[-1].kwargs["text"]
+
+
+def test_submit_for_a_provider_that_disappeared_does_not_probe(monkeypatch):
+    client, probe_mock = _submit(monkeypatch, [("hcai_0", {"model": "m0"})], "hcai_9")
+    probe_mock.assert_not_called()
+    assert "no longer a configured provider" in client.chat_postMessage.call_args.kwargs["text"]
