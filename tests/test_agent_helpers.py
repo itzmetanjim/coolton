@@ -726,7 +726,7 @@ def test_slack_api_call_treats_blank_string_as_empty_parameters(monkeypatch):
 def test_create_slack_bot_tool_parses_json_string_manifest(monkeypatch):
     seen = {}
 
-    def fake_create_slack_bot(manifest):
+    def fake_create_slack_bot(manifest, owner_id):
         seen["manifest"] = manifest
         return "Success: app created"
 
@@ -752,7 +752,7 @@ def test_create_slack_bot_tool_rejects_malformed_json(monkeypatch):
 def test_update_slack_bot_manifest_tool_parses_json_string_manifest(monkeypatch):
     seen = {}
 
-    def fake_update(uuid, manifest):
+    def fake_update(uuid, manifest, requester_id):
         seen["uuid"] = uuid
         seen["manifest"] = manifest
         return "Manifest updated for app A123."

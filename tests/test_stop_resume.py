@@ -7,8 +7,6 @@ turn. It now uses deps.halted_messages — a snapshot taken right before the
 halt — when the halt came from !stop specifically.
 """
 
-import sys
-import types
 from unittest.mock import Mock
 
 import importlib
@@ -16,13 +14,6 @@ import importlib
 import pytest
 
 agent_mod = importlib.import_module("agent.agent")
-
-if "pydantic_ai_skills" not in sys.modules:
-    _stub = types.ModuleType("pydantic_ai_skills")
-    _stub.SkillsCapability = lambda **kwargs: Mock()
-    _stub.CallableSkillScriptExecutor = lambda **kwargs: Mock()
-    _stub.SkillsDirectory = lambda **kwargs: Mock()
-    sys.modules["pydantic_ai_skills"] = _stub
 
 
 class FakePlatform:

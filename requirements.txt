@@ -2,7 +2,7 @@ slack-sdk==3.42.0
 slack-bolt>=1.28.0
 slack-cli-hooks<1.0.0
 pydantic-ai[openai,anthropic,groq,openrouter]
-pydantic-ai-skills
+pydantic-ai-skills>=1.4,<2
 fastapi
 uvicorn
 python-multipart
