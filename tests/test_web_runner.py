@@ -263,7 +263,7 @@ def test_wake_conversation_posts_a_banner_and_starts_a_turn(conversation_id, mon
 
     calls = []
     monkeypatch.setattr(runner._executor, "submit", lambda fn, *a: calls.append((fn, a)))
-    runner.wake_conversation(conversation_id, "U1", "background job finished", "here's what happened")
+    runner.wake_conversation(conversation_id, "U1", "background job finished", "here's what happened", "U0OWNER")
 
     events = log.read_events(conversation_id)
     assert events[0]["type"] == "agent_message"
@@ -273,4 +273,4 @@ def test_wake_conversation_posts_a_banner_and_starts_a_turn(conversation_id, mon
     assert len(calls) == 1
     fn, args = calls[0]
     assert fn is runner._run_turn
-    assert args == (conversation_id, "U1", "here's what happened", events[0]["seq"], [])
+    assert args == (conversation_id, "U1", "here's what happened", events[0]["seq"], [], "U0OWNER")

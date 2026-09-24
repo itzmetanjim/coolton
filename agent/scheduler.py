@@ -540,7 +540,7 @@ def _fire_wait(wait_id: str) -> None:
         return
 
     from agent.background_jobs_poller import AUTOMATED_USER_ID, _dispatch_wake, _wake_executor
-    _wake_executor.submit(_dispatch_wake, channel_id, thread_ts, AUTOMATED_USER_ID, banner, prompt)
+    _wake_executor.submit(_dispatch_wake, channel_id, thread_ts, AUTOMATED_USER_ID, banner, prompt, wait["user_id"])
 
 
 def create_wait(user_id: str, channel_id: str, thread_ts: str, reason: str, seconds: int) -> str:

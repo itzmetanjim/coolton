@@ -118,7 +118,9 @@ def resume_turn(conversation_id: str, user_id: str, text: str, message_seq: int)
     _executor.submit(_run_turn, conversation_id, user_id, text, message_seq, [])
 
 
-def wake_conversation(conversation_id: str, user_id: str, banner_text: str, prompt_text: str) -> None:
+def wake_conversation(
+    conversation_id: str, user_id: str, banner_text: str, prompt_text: str, owner_id: str = "",
+) -> None:
     """Start a fresh turn triggered by something other than a real user message
     (currently: a background job finishing while nothing was active — see
     agent.background_jobs_poller) instead of a POST to
@@ -127,16 +129,20 @@ def wake_conversation(conversation_id: str, user_id: str, banner_text: str, prom
     Only called when is_run_active(WEB_CHANNEL_ID, conversation_id) is already
     known False — same "don't race a live run" rule submit_message follows,
     just decided by the caller since it already checked for its own reasons.
+    `owner_id` is who started the job/wait — see run_agent_turn's on_behalf_of.
     """
     from web import conversation_log as log
 
     event = log.append_event(conversation_id, {
         "type": "agent_message", "variant": "final", "text": banner_text,
     })
-    _executor.submit(_run_turn, conversation_id, user_id, prompt_text, event["seq"], [])
+    _executor.submit(_run_turn, conversation_id, user_id, prompt_text, event["seq"], [], owner_id)
 
 
-def _run_turn(conversation_id: str, user_id: str, text: str, message_seq: int, attachments: list[dict]) -> None:
+def _run_turn(
+    conversation_id: str, user_id: str, text: str, message_seq: int, attachments: list[dict],
+    on_behalf_of: str = "",
+) -> None:
     from listeners.events.turn import run_agent_turn
     from web import conversation_log as log
 
@@ -170,6 +176,7 @@ def _run_turn(conversation_id: str, user_id: str, text: str, message_seq: int, a
             text=text,
             history=conversation_store.get_history(WEB_CHANNEL_ID, conversation_id),
             images=images,
+            on_behalf_of=on_behalf_of,
         )
     except Exception:
         # run_agent_turn already catches and reports its own errors (via

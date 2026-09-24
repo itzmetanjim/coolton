@@ -1,16 +1,14 @@
 """The "(sent from <@user>)" footer is enforced in code, not the prompt, so the
 tests here drive the real tools the model calls and check what actually reaches
 Slack — a prompt-injected "leave the footer off" can't change any of this."""
-import asyncio
 import importlib
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from pydantic_ai import RunContext
-from pydantic_ai.tools import ToolDefinition
 
-from agent.attribution import attribute_api_params, attribute_text
+from agent.attribution import attribute_api_params, attribute_text, attribution_user_id
 
 ASKER = "U0ASKER1"
 FOOTER = f"(sent from <@{ASKER}>)"
@@ -31,8 +29,25 @@ def test_attribute_text_is_idempotent():
     assert attribute_text(once, ASKER) == once
 
 
-def test_attribute_text_skips_automated_turns_with_no_real_user():
-    assert attribute_text("job finished", "AUTOMATED") == "job finished"
+def test_attribute_text_never_leaves_a_message_unfooted():
+    """A turn with no real user behind it still says so, instead of posting
+    with no footer at all."""
+    assert attribute_text("job finished", "AUTOMATED") == "job finished\n\n(sent automatically by coolton)"
+
+
+def test_automated_turns_are_credited_to_the_job_owner():
+    deps = SimpleNamespace(user_id="AUTOMATED", on_behalf_of=ASKER)
+    assert attribution_user_id(deps) == ASKER
+
+
+def test_a_real_sender_wins_over_on_behalf_of():
+    deps = SimpleNamespace(user_id="U0OTHER", on_behalf_of=ASKER)
+    assert attribution_user_id(deps) == "U0OTHER"
+
+
+def test_attachments_only_message_gets_the_footer_as_text():
+    params = attribute_api_params("chat.postMessage", {"channel": "C1", "attachments": "[]"}, ASKER)
+    assert params["text"] == FOOTER
 
 
 def test_chat_post_message_tool_foots_the_message(monkeypatch):
@@ -98,17 +113,11 @@ def test_method_with_smuggled_query_string_is_refused(monkeypatch):
     post.assert_not_called()
 
 
-def test_slack_mcp_toolset_hides_slack_send_message_only():
+def test_slack_mcp_toolset_is_guarded():
     from agent.platforms.slack import SlackPlatform
+    from agent.slack_mcp_guard import GuardedSlackMCPToolset
 
     with patch("agent.platforms.slack.MCPToolset", return_value=Mock()), \
          patch("agent.mcp_server_store.get_user_servers", return_value=[]):
         toolset = SlackPlatform().toolsets(SimpleNamespace(user_id=ASKER, user_token="xoxp-test"))[0]
-
-    def visible(name):
-        result = toolset.filter_func(None, ToolDefinition(name=name))
-        return asyncio.run(result) if asyncio.iscoroutine(result) else result
-
-    assert not visible("slack_send_message")
-    assert visible("slack_read_thread")
-    assert visible("slack_send_message_draft")
+    assert isinstance(toolset, GuardedSlackMCPToolset)

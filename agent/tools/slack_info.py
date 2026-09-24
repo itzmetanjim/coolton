@@ -246,21 +246,18 @@ def get_channel_info(channel_id: str) -> str:
 
 
 def post_message_to_target(
-    channel_id: str, text: str, *, thread_ts: str = "", from_user: str = "",
-    current_channel: str = "", username: str = "", icon_url: str = "",
+    channel_id: str, text: str, *, thread_ts: str = "", username: str = "", icon_url: str = "",
 ) -> str:
-    """Post a message to a Slack channel/thread as the coolton bot.
+    """Post a message to a Slack channel/thread/DM as the coolton bot.
 
-    Safety constraints (mirroring gorkie): you may only post to the channel you
-    are currently in, a thread within it, or a DM with the user who asked. Posting
-    to arbitrary channels or other users' DMs is refused.
+    There's no restriction on where: the caller (post_message_tool) has
+    already footed `text` with who asked (agent.attribution), which is what
+    keeps a post anywhere accountable.
 
     Args:
-        channel_id: Target channel ID.
+        channel_id: Target channel ID (or a user ID for a DM).
         text: Message text (Markdown supported).
         thread_ts: Optional thread timestamp to post into.
-        from_user: The user who requested the post (for DM validation).
-        current_channel: The channel the request came from (must match for non-DM targets).
         username: Override display name (set to the prompting user's name).
         icon_url: Override avatar URL (set to the prompting user's pfp).
     """
@@ -269,34 +266,6 @@ def post_message_to_target(
     token = os.environ.get("SLACK_BOT_TOKEN")
     if not token:
         return "Error: SLACK_BOT_TOKEN not configured"
-
-    if channel_id and channel_id[0] in ("C", "G") and current_channel and channel_id != current_channel:
-        return (
-            "Error: You can only post to the channel you are currently in. "
-            "Refusing to post to a different channel."
-        )
-
-    # DM channels must belong to the requesting user; others must be the current channel.
-    if channel_id and channel_id[0] in ("D", "G"):
-        conv = None
-        try:
-            response = requests.get(
-                f"{SLACK_API}/conversations.info",
-                params={"channel": channel_id},
-                headers=_bot_headers(),
-                timeout=15,
-            )
-            res_json = response.json()
-            if res_json.get("ok"):
-                conv = res_json.get("channel", {})
-        except Exception:
-            conv = None
-        if conv and channel_id.startswith("D") and from_user:
-            users = conv.get("user") or ""
-            if users != from_user and from_user not in conv.get("members", []):
-                return "Error: You can only post to a DM with the user who asked (refused)."
-        elif channel_id.startswith("D") and from_user:
-            return "Error: Could not verify this DM belongs to you (refused)."
 
     payload = {"channel": channel_id, "text": text}
     if thread_ts:

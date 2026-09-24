@@ -1,4 +1,5 @@
 import os
+import shlex
 import time
 import requests
 from agent.byok_store import get_image_endpoint_id, get_endpoint_decrypted
@@ -136,9 +137,15 @@ def _generate_openai_compatible(api_key: str, base_url: str, model: str, prompt:
 def save_images_to_sandbox(sandbox, urls: list[str], batch: str = "") -> list[str]:
     """Download generated images into the sandbox ~/downloads/ dir (mirrors gorkie).
 
+    An image URL comes from whatever endpoint generated it — including a user's
+    own BYOK endpoint — so it is fetched from INSIDE the sandbox (curl), never by
+    the host: a host-side fetch of an attacker-chosen URL (localhost services,
+    cloud metadata, via redirects too) whose result lands in a sandbox the same
+    user can read would be a full-read SSRF against coolton's own server.
+
     Args:
         sandbox: An E2B sandbox.
-        urls: Image URLs to fetch (data: URIs supported).
+        urls: Image URLs to fetch (data: URIs and http(s) only).
         batch: Optional batch tag used in the filename.
 
     Returns:
@@ -161,27 +168,33 @@ def save_images_to_sandbox(sandbox, urls: list[str], batch: str = "") -> list[st
 
                 header, _, payload = u.partition(",")
                 content = b64.b64decode(payload)
-                ext = "png"
-                if "png" in header:
-                    ext = "png"
-                elif "jpeg" in header or "jpg" in header:
-                    ext = "jpg"
-                elif "webp" in header:
-                    ext = "webp"
+                name = f"coolton-image-{batch}-{i}.{_image_ext(header)}"
+                sandbox.files.write(f"/home/user/downloads/{name}", content)
+            elif u.startswith(("https://", "http://")):
+                partial = f"/home/user/downloads/.coolton-image-{batch}-{i}.part"
+                # curl -f exits non-zero on an HTTP error, which commands.run raises on.
+                result = sandbox.commands.run(
+                    f"curl -fsSL --proto =http,https --max-time 60 --max-filesize {_MAX_IMAGE_BYTES} "
+                    f"-o {shlex.quote(partial)} -w '%{{content_type}}' {shlex.quote(u)}",
+                    timeout=90,
+                )
+                name = f"coolton-image-{batch}-{i}.{_image_ext(result.stdout or '')}"
+                sandbox.commands.run(f"mv {shlex.quote(partial)} {shlex.quote('/home/user/downloads/' + name)}")
             else:
-                resp = requests.get(u, timeout=60)
-                if resp.status_code != 200:
-                    continue
-                content = resp.content
-                ct = resp.headers.get("Content-Type", "")
-                ext = "png"
-                if "jpeg" in ct or "jpg" in ct:
-                    ext = "jpg"
-                elif "webp" in ct:
-                    ext = "webp"
-            name = f"coolton-image-{batch}-{i}.{ext}"
-            sandbox.files.write(f"/home/user/downloads/{name}", content)
+                continue
             saved.append(f"~/downloads/{name}")
         except Exception:
             continue
     return saved
+
+
+_MAX_IMAGE_BYTES = 25 * 1024 * 1024
+
+
+def _image_ext(content_type: str) -> str:
+    content_type = content_type.lower()
+    if "jpeg" in content_type or "jpg" in content_type:
+        return "jpg"
+    if "webp" in content_type:
+        return "webp"
+    return "png"

@@ -626,8 +626,9 @@ def test_chat_post_message_sends_as_bot():
     client.chat_postMessage.return_value = {"ok": True}
     result = agent_mod.chat_postMessage(_run_ctx(client), channel="U0B2VTYER33", text="hello")
     assert result == "Message sent."
+    # U_TEST isn't a real Slack user id, so the post is credited as automated.
     client.chat_postMessage.assert_called_once_with(
-        channel="U0B2VTYER33", markdown_text="hello"
+        channel="U0B2VTYER33", markdown_text="hello\n\n(sent automatically by coolton)"
     )
 
 
@@ -638,7 +639,9 @@ def test_chat_post_message_includes_thread_ts_when_passed():
         _run_ctx(client), channel="C1", text="hi", thread_ts="1.2"
     )
     assert result == "Message sent."
-    client.chat_postMessage.assert_called_once_with(channel="C1", markdown_text="hi", thread_ts="1.2")
+    client.chat_postMessage.assert_called_once_with(
+        channel="C1", markdown_text="hi\n\n(sent automatically by coolton)", thread_ts="1.2",
+    )
 
 
 def test_chat_post_message_requires_channel_and_text():
@@ -723,7 +726,7 @@ def test_slack_api_call_treats_blank_string_as_empty_parameters(monkeypatch):
 def test_create_slack_bot_tool_parses_json_string_manifest(monkeypatch):
     seen = {}
 
-    def fake_create_slack_bot(manifest):
+    def fake_create_slack_bot(manifest, owner_id):
         seen["manifest"] = manifest
         return "Success: app created"
 
@@ -749,7 +752,7 @@ def test_create_slack_bot_tool_rejects_malformed_json(monkeypatch):
 def test_update_slack_bot_manifest_tool_parses_json_string_manifest(monkeypatch):
     seen = {}
 
-    def fake_update(uuid, manifest):
+    def fake_update(uuid, manifest, requester_id):
         seen["uuid"] = uuid
         seen["manifest"] = manifest
         return "Manifest updated for app A123."
@@ -789,24 +792,22 @@ def test_slack_api_call_returns_full_error_json(monkeypatch):
         post.return_value.json.return_value = {
             "ok": False,
             "error": "missing_argument",
-            "required": "channel",
+            "required": "user",
             "provided": ["token"],
         }
         result = agent_mod.slack_api_call(
-            _run_ctx(Mock()), method="conversations.info", api_parameters="{}"
+            _run_ctx(Mock()), method="users.info", api_parameters="{}"
         )
     assert "missing_argument" in result
     assert "required" in result
-    assert "channel" in result
+    assert "user" in result
     assert "provided" in result
 
 
 def test_slack_api_call_as_bot_rejects_chat_post_message_without_channel(monkeypatch):
-    from agent.tools import slack_bot_api
-
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     with patch("agent.tools.slack_bot_api.requests.post") as post:
-        result = slack_bot_api.slack_api_call_as_bot("chat.postMessage", {})
+        result = agent_mod.slack_api_call_as_bot_tool(_run_ctx(Mock()), method="chat.postMessage", api_parameters="{}")
     assert "requires a 'channel'" in result
     post.assert_not_called()
 
@@ -1680,9 +1681,19 @@ def _valid_skill_md(name="cool-skill"):
     return f"---\nname: {name}\ndescription: 'does a thing'\n---\n\n# Cool Skill\n\nBody.\n"
 
 
+def _maintainer_ctx():
+    """install_skill applies immediately only for the maintainer; anyone
+    else's install goes to review (see tests/test_skill_review.py)."""
+    from agent.admin_alerts import ADMIN_USER_ID
+
+    ctx = _run_ctx(Mock())
+    ctx.deps.user_id = ADMIN_USER_ID
+    return ctx
+
+
 def test_install_skill_requires_e2b_api_key(monkeypatch):
     monkeypatch.delenv("E2B_API_KEY", raising=False)
-    ctx = _run_ctx(Mock())
+    ctx = _maintainer_ctx()
     result = agent_mod.install_skill(ctx, "vercel-labs/agent-skills")
     assert "E2B_API_KEY" in result
 
@@ -1697,7 +1708,7 @@ def test_install_skill_never_runs_npx_on_the_host(monkeypatch, tmp_path):
     fake_sandbox = _FakeSkillSandbox(entries=[], contents={})
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
-    ctx = _run_ctx(Mock())
+    ctx = _maintainer_ctx()
     agent_mod.install_skill(ctx, "vercel-labs/agent-skills")
 
     assert "npx" in fake_sandbox.last_cmd
@@ -1713,7 +1724,7 @@ def test_install_skill_imports_only_validated_skill_md(monkeypatch, tmp_path):
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents)
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
-    ctx = _run_ctx(Mock())
+    ctx = _maintainer_ctx()
     result = agent_mod.install_skill(ctx, "someone/skills-repo")
 
     assert "Installed skill(s): cool-skill" in result
@@ -1732,7 +1743,7 @@ def test_install_skill_rejects_malformed_skill_md_and_writes_nothing(monkeypatch
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents)
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
-    ctx = _run_ctx(Mock())
+    ctx = _maintainer_ctx()
     result = agent_mod.install_skill(ctx, "someone/bad-repo")
 
     assert "No valid skill found" in result
@@ -1759,7 +1770,7 @@ def test_install_skill_copies_reference_and_script_files_too(monkeypatch, tmp_pa
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents, file_entries=file_entries)
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
-    ctx = _run_ctx(Mock())
+    ctx = _maintainer_ctx()
     result = agent_mod.install_skill(ctx, "someone/skills-repo")
 
     assert "Installed skill(s): cool-skill" in result
@@ -1780,7 +1791,7 @@ def test_install_skill_rejects_path_traversal_in_a_shipped_file(monkeypatch, tmp
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents, file_entries=file_entries)
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
-    ctx = _run_ctx(Mock())
+    ctx = _maintainer_ctx()
     result = agent_mod.install_skill(ctx, "someone/skills-repo")
 
     assert "Installed skill(s): cool-skill" in result
@@ -1799,7 +1810,7 @@ def test_install_skill_rejects_an_oversized_file(monkeypatch, tmp_path):
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents, file_entries=file_entries)
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
-    ctx = _run_ctx(Mock())
+    ctx = _maintainer_ctx()
     result = agent_mod.install_skill(ctx, "someone/skills-repo")
 
     assert "exceeds" in result
@@ -1812,7 +1823,7 @@ def test_install_skill_reports_command_failure(monkeypatch, tmp_path):
     fake_sandbox = _FakeSkillSandbox(entries=[], contents={}, exit_code=1)
     monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
-    ctx = _run_ctx(Mock())
+    ctx = _maintainer_ctx()
     result = agent_mod.install_skill(ctx, "someone/broken-repo")
 
     assert "Failed to install skill" in result

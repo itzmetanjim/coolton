@@ -17,6 +17,7 @@ from .fallback_cache_actions import handle_fallback_cache_clear
 from .test_providers import handle_test_provider_open, handle_test_providers
 from .policy_actions import handle_policy_opt_in, handle_policy_opt_out
 from .mcp_server_actions import handle_mcp_server_add, mcp_server_delete_pattern
+from .skill_review_actions import handle_skill_review_approve, handle_skill_review_reject
 
 
 def register(app: App):
@@ -36,3 +37,5 @@ def register(app: App):
     app.action("policy_opt_out")(handle_policy_opt_out)
     app.action("mcp_server_add")(handle_mcp_server_add)
     app.action(re.compile(r"^mcp_server_delete_(.+)$"))(mcp_server_delete_pattern)
+    app.action("skill_review_approve")(handle_skill_review_approve)
+    app.action("skill_review_reject")(handle_skill_review_reject)

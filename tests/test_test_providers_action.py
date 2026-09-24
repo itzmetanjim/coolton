@@ -1,5 +1,8 @@
 from unittest.mock import Mock
 
+import pytest
+
+from agent.admin_alerts import ADMIN_USER_ID
 from listeners.actions.test_providers import (
     build_test_provider_modal,
     handle_test_provider_open,
@@ -22,7 +25,7 @@ def _call(monkeypatch, order, probe_results):
     client = Mock()
     client.chat_postMessage.return_value = {"ts": _HEADER_TS}
     context = Mock()
-    context.user_id = "U1"
+    context.user_id = ADMIN_USER_ID
 
     handle_test_providers(ack, {}, client, context)
     return ack, client, probe_mock
@@ -82,7 +85,7 @@ def test_no_providers_configured_skips_probing_but_still_replies_in_thread(monke
     client = Mock()
     client.chat_postMessage.return_value = {"ts": _HEADER_TS}
     context = Mock()
-    context.user_id = "U1"
+    context.user_id = ADMIN_USER_ID
 
     handle_test_providers(ack, {}, client, context)
 
@@ -143,7 +146,7 @@ def test_open_button_opens_the_modal(monkeypatch):
         "listeners.actions.test_providers.provider_config.build_provider_order",
         lambda user_id: [("hcai_0", {"model": "m1"})],
     )
-    client, context = Mock(), Mock(user_id="U1")
+    client, context = Mock(), Mock(user_id=ADMIN_USER_ID)
     handle_test_provider_open(Mock(), {"trigger_id": "trig"}, client, context)
     view = client.views_open.call_args.kwargs["view"]
     assert client.views_open.call_args.kwargs["trigger_id"] == "trig"
@@ -160,7 +163,7 @@ def _submit(monkeypatch, order, selected):
     client = Mock()
     client.chat_postMessage.return_value = {"ts": _HEADER_TS}
     view = {"state": {"values": {"provider": {"value": {"selected_option": {"value": selected}}}}}}
-    handle_test_provider_submit(Mock(), {"user": {"id": "U1"}}, client, view)
+    handle_test_provider_submit(Mock(), {"user": {"id": ADMIN_USER_ID}}, client, view)
     return client, probe_mock
 
 
@@ -180,3 +183,31 @@ def test_submit_for_a_provider_that_disappeared_does_not_probe(monkeypatch):
     client, probe_mock = _submit(monkeypatch, [("hcai_0", {"model": "m0"})], "hcai_9")
     probe_mock.assert_not_called()
     assert "no longer a configured provider" in client.chat_postMessage.call_args.kwargs["text"]
+
+
+# ---------------------------------------------------------------------------
+# Maintainer-only: every entry point refuses anyone else before probing.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("entry", ["all", "open", "submit"])
+def test_provider_tests_are_maintainer_only(monkeypatch, entry):
+    probe_mock = Mock()
+    monkeypatch.setattr("listeners.actions.test_providers.probe_all", probe_mock)
+    monkeypatch.setattr(
+        "listeners.actions.test_providers.provider_config.build_provider_order",
+        lambda user_id: [("hcai_0", {"model": "m1", "api_key": "k"})],
+    )
+    client = Mock()
+    if entry == "all":
+        handle_test_providers(Mock(), {}, client, Mock(user_id="U0SOMEONE"))
+    elif entry == "open":
+        handle_test_provider_open(Mock(), {"trigger_id": "t"}, client, Mock(user_id="U0SOMEONE"))
+    else:
+        view = {"state": {"values": {"provider": {"value": {"selected_option": {"value": "hcai_0"}}}}}}
+        handle_test_provider_submit(Mock(), {"user": {"id": "U0SOMEONE"}}, client, view)
+
+    probe_mock.assert_not_called()
+    client.views_open.assert_not_called()
+    client.chat_postMessage.assert_not_called()
+    assert "maintainer" in client.chat_postEphemeral.call_args.kwargs["text"]

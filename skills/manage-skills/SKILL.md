@@ -36,6 +36,9 @@ a skill via sandbox commands, and never ask the user to run such commands. Alway
 - Pass only skill **names**, never absolute paths or `..`. The tools reject anything that tries to
   escape the skill directories.
 - `delete_skill` is permanent — double-check the name and get explicit confirmation.
+- Skills are shared by every coolton user, so unless the coolton maintainer is the one asking, a
+  create/install/rename/delete is sent to the maintainer for review and only takes effect once
+  approved. The tool replies "Submitted for review" — relay that; don't claim the change is live.
 - Curated skills live in `skills/` (committed to git); CLI-installed skills live in `.agents/skills/`
   (gitignored but work fine). Both are picked up automatically via `auto_reload`.
 

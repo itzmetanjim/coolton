@@ -11,6 +11,7 @@ def build_app_home_view(
     reminders: list[dict] | None = None,
     has_policy_consent: bool = False,
     mcp_servers: list[dict] | None = None,
+    is_admin: bool = False,
 ) -> dict:
     blocks = [
         {"type": "section", "text": {"type": "mrkdwn", "text": "*Policy consent*\n" + ("You are opted in to the Coolton policy." if has_policy_consent else "You have not opted in to the Coolton policy yet.")}},
@@ -164,14 +165,17 @@ def build_app_home_view(
         "type": "section",
         "text": {"type": "mrkdwn", "text": "*AI Fallback Cache*\nEvery 30 minutes coolton re-tests every provider in the background and updates which one to use first, so it never has to wait or retry to find a working one. Clearing wipes that and re-probes immediately."},
     })
-    blocks.append({
-        "type": "actions",
-        "elements": [
-            {"type": "button", "text": {"type": "plain_text", "text": "Clear Fallback Cache", "emoji": True}, "action_id": "fallback_cache_clear", "style": "danger"},
+    cache_buttons = [
+        {"type": "button", "text": {"type": "plain_text", "text": "Clear Fallback Cache", "emoji": True}, "action_id": "fallback_cache_clear", "style": "danger"},
+    ]
+    # Provider tests spend real model calls — maintainer-only (see
+    # listeners/actions/test_providers.py, which re-checks on click).
+    if is_admin:
+        cache_buttons += [
             {"type": "button", "text": {"type": "plain_text", "text": "Test All Providers", "emoji": True}, "action_id": "test_providers"},
             {"type": "button", "text": {"type": "plain_text", "text": "Test a Provider", "emoji": True}, "action_id": "test_provider_open"},
-        ],
-    })
+        ]
+    blocks.append({"type": "actions", "elements": cache_buttons})
 
     # MCP section
     if is_connected:
