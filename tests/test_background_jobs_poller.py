@@ -177,6 +177,22 @@ def test_wake_uses_the_automated_sentinel_not_the_real_owner_id(monkeypatch):
     assert calls[0][1][2] != "U1"
 
 
+def test_wake_credits_posts_to_the_job_owner(monkeypatch):
+    """The turn runs as AUTOMATED, but anything it posts is credited to
+    whoever started the job (agent.attribution)."""
+    calls = []
+    monkeypatch.setattr(poller, "_wake_web", lambda *a: calls.append(("web", a)))
+    monkeypatch.setattr(poller, "_wake_slack", lambda *a: calls.append(("slack", a)))
+    from web.runner import WEB_CHANNEL_ID
+
+    poller._wake(WEB_CHANNEL_ID, "convo-1", "U1", "abcd1234", "npm run build", "done")
+    assert calls[0][1][-1] == "U1"
+
+    calls.clear()
+    poller._wake("C1", "1.1", "U1", "abcd1234", "npm run build", "done")
+    assert calls[0][1][-1] == "U1"
+
+
 def test_wake_dispatches_to_slack_for_a_slack_channel(monkeypatch):
     calls = []
     monkeypatch.setattr(poller, "_wake_web", lambda *a: calls.append(("web", a)))
@@ -200,8 +216,8 @@ def test_wake_banner_makes_clear_it_is_not_from_the_user(monkeypatch):
 def test_wake_web_calls_wake_conversation(monkeypatch):
     calls = []
     monkeypatch.setattr("web.runner.wake_conversation", lambda *a: calls.append(a))
-    poller._wake_web("convo-1", "U1", "banner text", "prompt text")
-    assert calls == [("convo-1", "U1", "banner text", "prompt text")]
+    poller._wake_web("convo-1", "U1", "banner text", "prompt text", "U0OWNER")
+    assert calls == [("convo-1", "U1", "banner text", "prompt text", "U0OWNER")]
 
 
 def test_wake_web_swallows_errors(monkeypatch):
@@ -228,7 +244,7 @@ def test_wake_slack_posts_a_banner_and_runs_a_real_turn(monkeypatch):
         lambda **kwargs: turn_calls.append(kwargs),
     )
 
-    poller._wake_slack("C1", "1.1", "U1", "banner text", "prompt text")
+    poller._wake_slack("C1", "1.1", "AUTOMATED", "banner text", "prompt text", "U1")
 
     assert len(post_calls) == 1
     assert post_calls[0]["channel"] == "C1"
@@ -240,7 +256,8 @@ def test_wake_slack_posts_a_banner_and_runs_a_real_turn(monkeypatch):
     assert kwargs["channel_id"] == "C1"
     assert kwargs["thread_ts"] == "1.1"
     assert kwargs["message_ts"] == "999.1"
-    assert kwargs["user_id"] == "U1"
+    assert kwargs["user_id"] == "AUTOMATED"
+    assert kwargs["on_behalf_of"] == "U1"
     assert kwargs["text"] == "prompt text"
 
 

@@ -119,33 +119,38 @@ def _wake(channel_id: str, thread_ts: str, user_id: str, job_id: str, command: s
         f"[SYSTEM: your background job `{job_id}` (`{command}`) finished while you "
         f"weren't running a turn. Last output:]\n\n{output}"
     )
-    _dispatch_wake(channel_id, thread_ts, AUTOMATED_USER_ID, banner, prompt)
+    _dispatch_wake(channel_id, thread_ts, AUTOMATED_USER_ID, banner, prompt, owner_id=user_id)
 
 
-def _dispatch_wake(channel_id: str, thread_ts: str, user_id: str, banner: str, prompt: str) -> None:
+def _dispatch_wake(
+    channel_id: str, thread_ts: str, user_id: str, banner: str, prompt: str, owner_id: str = "",
+) -> None:
     """Post `banner` then run a fresh turn from `prompt` in (channel_id,
     thread_ts), dispatching to the web or Slack runner as appropriate.
 
     Factored out of _wake so agent.scheduler's one-off `wait` tool can reuse
     the exact same web-vs-Slack dispatch instead of a second copy of it —
     _wake itself only adds the background-job-specific banner/prompt text.
+
+    `owner_id` is whoever started the job/wait — the turn runs as `user_id`
+    (AUTOMATED), but anything it posts is credited to the owner.
     """
     from web.runner import WEB_CHANNEL_ID
     if channel_id == WEB_CHANNEL_ID:
-        _wake_web(thread_ts, user_id, banner, prompt)
+        _wake_web(thread_ts, user_id, banner, prompt, owner_id)
     else:
-        _wake_slack(channel_id, thread_ts, user_id, banner, prompt)
+        _wake_slack(channel_id, thread_ts, user_id, banner, prompt, owner_id)
 
 
-def _wake_web(conversation_id: str, user_id: str, banner: str, prompt: str) -> None:
+def _wake_web(conversation_id: str, user_id: str, banner: str, prompt: str, owner_id: str = "") -> None:
     from web.runner import wake_conversation
     try:
-        wake_conversation(conversation_id, user_id, banner, prompt)
+        wake_conversation(conversation_id, user_id, banner, prompt, owner_id)
     except Exception:
         logger.exception("Failed to wake web conversation %s for a finished background job", conversation_id)
 
 
-def _wake_slack(channel_id: str, thread_ts: str, user_id: str, banner: str, prompt: str) -> None:
+def _wake_slack(channel_id: str, thread_ts: str, user_id: str, banner: str, prompt: str, owner_id: str = "") -> None:
     from slack_bolt import Say, SayStream
 
     from listeners.events.turn import run_agent_turn
@@ -177,6 +182,7 @@ def _wake_slack(channel_id: str, thread_ts: str, user_id: str, banner: str, prom
             logger=logger, channel_id=channel_id, thread_ts=turn_thread_ts, message_ts=message_ts,
             user_id=user_id, user_token=os.environ.get("SLACK_USER_TOKEN"),
             text=prompt, history=conversation_store.get_history(channel_id, turn_thread_ts),
+            on_behalf_of=owner_id,
         )
     except Exception:
         logger.exception("Background job wake-up turn failed for %s/%s", channel_id, thread_ts)

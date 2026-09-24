@@ -21,7 +21,7 @@ import requests
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
-from agent.tools.slack_bot_deploy import get_bot_record, oauth_callback_url, register_bot_tokens, verify_install_state
+from agent.tools.slack_bot_deploy import get_bot_record, oauth_callback_url, store_installed_bot_token, verify_install_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -84,7 +84,7 @@ def bot_oauth_callback(code: str = "", state: str = ""):
         logger.error("oauth.v2.access for bot %s returned no usable bot token", app_id)
         return _page("Install failed", "Slack didn't return a bot token.", 400)
 
-    outcome = register_bot_tokens(app_id, bot_token)
+    outcome = store_installed_bot_token(app_id, bot_token)
     if outcome.startswith("Error"):
         logger.error("Failed to register captured token for bot %s: %s", app_id, outcome)
         return _page("Install failed", outcome, 500)

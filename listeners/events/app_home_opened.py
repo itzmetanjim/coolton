@@ -9,6 +9,7 @@ from listeners.views.app_home_builder import build_app_home_view
 from agent.byok_store import get_user_endpoints, get_text_endpoint_id, get_image_endpoint_id
 from listeners.actions.instructions_actions import get_user_instructions
 from agent.scheduler import _load_reminders
+from agent.admin_alerts import ADMIN_USER_ID
 from agent.policy_consent import has_consent, user_is_in_policy_channel, record_consent
 
 
@@ -50,6 +51,7 @@ def handle_app_home_opened(client: WebClient, context: BoltContext, logger: Logg
             reminders=user_reminders,
             has_policy_consent=has_consent(user_id),
             mcp_servers=mcp_servers,
+            is_admin=user_id == ADMIN_USER_ID,
         )
         client.views_publish(user_id=user_id, view=view)
     except Exception as e:

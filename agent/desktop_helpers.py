@@ -246,10 +246,19 @@ def cursor_position(sandbox, proxy_info) -> tuple[int, int]:
 
 
 def _vnc_running(sandbox, proxy_info) -> bool:
+    """True only for a VIEW-ONLY x11vnc. One started before -viewonly was
+    enforced (still alive in a resumed sandbox) doesn't count, so start_stream
+    replaces it instead of handing out a link that controls the desktop.
+    The `[y]` keeps the pattern from matching pgrep's own wrapping shell."""
     try:
-        return _run(sandbox, proxy_info, "pgrep -x x11vnc").exit_code == 0
+        return _run(sandbox, proxy_info, "pgrep -f 'x11vnc .*-viewonl[y]'").exit_code == 0
     except Exception:
         return False
+
+
+def _port_listening(sandbox, proxy_info, port: int) -> bool:
+    result = _run(sandbox, proxy_info, f"netstat -tuln | grep ':{port} ' || true")
+    return bool(result.stdout.strip())
 
 
 def _wait_for_port(sandbox, proxy_info, port: int, timeout: int = 10) -> bool:
@@ -258,8 +267,7 @@ def _wait_for_port(sandbox, proxy_info, port: int, timeout: int = 10) -> bool:
     # isn't up yet, so `|| true` keeps this polling instead of raising every iteration.
     deadline = time.time() + timeout
     while time.time() < deadline:
-        result = _run(sandbox, proxy_info, f"netstat -tuln | grep ':{port} ' || true")
-        if result.stdout.strip():
+        if _port_listening(sandbox, proxy_info, port):
             return True
         time.sleep(0.5)
     return False
@@ -269,12 +277,17 @@ _PASSWORD_MARKER = "/home/user/.novnc_web_password"
 
 
 def start_stream(sandbox, proxy_info) -> str:
-    """Start x11vnc + noVNC (view-only capable), returning a ready-to-share URL.
+    """Start x11vnc + noVNC, returning a ready-to-share URL.
 
-    Idempotent: if a stream is already running, reuses the password from the first
-    start (stashed in a marker file) instead of generating a new one that wouldn't
-    match the running x11vnc's stored password — a run may call this more than once
-    across a long computer-use session.
+    The server itself is view-only (x11vnc -viewonly): the link is posted into the
+    thread, and noVNC's `view_only=true` URL param is only a client-side default
+    anyone holding the link could drop — without -viewonly the password in that
+    URL gives full keyboard/mouse control of the desktop and everything on it.
+
+    Idempotent: if a view-only stream is already running, reuses the password from
+    the first start (stashed in a marker file) instead of generating a new one that
+    wouldn't match the running x11vnc's stored password — a run may call this more
+    than once across a long computer-use session.
     """
     ensure_desktop(sandbox, proxy_info)
 
@@ -285,17 +298,20 @@ def start_stream(sandbox, proxy_info) -> str:
         _run(sandbox, proxy_info, "mkdir -p ~/.vnc")
         _run(sandbox, proxy_info, f"x11vnc -storepasswd {password} ~/.vnc/passwd")
         _run(sandbox, proxy_info, f"echo {shlex.quote(password)} > {_PASSWORD_MARKER}")
+        # Replace any x11vnc that isn't view-only (see _vnc_running).
+        _run(sandbox, proxy_info, "pkill -x x11vnc || true")
         _run(
             sandbox, proxy_info,
-            f"x11vnc -bg -display {DISPLAY} -forever -wait 50 -shared "
+            f"x11vnc -bg -display {DISPLAY} -forever -wait 50 -shared -viewonly "
             f"-rfbport {_VNC_PORT} -usepw 2>/tmp/x11vnc_stderr.log",
         )
-        _run(
-            sandbox, proxy_info,
-            f"cd /opt/noVNC/utils && ./novnc_proxy --vnc localhost:{_VNC_PORT} "
-            f"--listen {_NOVNC_PORT} --web /opt/noVNC > /tmp/novnc.log 2>&1",
-            background=True, timeout=0,
-        )
+        if not _port_listening(sandbox, proxy_info, _NOVNC_PORT):
+            _run(
+                sandbox, proxy_info,
+                f"cd /opt/noVNC/utils && ./novnc_proxy --vnc localhost:{_VNC_PORT} "
+                f"--listen {_NOVNC_PORT} --web /opt/noVNC > /tmp/novnc.log 2>&1",
+                background=True, timeout=0,
+            )
         if not _wait_for_port(sandbox, proxy_info, _NOVNC_PORT):
             raise RuntimeError("Could not start noVNC server")
 

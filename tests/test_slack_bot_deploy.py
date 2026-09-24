@@ -6,6 +6,8 @@ import pytest
 
 from agent.tools import slack_bot_deploy as sbd
 
+OWNER = "U0OWNER1"
+
 
 @pytest.fixture(autouse=True)
 def web_secret(monkeypatch):
@@ -16,7 +18,7 @@ def _seed_bot(monkeypatch, uuid="app123", bot_token="xoxb-1", app_token="xapp-1"
     monkeypatch.setattr(
         sbd,
         "_load",
-        lambda: {uuid: {"app_id": uuid, "bot_token": bot_token, "app_token": app_token}},
+        lambda: {uuid: {"app_id": uuid, "owner_id": OWNER, "bot_token": bot_token, "app_token": app_token}},
     )
 
 
@@ -27,14 +29,14 @@ def _seed_bot(monkeypatch, uuid="app123", bot_token="xoxb-1", app_token="xapp-1"
 
 def test_register_bot_tokens_rejects_non_bot_token(monkeypatch, tmp_path):
     monkeypatch.setattr(sbd, "STORE", tmp_path / "bots.json")
-    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123"}})
-    result = sbd.register_bot_tokens("app123", "xoxp-not-a-bot-token", "xapp-1")
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER}})
+    result = sbd.register_bot_tokens("app123", "xoxp-not-a-bot-token", "xapp-1", requester_id=OWNER)
     assert "only xoxb- bot tokens are accepted" in result
 
 
 def test_register_bot_tokens_rejects_unknown_uuid(monkeypatch):
     monkeypatch.setattr(sbd, "_load", lambda: {})
-    result = sbd.register_bot_tokens("unknown", "xoxb-1", "xapp-1")
+    result = sbd.register_bot_tokens("unknown", "xoxb-1", "xapp-1", requester_id=OWNER)
     assert "unknown bot UUID" in result
 
 
@@ -42,17 +44,17 @@ def test_register_bot_tokens_app_token_is_optional(monkeypatch):
     """HTTP-mode Workers (what wrangler_bot_deploy targets) never get an xapp- token
     via OAuth install — it's a manual, Socket-Mode-only credential."""
     saved = {}
-    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123"}})
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER}})
     monkeypatch.setattr(sbd, "_save", lambda data: saved.update(data))
-    result = sbd.register_bot_tokens("app123", "xoxb-1")
+    result = sbd.register_bot_tokens("app123", "xoxb-1", requester_id=OWNER)
     assert "registered" in result
     assert saved["app123"]["bot_token"] == "xoxb-1"
     assert "app_token" not in saved["app123"]
 
 
 def test_register_bot_tokens_rejects_malformed_app_token_when_given(monkeypatch):
-    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123"}})
-    result = sbd.register_bot_tokens("app123", "xoxb-1", "not-an-xapp-token")
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER}})
+    result = sbd.register_bot_tokens("app123", "xoxb-1", "not-an-xapp-token", requester_id=OWNER)
     assert "app_token must start with xapp-" in result
 
 
@@ -99,19 +101,19 @@ def test_state_fails_closed_with_no_secret_configured(monkeypatch):
 
 def test_check_bot_install_status_unknown_uuid(monkeypatch):
     monkeypatch.setattr(sbd, "_load", lambda: {})
-    result = sbd.check_bot_install_status("nope")
+    result = sbd.check_bot_install_status("nope", requester_id=OWNER)
     assert "unknown bot UUID" in result
 
 
 def test_check_bot_install_status_not_yet_installed(monkeypatch):
-    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123"}})
-    result = sbd.check_bot_install_status("app123")
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER}})
+    result = sbd.check_bot_install_status("app123", requester_id=OWNER)
     assert result.startswith("not_installed")
 
 
 def test_check_bot_install_status_installed(monkeypatch):
-    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "bot_token": "xoxb-1"}})
-    result = sbd.check_bot_install_status("app123")
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER, "bot_token": "xoxb-1"}})
+    result = sbd.check_bot_install_status("app123", requester_id=OWNER)
     assert result.startswith("installed")
 
 
@@ -121,8 +123,8 @@ def test_check_bot_install_status_installed(monkeypatch):
 
 
 def test_get_bot_record_returns_the_stored_record(monkeypatch):
-    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "bot_token": "xoxb-1"}})
-    assert sbd.get_bot_record("app123") == {"app_id": "app123", "bot_token": "xoxb-1"}
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER, "bot_token": "xoxb-1"}})
+    assert sbd.get_bot_record("app123") == {"app_id": "app123", "owner_id": OWNER, "bot_token": "xoxb-1"}
 
 
 def test_get_bot_record_none_for_unknown_uuid(monkeypatch):
@@ -149,7 +151,7 @@ def test_create_slack_bot_does_not_send_app_id_to_create(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sbd, "_api", fake_api)
     manifest = {"display_information": {"name": "Test Bot"}}
-    result = sbd.create_slack_bot(manifest)
+    result = sbd.create_slack_bot(manifest, owner_id=OWNER)
 
     assert "A123" in result
     create_call = next(c for c in calls if c[0] == "apps.manifest.create")
@@ -173,7 +175,7 @@ def test_create_slack_bot_does_not_return_signing_secret(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sbd, "_api", fake_api)
     manifest = {"display_information": {"name": "Test Bot"}}
-    result = sbd.create_slack_bot(manifest)
+    result = sbd.create_slack_bot(manifest, owner_id=OWNER)
 
     assert "very-secret" not in result
     assert "signing_secret" not in result
@@ -195,7 +197,7 @@ def test_create_slack_bot_injects_the_oauth_callback_into_redirect_urls(monkeypa
 
     monkeypatch.setattr(sbd, "_api", fake_api)
     manifest = {"display_information": {"name": "Test Bot"}}
-    sbd.create_slack_bot(manifest)
+    sbd.create_slack_bot(manifest, owner_id=OWNER)
 
     for method, data in calls:
         assert sbd.oauth_callback_url() in data["manifest"]["oauth_config"]["redirect_urls"]
@@ -218,7 +220,7 @@ def test_create_slack_bot_preserves_existing_redirect_urls(monkeypatch, tmp_path
         "display_information": {"name": "Test Bot"},
         "oauth_config": {"redirect_urls": ["https://existing.example.com/callback"]},
     }
-    sbd.create_slack_bot(manifest)
+    sbd.create_slack_bot(manifest, owner_id=OWNER)
 
     sent = calls[0][1]["manifest"]["oauth_config"]["redirect_urls"]
     assert "https://existing.example.com/callback" in sent
@@ -238,7 +240,7 @@ def test_create_slack_bot_returns_an_authorize_url_with_redirect_and_state(monke
         "display_information": {"name": "Test Bot"},
         "oauth_config": {"scopes": {"bot": ["chat:write", "commands"]}},
     }
-    result = json.loads(sbd.create_slack_bot(manifest))
+    result = json.loads(sbd.create_slack_bot(manifest, owner_id=OWNER))
 
     url = result["oauth_authorize_url"]
     assert result["auto_install"] is True
@@ -255,17 +257,17 @@ def test_create_slack_bot_returns_an_authorize_url_with_redirect_and_state(monke
 
 def test_update_slack_bot_manifest_rejects_unknown_uuid(monkeypatch):
     monkeypatch.setattr(sbd, "_load", lambda: {})
-    result = sbd.update_slack_bot_manifest("unknown", {"display_information": {"name": "x"}})
+    result = sbd.update_slack_bot_manifest("unknown", {"display_information": {"name": "x"}}, requester_id=OWNER)
     assert "unknown bot UUID" in result
 
 
 def test_update_slack_bot_manifest_requires_display_name():
-    result = sbd.update_slack_bot_manifest("app123", {"display_information": {}})
+    result = sbd.update_slack_bot_manifest("app123", {"display_information": {}}, requester_id=OWNER)
     assert "display_information.name is required" in result
 
 
 def test_update_slack_bot_manifest_sends_app_id_to_both_calls(monkeypatch):
-    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123"}})
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER}})
     calls = []
 
     def fake_api(method, data):
@@ -274,7 +276,7 @@ def test_update_slack_bot_manifest_sends_app_id_to_both_calls(monkeypatch):
 
     monkeypatch.setattr(sbd, "_api", fake_api)
     manifest = {"display_information": {"name": "Test Bot"}}
-    result = sbd.update_slack_bot_manifest("app123", manifest)
+    result = sbd.update_slack_bot_manifest("app123", manifest, requester_id=OWNER)
 
     assert "Manifest updated" in result
     methods = [c[0] for c in calls]
@@ -285,9 +287,9 @@ def test_update_slack_bot_manifest_sends_app_id_to_both_calls(monkeypatch):
 
 
 def test_update_slack_bot_manifest_reports_validation_error(monkeypatch):
-    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123"}})
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER}})
     monkeypatch.setattr(sbd, "_api", lambda method, data: {"ok": False, "error": "invalid_manifest"})
-    result = sbd.update_slack_bot_manifest("app123", {"display_information": {"name": "x"}})
+    result = sbd.update_slack_bot_manifest("app123", {"display_information": {"name": "x"}}, requester_id=OWNER)
     assert "invalid_manifest" in result
 
 
@@ -297,16 +299,22 @@ def test_update_slack_bot_manifest_reports_validation_error(monkeypatch):
 
 
 def test_wrangler_bot_deploy_missing_tokens_errors(monkeypatch):
-    monkeypatch.setattr(sbd, "_load", lambda: {})
-    result = sbd.wrangler_bot_deploy("nope", "/work", "C1", "1.1")
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER}})
+    result = sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1", requester_id=OWNER)
     assert "bot token is not registered" in result
+
+
+def test_wrangler_bot_deploy_unknown_uuid_errors(monkeypatch):
+    monkeypatch.setattr(sbd, "_load", lambda: {})
+    result = sbd.wrangler_bot_deploy("nope", "/work", "C1", "1.1", requester_id=OWNER)
+    assert "unknown bot UUID" in result
 
 
 def test_wrangler_bot_deploy_works_without_app_token(monkeypatch):
     """HTTP-mode bots (no Socket Mode) never have an xapp- token — deploy must not
     require one, and must not write an empty SLACK_APP_TOKEN secret line."""
     monkeypatch.setattr(
-        sbd, "_load", lambda: {"app123": {"app_id": "app123", "bot_token": "xoxb-1"}}
+        sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER, "bot_token": "xoxb-1"}}
     )
     sandbox = Mock()
     sandbox.commands.run.return_value = Mock(stdout="deployed ok", stderr="", exit_code=0)
@@ -314,7 +322,7 @@ def test_wrangler_bot_deploy_works_without_app_token(monkeypatch):
         "agent.sandbox_helpers.get_or_create_sandbox", lambda c, t: (sandbox, {})
     )
 
-    result = sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1")
+    result = sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1", requester_id=OWNER)
 
     assert "deployed ok" in result
     _, write_content = sandbox.files.write.call_args.args
@@ -330,7 +338,7 @@ def test_wrangler_bot_deploy_writes_secrets_and_cleans_up_on_success(monkeypatch
         "agent.sandbox_helpers.get_or_create_sandbox", lambda c, t: (sandbox, {})
     )
 
-    result = sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1")
+    result = sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1", requester_id=OWNER)
 
     assert "deployed ok" in result
     write_path, write_content = sandbox.files.write.call_args.args
@@ -359,7 +367,7 @@ def test_wrangler_bot_deploy_cleans_up_secrets_even_when_deploy_raises(monkeypat
         "agent.sandbox_helpers.get_or_create_sandbox", lambda c, t: (sandbox, {})
     )
 
-    result = sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1")
+    result = sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1", requester_id=OWNER)
 
     assert "Error" in result
     assert "sandbox died mid-deploy" in result
@@ -377,7 +385,55 @@ def test_wrangler_bot_deploy_reports_nonzero_exit_code(monkeypatch):
         "agent.sandbox_helpers.get_or_create_sandbox", lambda c, t: (sandbox, {})
     )
 
-    result = sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1")
+    result = sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1", requester_id=OWNER)
 
     assert "wrangler deploy failed (exit 1)" in result
     assert "boom" in result
+
+
+# ---------------------------------------------------------------------------
+# Ownership — a bot belongs to whoever created it; nobody else (except the
+# maintainer) can check, re-token, re-manifest, or deploy it.
+# ---------------------------------------------------------------------------
+
+STRANGER = "U0STRANGER"
+
+
+def test_create_slack_bot_records_the_owner(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(sbd, "_load", lambda: {})
+    monkeypatch.setattr(sbd, "_save", lambda data: saved.update(data))
+    monkeypatch.setattr(sbd, "_api", lambda method, data: {"ok": True, "app_id": "A1", "credentials": {"client_id": "c"}})
+    sbd.create_slack_bot({"display_information": {"name": "Bot"}}, owner_id=OWNER)
+    assert saved["A1"]["owner_id"] == OWNER
+
+
+@pytest.mark.parametrize("call", [
+    lambda: sbd.check_bot_install_status("app123", requester_id=STRANGER),
+    lambda: sbd.register_bot_tokens("app123", "xoxb-evil", requester_id=STRANGER),
+    lambda: sbd.update_slack_bot_manifest("app123", {"display_information": {"name": "x"}}, requester_id=STRANGER),
+    lambda: sbd.wrangler_bot_deploy("app123", "/work", "C1", "1.1", requester_id=STRANGER),
+])
+def test_someone_elses_bot_is_off_limits(monkeypatch, call):
+    _seed_bot(monkeypatch)
+    monkeypatch.setattr(sbd, "_save", lambda data: pytest.fail("must not save"))
+    monkeypatch.setattr(sbd, "_api", lambda method, data: pytest.fail("must not call Slack"))
+    monkeypatch.setattr("agent.sandbox_helpers.get_or_create_sandbox", lambda c, t: pytest.fail("must not touch a sandbox"))
+    assert "created by someone else" in call()
+
+
+def test_bots_created_before_ownership_existed_are_maintainer_only(monkeypatch):
+    from agent.admin_alerts import ADMIN_USER_ID
+
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "bot_token": "xoxb-1"}})
+    assert "created by someone else" in sbd.check_bot_install_status("app123", requester_id=OWNER)
+    assert sbd.check_bot_install_status("app123", requester_id=ADMIN_USER_ID).startswith("installed")
+
+
+def test_oauth_callback_capture_needs_no_requester(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "owner_id": OWNER}})
+    monkeypatch.setattr(sbd, "_save", lambda data: saved.update(data))
+    assert "registered" in sbd.store_installed_bot_token("app123", "xoxb-1")
+    assert saved["app123"]["bot_token"] == "xoxb-1"
+    assert "only xoxb-" in sbd.store_installed_bot_token("app123", "xoxp-1")

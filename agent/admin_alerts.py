@@ -22,8 +22,12 @@ _alert_lock = threading.Lock()
 _last_alert_at: dict[str, float] = {}
 
 
-def notify_admin(text: str, *, dedupe_key: str | None = None, min_interval_seconds: float = 0.0) -> None:
-    """DM ADMIN_USER_ID with `text`.
+def notify_admin(
+    text: str, *, blocks: list[dict] | None = None,
+    dedupe_key: str | None = None, min_interval_seconds: float = 0.0,
+) -> None:
+    """DM ADMIN_USER_ID with `text` (and optional Block Kit `blocks`, e.g.
+    buttons — `text` is then the notification fallback).
 
     By default every call sends (feedback DMs should never be dropped). Pass
     `dedupe_key` + `min_interval_seconds` to rate-limit a noisy/repeating
@@ -47,7 +51,7 @@ def notify_admin(text: str, *, dedupe_key: str | None = None, min_interval_secon
             resp = requests.post(
                 "https://slack.com/api/chat.postMessage",
                 headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
-                json={"channel": ADMIN_USER_ID, "text": text},
+                json={"channel": ADMIN_USER_ID, "text": text, **({"blocks": blocks} if blocks else {})},
                 timeout=10,
             )
             res_json = resp.json()

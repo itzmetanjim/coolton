@@ -1,5 +1,7 @@
 import base64
 
+import pytest
+
 import github_proxy as gp
 
 
@@ -284,3 +286,110 @@ def test_forward_denial_log_never_contains_the_raw_token(monkeypatch, caplog):
         handler._forward()
 
     assert "a-mistakenly-pasted-real-pat" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# _forbidden_reason — sandboxed code can use GitHub normally through the proxy,
+# but not for destructive / access-granting / code-exposing account actions.
+# ---------------------------------------------------------------------------
+
+
+_API = "https://api.github.com"
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("DELETE", "/repos/coolton-agent/coolton", None),
+    ("POST", "/repos/coolton-agent/coolton/transfer", b'{"new_owner": "someone"}'),
+    ("PATCH", "/repos/coolton-agent/coolton", b'{"private": false}'),
+    ("PATCH", "/repos/coolton-agent/coolton", b'{"visibility": "public"}'),
+    ("PATCH", "/repos/coolton-agent/coolton", b'{"archived": true}'),
+    ("PUT", "/repos/coolton-agent/coolton/collaborators/someone", b"{}"),
+    ("POST", "/repos/coolton-agent/coolton/keys", b'{"key": "ssh-ed25519 AAAA"}'),
+    ("POST", "/repos/coolton-agent/coolton/hooks", b"{}"),
+    ("PUT", "/repos/coolton-agent/coolton/actions/secrets/TOKEN", b"{}"),
+    ("DELETE", "/repos/coolton-agent/coolton/branches/main/protection", None),
+    ("POST", "/user/keys", b'{"key": "ssh-ed25519 AAAA"}'),
+    ("PATCH", "/user", b'{"name": "x"}'),
+    ("PUT", "/orgs/hackclub/memberships/someone", b"{}"),
+    ("GET", "/authorizations", None),
+    ("POST", "/graphql", b'{"query": "mutation { archiveRepository(input: {repositoryId: \\"R1\\"}) { clientMutationId } }"}'),
+])
+def test_destructive_github_calls_are_refused(method, path, body):
+    assert gp._forbidden_reason(method, _API + path, body)
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("GET", "/repos/coolton-agent/coolton", None),
+    ("POST", "/repos/itzmetanjim/coolton/pulls", b'{"title": "fix", "head": "coolton-agent:fix", "base": "main"}'),
+    ("POST", "/repos/itzmetanjim/coolton/issues/1/comments", b'{"body": "hi"}'),
+    ("PATCH", "/repos/coolton-agent/coolton", b'{"description": "new description"}'),
+    ("DELETE", "/repos/coolton-agent/coolton/git/refs/heads/old-branch", None),
+    ("GET", "/repos/coolton-agent/coolton/collaborators", None),
+    ("POST", "/user/repos", b'{"name": "scratch"}'),
+    ("POST", "/graphql", b'{"query": "query { viewer { login } }"}'),
+])
+def test_normal_github_work_goes_through(method, path, body):
+    assert gp._forbidden_reason(method, _API + path, body) is None
+
+
+def test_non_api_hosts_are_not_filtered():
+    # git smart-HTTP and raw content aren't REST calls.
+    assert gp._forbidden_reason("POST", "https://github.com/coolton-agent/coolton.git/git-receive-pack", b"...") is None
+
+
+# ---------------------------------------------------------------------------
+# The allowlist must agree with the HTTP client about which host a URL means:
+# urllib's urlparse and urllib3 (what requests uses) disagree on some URLs, and
+# a URL that looks like *.githubusercontent.com to one but evil.example to the
+# other would forward the real PAT to evil.example.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("url", [
+    "https://evil.example\\.githubusercontent.com/x",  # backslash: urllib3 host is evil.example
+    "https://evil.example\\@api.github.com/x",
+    "https://user@api.github.com/x",  # userinfo would replace the Authorization header
+    "https://user:pw@raw.githubusercontent.com/x",
+    "https://evil.example%2f.github.io/x",
+    "https://evil_host.githubusercontent.com/x",
+])
+def test_ambiguous_or_non_dns_upstreams_are_denied(url):
+    assert not gp._is_allowed_upstream(url)
+    assert not gp._needs_auth(url)
+
+
+def test_requests_really_would_have_gone_elsewhere_for_the_backslash_host():
+    """Pins down the parser disagreement the check above guards against."""
+    import requests
+
+    url = "https://evil.example\\.githubusercontent.com/x"
+    assert gp.urlparse(url).netloc.endswith(".githubusercontent.com")
+    assert requests.Request("GET", url).prepare().url.startswith("https://evil.example/")
+
+
+def test_pages_owner_segment_cannot_smuggle_a_host():
+    upstream = gp._rewrite_url("pages.ghproxy.tanjim.org", "/evil.example\\/index.html")
+    assert not gp._is_allowed_upstream(upstream)
+    upstream = gp._rewrite_url("ghproxy.tanjim.org", "/pages/evil.example@x/index.html")
+    assert not gp._is_allowed_upstream(upstream)
+
+
+def test_forward_never_contacts_an_ambiguous_host(monkeypatch):
+    """End to end through the handler: a spoofed Host header is refused before
+    any upstream request is made."""
+    gp.allowlist.add("sandbox-token")
+    calls = []
+    monkeypatch.setattr(gp.requests, "request", lambda *a, **k: calls.append((a, k)))
+
+    handler = gp._Handler.__new__(gp._Handler)
+    handler.command = "GET"
+    handler.path = "/x"
+    handler.headers = {"Host": "evil.example\\.githubusercontent.com", "Authorization": "Bearer sandbox-token"}
+    denied = []
+    handler._deny = lambda code=403, challenge=False: denied.append(code)
+    try:
+        handler._forward()
+    finally:
+        gp.allowlist.remove("sandbox-token")
+    assert denied == [502]
+    assert calls == []

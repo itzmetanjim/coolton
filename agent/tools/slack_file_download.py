@@ -30,6 +30,8 @@ def download_file_by_id(
     user_token: str | None = None,
     sandbox: "Sandbox | None" = None,
     filename: str = "",
+    current_channel_id: str = "",
+    requester_id: str = "",
 ) -> str:
     """Download a Slack file by its file ID.
 
@@ -40,6 +42,10 @@ def download_file_by_id(
         user_token: Slack user token (defaults to SLACK_USER_TOKEN env)
         sandbox: Optional E2B sandbox to save file to
         filename: Optional name to save the file as (overrides the file's own name).
+        current_channel_id: The conversation the request came from.
+        requester_id: The Slack user asking. The file must be shared in the
+            current conversation or a public channel, or uploaded by them (see
+            agent.slack_access.file_info_read_error).
 
     Returns:
         Summary of download result
@@ -77,6 +83,10 @@ def download_file_by_id(
             return f"Slack API error: {err}"
 
         file_info = info.get("file", {})
+        from agent.slack_access import file_info_read_error
+        denied = file_info_read_error(file_info, current_channel_id, requester_id)
+        if denied:
+            return f"Error: can't download {file_id} — {denied}"
         file_url = file_info.get("url_private_download") or file_info.get("url_private")
         default_name = file_info.get("name", file_id)
         mimetype = file_info.get("mimetype", "")
