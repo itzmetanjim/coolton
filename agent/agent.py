@@ -1855,7 +1855,9 @@ def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: str) -> str:
     app — the bot token is captured and registered AUTOMATICALLY once they do (no
     one needs to dig it out of the Slack UI and hand it back). Poll
     check_bot_install_status_tool with the returned app_id until it reports
-    "installed", then move on to wrangler_bot_deploy_tool.
+    "installed", then move on to wrangler_bot_deploy_tool. The app belongs to
+    the person who asked for it: only they (or the coolton maintainer) can check,
+    register tokens for, update, or deploy it afterwards.
 
     Args:
         manifest: JSON-encoded Slack app manifest object, as a plain STRING (with
@@ -1865,7 +1867,8 @@ def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: str) -> str:
     if parse_error:
         return parse_error
     from agent.tools.slack_bot_deploy import create_slack_bot
-    return create_slack_bot(parsed_manifest)
+    from agent.attribution import attribution_user_id
+    return create_slack_bot(parsed_manifest, owner_id=attribution_user_id(ctx.deps))
 
 
 @agent.tool
@@ -1881,7 +1884,8 @@ def check_bot_install_status_tool(ctx: RunContext[AgentDeps], uuid: str) -> str:
         uuid: The app_id returned by create_slack_bot.
     """
     from agent.tools.slack_bot_deploy import check_bot_install_status
-    return check_bot_install_status(uuid)
+    from agent.attribution import attribution_user_id
+    return check_bot_install_status(uuid, requester_id=attribution_user_id(ctx.deps))
 
 
 @agent.tool
@@ -1903,7 +1907,8 @@ def register_bot_tokens_tool(ctx: RunContext[AgentDeps], uuid: str, bot_token: s
         signing_secret: The signing secret from the app credentials (optional).
     """
     from agent.tools.slack_bot_deploy import register_bot_tokens
-    return register_bot_tokens(uuid, bot_token, app_token, signing_secret)
+    from agent.attribution import attribution_user_id
+    return register_bot_tokens(uuid, bot_token, app_token, signing_secret, requester_id=attribution_user_id(ctx.deps))
 
 
 @agent.tool
@@ -1916,7 +1921,11 @@ def wrangler_bot_deploy_tool(ctx: RunContext[AgentDeps], uuid: str, working_dir:
         additional_flags: Extra flags for wrangler deploy (e.g. "--minify").
     """
     from agent.tools.slack_bot_deploy import wrangler_bot_deploy
-    return wrangler_bot_deploy(uuid, working_dir, ctx.deps.channel_id, ctx.deps.thread_ts, additional_flags)
+    from agent.attribution import attribution_user_id
+    return wrangler_bot_deploy(
+        uuid, working_dir, ctx.deps.channel_id, ctx.deps.thread_ts, additional_flags,
+        requester_id=attribution_user_id(ctx.deps),
+    )
 
 
 @agent.tool
@@ -1939,7 +1948,8 @@ def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manife
     if parse_error:
         return parse_error
     from agent.tools.slack_bot_deploy import update_slack_bot_manifest
-    return update_slack_bot_manifest(uuid, parsed_manifest)
+    from agent.attribution import attribution_user_id
+    return update_slack_bot_manifest(uuid, parsed_manifest, requester_id=attribution_user_id(ctx.deps))
 
 
 @agent.tool
@@ -2485,6 +2495,20 @@ def _run_skill_script_in_sandbox(script, args=None, ctx=None) -> str:
     return "\n\n".join(output)
 
 
+def build_skills_capability():
+    """The skills capability every agent that loads skills uses (the main
+    agent, kevinton). Always wires run_skill_script to the sandbox executor —
+    pydantic_ai_skills' default (LocalSkillScriptExecutor) would run skill
+    scripts as host subprocesses with every secret in the environment."""
+    from pydantic_ai_skills import CallableSkillScriptExecutor, SkillsCapability, SkillsDirectory
+
+    skill_script_executor = CallableSkillScriptExecutor(func=_run_skill_script_in_sandbox)
+    return SkillsCapability(
+        directories=[SkillsDirectory(path=d, script_executor=skill_script_executor) for d in _skill_dirs()],
+        auto_reload=True,
+    )
+
+
 def _is_within(path: str, parent: str) -> bool:
     """True only if `path` is the same as or nested under `parent` (no traversal)."""
     path = os.path.abspath(path)
@@ -2824,17 +2848,7 @@ def run_agent(text, deps, message_history=None, images=None):
     if surface_hooks is not None:
         capabilities.append(surface_hooks)
 
-    from pydantic_ai_skills import CallableSkillScriptExecutor, SkillsCapability, SkillsDirectory
-    skill_script_executor = CallableSkillScriptExecutor(func=_run_skill_script_in_sandbox)
-    capabilities.append(
-        SkillsCapability(
-            directories=[
-                SkillsDirectory(path=d, script_executor=skill_script_executor)
-                for d in _skill_dirs()
-            ],
-            auto_reload=True,
-        )
-    )
+    capabilities.append(build_skills_capability())
 
     turn_context = platform.build_turn_context(deps, first_model, is_vision)
     text_with_turn_context = turn_context + text

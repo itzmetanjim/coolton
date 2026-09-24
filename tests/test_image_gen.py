@@ -248,3 +248,74 @@ def test_an_unrelated_error_does_not_mark_the_family_dead(monkeypatch):
         image_gen.generate_image("U1", "a cat", quality="high")
 
     assert fallback_cache.get_dead_families() == {}
+
+
+# ---------------------------------------------------------------------------
+# save_images_to_sandbox — an image URL can come from a user's own BYOK
+# endpoint, so it is fetched inside the sandbox, never by the host.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSandbox:
+    def __init__(self, content_type="image/jpeg"):
+        from types import SimpleNamespace
+
+        self.cmds = []
+        self.written = {}
+        self._content_type = content_type
+        self.commands = SimpleNamespace(run=self._run)
+        self.files = SimpleNamespace(write=lambda path, data: self.written.__setitem__(path, data))
+
+    def _run(self, cmd, timeout=None):
+        from types import SimpleNamespace
+
+        self.cmds.append(cmd)
+        return SimpleNamespace(stdout=self._content_type if cmd.startswith("curl") else "", stderr="", exit_code=0)
+
+
+def test_http_image_urls_are_fetched_inside_the_sandbox(monkeypatch):
+    from agent.tools import image_gen
+
+    host_fetches = []
+    monkeypatch.setattr(image_gen.requests, "get", lambda *a, **k: host_fetches.append(a))
+    sandbox = _RecordingSandbox(content_type="image/jpeg")
+
+    saved = image_gen.save_images_to_sandbox(sandbox, ["http://169.254.169.254/latest/meta-data"], batch="b")
+
+    assert host_fetches == []
+    curl = next(c for c in sandbox.cmds if c.startswith("curl"))
+    assert curl.endswith(" http://169.254.169.254/latest/meta-data")
+    assert saved == ["~/downloads/coolton-image-b-1.jpg"]
+
+
+def test_non_http_image_urls_are_skipped(monkeypatch):
+    from agent.tools import image_gen
+
+    sandbox = _RecordingSandbox()
+    assert image_gen.save_images_to_sandbox(sandbox, ["file:///etc/passwd", "ftp://x/y.png"], batch="b") == []
+    assert not any(c.startswith("curl") for c in sandbox.cmds)
+
+
+def test_data_uri_images_are_written_directly():
+    from agent.tools import image_gen
+
+    sandbox = _RecordingSandbox()
+    saved = image_gen.save_images_to_sandbox(sandbox, ["data:image/webp;base64,aGk="], batch="b")
+    assert saved == ["~/downloads/coolton-image-b-1.webp"]
+    assert sandbox.written["/home/user/downloads/coolton-image-b-1.webp"] == b"hi"
+
+
+def test_a_failed_download_is_skipped():
+    from agent.tools import image_gen
+
+    sandbox = _RecordingSandbox()
+
+    def failing_run(cmd, timeout=None):
+        sandbox.cmds.append(cmd)
+        if cmd.startswith("curl"):
+            raise RuntimeError("Command exited with code 22")
+        from types import SimpleNamespace
+        return SimpleNamespace(stdout="", stderr="", exit_code=0)
+
+    sandbox.commands.run = failing_run
+    assert image_gen.save_images_to_sandbox(sandbox, ["https://example.com/a.png"], batch="b") == []

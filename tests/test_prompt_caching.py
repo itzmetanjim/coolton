@@ -2,8 +2,6 @@
 turns of the same thread (providers can only cache an exact-match prefix),
 and must not silently disable Anthropic's opt-in prompt caching."""
 
-import sys
-import types
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -12,17 +10,6 @@ import importlib
 import pytest
 
 agent_mod = importlib.import_module("agent.agent")
-
-# pydantic_ai_skills is installed on the deploy target but not declared in
-# requirements.txt (see accompanying fix) and isn't present in every dev/test
-# venv; run_agent() imports it unconditionally, so stub it here rather than
-# skip these tests.
-if "pydantic_ai_skills" not in sys.modules:
-    _stub = types.ModuleType("pydantic_ai_skills")
-    _stub.SkillsCapability = lambda **kwargs: Mock()
-    _stub.CallableSkillScriptExecutor = lambda **kwargs: Mock()
-    _stub.SkillsDirectory = lambda **kwargs: Mock()
-    sys.modules["pydantic_ai_skills"] = _stub
 
 
 class FakePlatform:

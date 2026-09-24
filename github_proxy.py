@@ -35,6 +35,7 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, urlunparse
 
 import requests
+from urllib3.util import parse_url
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("github_proxy")
@@ -160,8 +161,34 @@ _ALLOWED_UPSTREAM_HOSTS = (
 )
 
 
+_HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")
+
+
+def _upstream_host(url: str) -> str | None:
+    """The host `requests` will actually connect to for `url`, or None if it's
+    ambiguous. The allowlist check has to agree with the HTTP client: urllib's
+    urlparse and urllib3's parse_url (what requests uses) split some URLs
+    differently — `https://evil.example\\.githubusercontent.com/` is
+    "*.githubusercontent.com" to urlparse but "evil.example" to urllib3, which
+    would forward the real PAT to evil.example. So: both parsers must agree, the
+    host must be a plain DNS name, and there must be no userinfo."""
+    try:
+        std = urlparse(url)
+        u3 = parse_url(url)
+    except ValueError:
+        return None
+    std_host = (std.hostname or "").lower()
+    if not std_host or std_host != (u3.host or "").lower() or u3.auth or std.username or std.password:
+        return None
+    if not _HOSTNAME_RE.match(std_host):
+        return None
+    return std_host
+
+
 def _is_allowed_upstream(url: str) -> bool:
-    host = urlparse(url).netloc.split(":")[0].lower()
+    host = _upstream_host(url)
+    if host is None:
+        return False
     if host in _ALLOWED_UPSTREAM_HOSTS:
         return True
     for suffix in ("githubusercontent.com", "github.io"):
@@ -180,8 +207,8 @@ def _needs_auth(url: str) -> bool:
     never needs authentication anyway, so no functionality is lost by withholding
     it. Every other allowed host keeps the existing authenticated behavior (e.g.
     raw.githubusercontent.com fetches from private repos still need it)."""
-    host = urlparse(url).netloc.split(":")[0].lower()
-    return host != "github.io" and not host.endswith(".github.io")
+    host = _upstream_host(url)
+    return host is not None and host != "github.io" and not host.endswith(".github.io")
 
 
 # Sandboxed code gets the coolton-agent account's GitHub access through this

@@ -110,7 +110,25 @@ def _api(method: str, data: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
-def create_slack_bot(manifest: dict) -> str:
+def _owned_record(store: dict[str, Any], uuid: str, requester_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    """(record, None) if `requester_id` may manage bot `uuid`, else (None, error).
+
+    Each bot belongs to whoever created it (the record's `owner_id`); only
+    they — or the maintainer — can check it, register tokens on it, change its
+    manifest, or deploy it. Without this, anyone who learned an app id could
+    rewrite someone else's app or deploy it with its real bot token and signing
+    secret written into their own sandbox."""
+    from agent.admin_alerts import ADMIN_USER_ID
+
+    record = store.get(uuid)
+    if not record:
+        return None, f"Error: unknown bot UUID: {uuid}"
+    if requester_id != ADMIN_USER_ID and (not requester_id or record.get("owner_id") != requester_id):
+        return None, f"Error: bot {uuid} was created by someone else; only its creator can manage it."
+    return record, None
+
+
+def create_slack_bot(manifest: dict, owner_id: str) -> str:
     """Validate and create a Slack app from a manifest without exposing secrets.
 
     Bakes coolton's own OAuth callback into the app's redirect_urls, so the
@@ -144,7 +162,7 @@ def create_slack_bot(manifest: dict) -> str:
         return "Slack API error: apps.manifest.create returned no app_id."
     creds = created.get("credentials", {})
     store = _load()
-    store[app_id] = {"app_id": app_id, "credentials": creds}
+    store[app_id] = {"app_id": app_id, "owner_id": owner_id, "credentials": creds}
     _save(store)
     # signing_secret is intentionally NOT included here: it's already persisted in
     # `store` above, and wrangler_bot_deploy already falls back to reading it from
@@ -176,22 +194,22 @@ def get_bot_record(uuid: str) -> dict[str, Any] | None:
     return _load().get(uuid)
 
 
-def check_bot_install_status(uuid: str) -> str:
+def check_bot_install_status(uuid: str, requester_id: str) -> str:
     """Report whether a human has completed the OAuth install for this app yet.
 
     Poll this (rather than asking the user to paste a token back) after
     handing them the oauth_authorize_url from create_slack_bot — the callback
     registers the bot token automatically the moment they finish installing.
     """
-    record = _load().get(uuid)
-    if not record:
-        return f"Error: unknown bot UUID: {uuid}"
+    record, error = _owned_record(_load(), uuid, requester_id)
+    if error:
+        return error
     if record.get("bot_token"):
         return "installed: the app has been installed and its bot token is registered. Ready to deploy."
     return "not_installed: still waiting for a human to visit the oauth_authorize_url and complete the install."
 
 
-def update_slack_bot_manifest(uuid: str, manifest: dict) -> str:
+def update_slack_bot_manifest(uuid: str, manifest: dict, requester_id: str) -> str:
     """Update an already-created Slack app's manifest (apps.manifest.update).
 
     Use this once the Worker is actually deployed and its real URL is known, to point
@@ -203,9 +221,9 @@ def update_slack_bot_manifest(uuid: str, manifest: dict) -> str:
     """
     if not isinstance(manifest, dict) or not manifest.get("display_information", {}).get("name"):
         return "Error: manifest.display_information.name is required."
-    store = _load()
-    if uuid not in store:
-        return f"Error: unknown bot UUID: {uuid}"
+    _record, error = _owned_record(_load(), uuid, requester_id)
+    if error:
+        return error
     validated = _api("apps.manifest.validate", {"manifest": manifest, "app_id": uuid})
     if not validated.get("ok"):
         return f"Slack API error: {validated}"
@@ -215,7 +233,9 @@ def update_slack_bot_manifest(uuid: str, manifest: dict) -> str:
     return f"Manifest updated for app {uuid}."
 
 
-def register_bot_tokens(uuid: str, bot_token: str, app_token: str = "", signing_secret: str = "") -> str:
+def register_bot_tokens(
+    uuid: str, bot_token: str, app_token: str = "", signing_secret: str = "", *, requester_id: str,
+) -> str:
     """Store bot/app credentials for a created app; reject user tokens.
 
     app_token (xapp-) is only meaningful for Socket Mode apps — it's generated
@@ -230,8 +250,26 @@ def register_bot_tokens(uuid: str, bot_token: str, app_token: str = "", signing_
     if signing_secret and signing_secret.startswith("xoxp-"):
         return "Error: invalid signing secret."
     store = _load()
+    _record, error = _owned_record(store, uuid, requester_id)
+    if error:
+        return error
+    return _store_tokens(store, uuid, bot_token, app_token, signing_secret)
+
+
+def store_installed_bot_token(uuid: str, bot_token: str) -> str:
+    """Record the bot token captured by the OAuth install callback
+    (web/bot_oauth.py). No requester check: the callback is already bound to
+    this app by its signed `state`, and whoever completes Slack's install
+    dialog isn't necessarily the bot's creator."""
+    if not bot_token.startswith("xoxb-"):
+        return "Error: only xoxb- bot tokens are accepted for bot_token."
+    store = _load()
     if uuid not in store:
         return f"Error: unknown bot UUID: {uuid}"
+    return _store_tokens(store, uuid, bot_token)
+
+
+def _store_tokens(store: dict[str, Any], uuid: str, bot_token: str, app_token: str = "", signing_secret: str = "") -> str:
     store[uuid]["bot_token"] = bot_token
     if app_token:
         store[uuid]["app_token"] = app_token
@@ -241,15 +279,19 @@ def register_bot_tokens(uuid: str, bot_token: str, app_token: str = "", signing_
     return "Bot tokens registered securely."
 
 
-def wrangler_bot_deploy(uuid: str, working_dir: str, channel_id: str, thread_ts: str, additional_flags: str = "") -> str:
+def wrangler_bot_deploy(
+    uuid: str, working_dir: str, channel_id: str, thread_ts: str, additional_flags: str = "", *, requester_id: str,
+) -> str:
     """Deploy a Slack bot Worker inside the E2B sandbox.
 
     Injects stored secrets, runs wrangler deploy, then cleans up.
     """
     from agent.sandbox_helpers import get_or_create_sandbox
 
-    record = _load().get(uuid)
-    if not record or not record.get("bot_token"):
+    record, error = _owned_record(_load(), uuid, requester_id)
+    if error:
+        return error
+    if not record.get("bot_token"):
         return "Error: a bot token is not registered for this UUID. Call register_bot_tokens first."
 
     try:

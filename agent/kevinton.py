@@ -156,22 +156,17 @@ def build_kevinton_agent() -> tuple[Agent[AgentDeps, str], list]:
     send_message, and the skill tools) so it can open PRs and DM KitKat when it detects a
     coolton bug — not just capture skills.
     """
-    from agent.agent import agent as _coolton_agent, _hooks
+    from agent.agent import agent as _coolton_agent, _hooks, build_skills_capability
     kevinton_tools = list(_coolton_agent._function_toolset.tools.values())
     agent = Agent(
         deps_type=AgentDeps,
         system_prompt=KEVINTON_SYSTEM_PROMPT,
         tools=kevinton_tools,
     )
-    capabilities = [_hooks, PrepareTools(_disable_strict)]
-    try:
-        from pydantic_ai_skills import SkillsCapability
-
-        capabilities.append(
-            SkillsCapability(directories=["skills", ".agents/skills"], auto_reload=True)
-        )
-    except Exception as e:  # pragma: no cover - skills lib optional
-        logger.warning(f"kevinton: SkillsCapability unavailable: {e}")
+    # Same skills capability as coolton's own runs: skill scripts execute in the
+    # sandbox, never on the host (kevinton reads untrusted transcripts and can
+    # propose/install skills, so its run_skill_script must not be a host shell).
+    capabilities = [_hooks, PrepareTools(_disable_strict), build_skills_capability()]
     return agent, capabilities
 
 

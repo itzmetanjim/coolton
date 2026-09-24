@@ -59,3 +59,23 @@ def test_run_kevinton_marks_its_skill_changes_for_review(monkeypatch):
     assert kevinton.run_kevinton("hi", [], "C1", "1.1", deps) == "no skill needed"
     assert seen["deps"].skill_review_required is True
     assert not hasattr(deps, "skill_review_required")
+
+
+def test_kevinton_runs_skill_scripts_in_the_sandbox_not_on_the_host():
+    """kevinton's skills capability must route run_skill_script through the
+    sandbox executor — pydantic_ai_skills' default runs scripts as host
+    subprocesses with every secret in the environment."""
+    from pydantic_ai_skills import CallableSkillScriptExecutor, LocalSkillScriptExecutor, SkillsCapability
+
+    from agent.agent import _run_skill_script_in_sandbox
+
+    _agent, capabilities = kevinton.build_kevinton_agent()
+    skills = [c for c in capabilities if isinstance(c, SkillsCapability)]
+    assert len(skills) == 1
+    directories = skills[0].directories
+    assert directories
+    for directory in directories:
+        executor = directory._script_executor
+        assert isinstance(executor, CallableSkillScriptExecutor)
+        assert not isinstance(executor, LocalSkillScriptExecutor)
+        assert executor._func is _run_skill_script_in_sandbox
