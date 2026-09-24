@@ -39,6 +39,9 @@ class AgentDeps:
     # agent/provider_config.extract_tag_directive) — forces the provider
     # fallback chain to only try models carrying this tag for the turn.
     provider_tag_filter: str | None = None
+    # Set from a `[!DEBUG]` directive (agent.debug_timing): records where the
+    # turn's time goes and posts a breakdown in the thread after the reply.
+    debug_timer: object | None = None
     # Snapshot of the in-progress message history, captured right before a
     # `!stop` halts the run (see plan_block.before_tool). Lets run_agent keep
     # everything up to the halt (the user's message, any completed tool
