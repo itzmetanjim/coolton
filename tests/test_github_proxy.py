@@ -1,5 +1,7 @@
 import base64
 
+import pytest
+
 import github_proxy as gp
 
 
@@ -284,3 +286,52 @@ def test_forward_denial_log_never_contains_the_raw_token(monkeypatch, caplog):
         handler._forward()
 
     assert "a-mistakenly-pasted-real-pat" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# _forbidden_reason — sandboxed code can use GitHub normally through the proxy,
+# but not for destructive / access-granting / code-exposing account actions.
+# ---------------------------------------------------------------------------
+
+
+_API = "https://api.github.com"
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("DELETE", "/repos/coolton-agent/coolton", None),
+    ("POST", "/repos/coolton-agent/coolton/transfer", b'{"new_owner": "someone"}'),
+    ("PATCH", "/repos/coolton-agent/coolton", b'{"private": false}'),
+    ("PATCH", "/repos/coolton-agent/coolton", b'{"visibility": "public"}'),
+    ("PATCH", "/repos/coolton-agent/coolton", b'{"archived": true}'),
+    ("PUT", "/repos/coolton-agent/coolton/collaborators/someone", b"{}"),
+    ("POST", "/repos/coolton-agent/coolton/keys", b'{"key": "ssh-ed25519 AAAA"}'),
+    ("POST", "/repos/coolton-agent/coolton/hooks", b"{}"),
+    ("PUT", "/repos/coolton-agent/coolton/actions/secrets/TOKEN", b"{}"),
+    ("DELETE", "/repos/coolton-agent/coolton/branches/main/protection", None),
+    ("POST", "/user/keys", b'{"key": "ssh-ed25519 AAAA"}'),
+    ("PATCH", "/user", b'{"name": "x"}'),
+    ("PUT", "/orgs/hackclub/memberships/someone", b"{}"),
+    ("GET", "/authorizations", None),
+    ("POST", "/graphql", b'{"query": "mutation { archiveRepository(input: {repositoryId: \\"R1\\"}) { clientMutationId } }"}'),
+])
+def test_destructive_github_calls_are_refused(method, path, body):
+    assert gp._forbidden_reason(method, _API + path, body)
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("GET", "/repos/coolton-agent/coolton", None),
+    ("POST", "/repos/itzmetanjim/coolton/pulls", b'{"title": "fix", "head": "coolton-agent:fix", "base": "main"}'),
+    ("POST", "/repos/itzmetanjim/coolton/issues/1/comments", b'{"body": "hi"}'),
+    ("PATCH", "/repos/coolton-agent/coolton", b'{"description": "new description"}'),
+    ("DELETE", "/repos/coolton-agent/coolton/git/refs/heads/old-branch", None),
+    ("GET", "/repos/coolton-agent/coolton/collaborators", None),
+    ("POST", "/user/repos", b'{"name": "scratch"}'),
+    ("POST", "/graphql", b'{"query": "query { viewer { login } }"}'),
+])
+def test_normal_github_work_goes_through(method, path, body):
+    assert gp._forbidden_reason(method, _API + path, body) is None
+
+
+def test_non_api_hosts_are_not_filtered():
+    # git smart-HTTP and raw content aren't REST calls.
+    assert gp._forbidden_reason("POST", "https://github.com/coolton-agent/coolton.git/git-receive-pack", b"...") is None

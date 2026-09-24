@@ -184,6 +184,64 @@ def _needs_auth(url: str) -> bool:
     return host != "github.io" and not host.endswith(".github.io")
 
 
+# Sandboxed code gets the coolton-agent account's GitHub access through this
+# proxy — including anything untrusted running in the sandbox (a cloned repo's
+# scripts, an npm postinstall, a prompt-injected command). Normal work (clone,
+# push, PRs, issues, comments, releases) goes through; the few account- or
+# repo-level actions that are destructive, hand out persistent access, or
+# expose private code are refused here instead of being forwarded.
+_REPO = r"/repos/[^/]+/[^/]+"
+_FORBIDDEN_API_RULES = (
+    # (methods, path regex, reason)
+    ({"DELETE"}, rf"^{_REPO}/?$", "deleting a repository"),
+    ({"POST"}, rf"^{_REPO}/transfer/?$", "transferring a repository"),
+    ({"PUT", "PATCH", "DELETE"}, rf"^{_REPO}/collaborators(/.*)?$", "changing repository collaborators"),
+    ({"POST", "PUT", "PATCH", "DELETE"}, rf"^{_REPO}/keys(/.*)?$", "managing deploy keys"),
+    ({"POST", "PUT", "PATCH", "DELETE"}, rf"^({_REPO}|/orgs/[^/]+)/hooks(/.*)?$", "managing webhooks"),
+    ({"POST", "PUT", "PATCH", "DELETE"}, rf"^({_REPO}|/orgs/[^/]+)/(actions|dependabot|codespaces)/(secrets|variables)(/.*)?$", "managing secrets"),
+    ({"POST", "PUT", "PATCH", "DELETE"}, rf"^{_REPO}/(branches/[^/]+/protection|rulesets)(/.*)?$", "changing branch protection"),
+    ({"PATCH", "DELETE"}, r"^/orgs/[^/]+/?$", "changing an organization"),
+    ({"PUT", "POST", "PATCH", "DELETE"}, r"^/orgs/[^/]+/(members|memberships|outside_collaborators|invitations|teams/[^/]+/memberships)(/.*)?$", "changing organization membership"),
+    ({"PATCH"}, r"^/user/?$", "editing the coolton-agent account"),
+    ({"POST", "PUT", "PATCH", "DELETE"}, r"^/user/(keys|gpg_keys|ssh_signing_keys|emails|social_accounts)(/.*)?$", "changing the coolton-agent account's keys or emails"),
+    (None, r"^/(authorizations|applications)(/.*)?$", "managing OAuth tokens"),
+)
+
+# GraphQL mutations with the same effect as the REST rules above.
+_FORBIDDEN_GRAPHQL_RE = re.compile(
+    r"\b(deleteRepository|transferRepository|archiveRepository|updateRepositoryVisibility"
+    r"|deleteBranchProtectionRule|updateBranchProtectionRule|createBranchProtectionRule"
+    r"|deleteRepositoryRuleset|updateRepositoryRuleset|createRepositoryRuleset"
+    r"|removeOutsideCollaborator|updateEnterprise\w*|deleteEnvironment)\b"
+)
+
+# PATCH /repos/{owner}/{repo} fields that make a private repo public or archive it.
+_FORBIDDEN_REPO_FIELDS = ("private", "visibility", "archived")
+
+
+def _forbidden_reason(method: str, upstream: str, body: bytes | None) -> str | None:
+    """Why this API call is refused, or None if it may go through."""
+    parsed = urlparse(upstream)
+    if parsed.netloc.split(":")[0].lower() != "api.github.com":
+        return None
+    path = parsed.path
+    for methods, pattern, reason in _FORBIDDEN_API_RULES:
+        if (methods is None or method in methods) and re.match(pattern, path):
+            return reason
+    if method == "PATCH" and re.match(rf"^{_REPO}/?$", path) and body:
+        try:
+            fields = json.loads(body)
+        except ValueError:
+            return "changing repository settings with an unparseable body"
+        if isinstance(fields, dict) and any(k in fields for k in _FORBIDDEN_REPO_FIELDS):
+            return "changing a repository's visibility or archiving it"
+    if method == "POST" and path.rstrip("/") == "/graphql" and body:
+        match = _FORBIDDEN_GRAPHQL_RE.search(body.decode("utf-8", errors="replace"))
+        if match:
+            return f"the {match.group(1)} GraphQL mutation"
+    return None
+
+
 class _Allowlist:
     def __init__(self):
         self._set = set()
@@ -402,6 +460,19 @@ class _Handler(BaseHTTPRequestHandler):
         if self.command in ("POST", "PUT", "PATCH"):
             length = int(self.headers.get("Content-Length", 0) or 0)
             body = self.rfile.read(length) if length else None
+
+        forbidden = _forbidden_reason(self.command, upstream, body)
+        if forbidden:
+            logger.warning("deny: %s %s (%s)", self.command, upstream, forbidden)
+            payload = json.dumps({"message": f"Blocked by coolton's GitHub proxy: {forbidden} is not allowed from the sandbox."}).encode()
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(payload)
+            self.close_connection = True
+            return
 
         fwd = {
             "User-Agent": self.headers.get("User-Agent", "coolton-sandbox"),

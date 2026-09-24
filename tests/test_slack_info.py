@@ -118,27 +118,12 @@ def test_get_channel_info_team_access_guidance(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# post_message_to_target — channel/DM ACL (only current channel, or the
-# requester's own DM; never an arbitrary channel or someone else's DM)
+# post_message_to_target — no "where" restriction: the text is already footed
+# with who asked (agent.attribution), which is what keeps a post accountable.
 # ---------------------------------------------------------------------------
 
 
-def test_post_message_refuses_other_channel(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
-    posted = []
-    monkeypatch.setattr(
-        "agent.tools.slack_info.requests.post",
-        lambda *a, **k: posted.append(1) or Mock(json=lambda: {"ok": True}),
-    )
-    result = post_message_to_target(
-        channel_id="C_OTHER", text="hi", current_channel="C_CURRENT", from_user="U1",
-    )
-    assert "only post to the channel you are currently in" in result
-    assert not posted
-
-
-def test_post_message_allows_current_channel(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
+def _capture_posts(monkeypatch):
     posted = []
 
     def fake_post(url, **kwargs):
@@ -146,65 +131,27 @@ def test_post_message_allows_current_channel(monkeypatch):
         return Mock(json=lambda: {"ok": True})
 
     monkeypatch.setattr("agent.tools.slack_info.requests.post", fake_post)
-    result = post_message_to_target(
-        channel_id="C_CURRENT", text="hi", current_channel="C_CURRENT", from_user="U1",
-    )
+    return posted
+
+
+def test_post_message_posts_to_any_channel(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
+    posted = _capture_posts(monkeypatch)
+    result = post_message_to_target(channel_id="C_OTHER", text="hi")
     assert "Message posted" in result
-    assert posted[0]["channel"] == "C_CURRENT"
+    assert posted[0]["channel"] == "C_OTHER"
 
 
-def test_post_message_refuses_dm_not_belonging_to_requester(monkeypatch):
+def test_post_message_posts_to_any_dm(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
-    monkeypatch.setattr(
-        "agent.tools.slack_info.requests.get",
-        lambda *a, **k: Mock(json=lambda: {"ok": True, "channel": {"user": "U_OTHER"}}),
-    )
-    posted = []
-    monkeypatch.setattr(
-        "agent.tools.slack_info.requests.post",
-        lambda *a, **k: posted.append(1) or Mock(json=lambda: {"ok": True}),
-    )
-    result = post_message_to_target(
-        channel_id="D123", text="hi", current_channel="C_CURRENT", from_user="U1",
-    )
-    assert "only post to a DM with the user who asked" in result
-    assert not posted
-
-
-def test_post_message_allows_own_dm(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
-    monkeypatch.setattr(
-        "agent.tools.slack_info.requests.get",
-        lambda *a, **k: Mock(json=lambda: {"ok": True, "channel": {"user": "U1"}}),
-    )
-    posted = []
-
-    def fake_post(url, **kwargs):
-        posted.append(kwargs.get("json"))
-        return Mock(json=lambda: {"ok": True})
-
-    monkeypatch.setattr("agent.tools.slack_info.requests.post", fake_post)
-    result = post_message_to_target(
-        channel_id="D123", text="hi", current_channel="C_CURRENT", from_user="U1",
-    )
+    posted = _capture_posts(monkeypatch)
+    result = post_message_to_target(channel_id="U_SOMEONE", text="hi", thread_ts="1.2")
     assert "Message posted" in result
-    assert posted[0]["channel"] == "D123"
+    assert posted[0] == {"channel": "U_SOMEONE", "text": "hi", "thread_ts": "1.2"}
 
 
-def test_post_message_refuses_dm_when_lookup_fails(monkeypatch):
-    """conversations.info failing must fail closed, not silently allow the DM."""
+def test_post_message_requires_text(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-token")
-    monkeypatch.setattr(
-        "agent.tools.slack_info.requests.get",
-        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network error")),
-    )
-    posted = []
-    monkeypatch.setattr(
-        "agent.tools.slack_info.requests.post",
-        lambda *a, **k: posted.append(1) or Mock(json=lambda: {"ok": True}),
-    )
-    result = post_message_to_target(
-        channel_id="D123", text="hi", current_channel="C_CURRENT", from_user="U1",
-    )
-    assert "Could not verify this DM belongs to you" in result
+    posted = _capture_posts(monkeypatch)
+    assert "text is required" in post_message_to_target(channel_id="C1", text="  ")
     assert not posted

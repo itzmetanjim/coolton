@@ -4,6 +4,7 @@ from slack_bolt import Ack, BoltContext
 from slack_sdk import WebClient
 
 from agent import provider_config
+from agent.admin_alerts import ADMIN_USER_ID
 from agent.provider_probe import probe_all
 from listeners.actions.byok_actions import _notify_modal_failure
 from listeners.events.turn import _chunk_text
@@ -15,10 +16,31 @@ def _build_provider_order(user_id: str) -> list[tuple[str, dict]]:
     return provider_config.build_provider_order(user_id)
 
 
+# Provider tests spend real model calls on every configured provider, so only
+# the maintainer (agent.admin_alerts.ADMIN_USER_ID) can run them — the App
+# Home only shows the buttons to them, and each handler re-checks, since an
+# old Home view (or a crafted action payload) can still carry the button.
+_NOT_ALLOWED_TEXT = "Only the coolton maintainer can run provider tests."
+
+
+def _refuse_unless_admin(client: WebClient, user_id: str | None) -> bool:
+    """True (after telling the user why) if `user_id` may not run provider tests."""
+    if user_id == ADMIN_USER_ID:
+        return False
+    if user_id:
+        try:
+            client.chat_postEphemeral(channel=user_id, user=user_id, text=_NOT_ALLOWED_TEXT)
+        except Exception:
+            logger.warning("Couldn't tell %s provider tests are maintainer-only", user_id)
+    return True
+
+
 def handle_test_providers(ack: Ack, body: dict, client: WebClient, context: BoltContext):
     ack()
     try:
         user_id = context.user_id
+        if _refuse_unless_admin(client, user_id):
+            return
         _probe_and_report(client, user_id, _build_provider_order(user_id), "Testing all AI providers...")
     except Exception as e:
         logger.exception("Failed to test providers: %s", e)
@@ -102,6 +124,8 @@ def build_test_provider_modal(order: list[tuple[str, dict]]) -> dict:
 def handle_test_provider_open(ack: Ack, body: dict, client: WebClient, context: BoltContext):
     ack()
     user_id = context.user_id
+    if _refuse_unless_admin(client, user_id):
+        return
     try:
         order = _build_provider_order(user_id)
         if not order:
@@ -117,6 +141,8 @@ def handle_test_provider_submit(ack: Ack, body: dict, client: WebClient, view: d
     ack()
     try:
         user_id = body["user"]["id"]
+        if _refuse_unless_admin(client, user_id):
+            return
         selected = view["state"]["values"]["provider"]["value"]["selected_option"]["value"]
         # Re-resolved at submit time rather than trusting anything carried in
         # the modal: the config (API key included) is never put in the view.

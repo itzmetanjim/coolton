@@ -99,6 +99,7 @@ def run_agent_turn(
     say_stream: SayStream | None = None,
     say: Say | None = None,
     surface: object | None = None,
+    on_behalf_of: str = "",
     _stranded_recursion_depth: int = 0,
 ) -> None:
     """Run one agent turn: status → plan message → run → stream → history → kevinton.
@@ -112,6 +113,10 @@ def run_agent_turn(
     agent.surface.get_surface). Non-Slack callers (the web UI) pass an explicit
     `surface` and no `say_stream`/`say`; everything downstream — steering, !stop,
     kevinton, history compaction — is the exact same pipeline either way.
+
+    `on_behalf_of` is set for automated turns (user_id "AUTOMATED"): the person
+    who started the background job / wait that woke this conversation up, so
+    anything the turn posts is credited to them (agent.attribution).
     """
     from agent.ban_store import is_banned
     if is_banned(user_id):
@@ -167,6 +172,7 @@ def run_agent_turn(
             thread_ts=thread_ts,
             message_ts=message_ts,
             user_token=user_token,
+            on_behalf_of=on_behalf_of,
             provider_tag_filter=tag_filter,
             surface=surface,
         )

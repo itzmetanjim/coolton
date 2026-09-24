@@ -33,16 +33,32 @@ _SELF_MENTION_WARNING = (
 )
 
 
+def _is_public_search_channel(channel: dict) -> bool:
+    """Same rule assert_readable_channel applies, read off the channel object
+    search.messages already returns with each match. Fails closed: a match
+    whose channel doesn't explicitly say it's non-private is dropped."""
+    channel_id = channel.get("id") or ""
+    if channel_id[:1] in ("D", "G"):
+        return False
+    if any(channel.get(k) for k in ("is_im", "is_mpim", "is_group", "is_org_shared")):
+        return False
+    return channel.get("is_private") is False
+
+
 def search_slack_messages(
-    query: str, count: int = 5, sort: str = "score", sort_dir: str = "desc"
+    query: str, count: int = 5, sort: str = "score", sort_dir: str = "desc",
+    current_channel_id: str = "",
 ) -> str:
-    """Search Slack messages across the workspace using the user token.
+    """Search Slack messages using the user token, keeping only matches from
+    public channels or the conversation the request came from — the token can
+    see cooltonUser's private channels and DMs, the person asking can't.
 
     Args:
         query: The search query (supports Slack search syntax like `in:#channel`, `from:@user`).
         count: Number of results to return (default 5, max 20).
         sort: Sort by 'score' or 'timestamp'.
         sort_dir: Direction 'desc' or 'asc'.
+        current_channel_id: The conversation the request came from.
     """
     user_token = os.environ.get("SLACK_USER_TOKEN")
     if not user_token:
@@ -50,9 +66,11 @@ def search_slack_messages(
     if not query or not query.strip():
         return "Error: query is required"
     try:
+        count = max(1, min(int(count), 20))
         params = {
             "query": query,
-            "count": max(1, min(int(count), 20)),
+            # Over-fetch: private/DM matches are filtered out below.
+            "count": min(count * 5, 100),
             "sort": sort,
             "sort_dir": sort_dir,
         }
@@ -68,7 +86,11 @@ def search_slack_messages(
         res_json = response.json()
         if not res_json.get("ok"):
             return f"Slack API error: {res_json}"
-        messages = (res_json.get("messages") or {}).get("matches", [])
+        messages = [
+            m for m in (res_json.get("messages") or {}).get("matches", [])
+            if (current_channel_id and (m.get("channel") or {}).get("id") == current_channel_id)
+            or _is_public_search_channel(m.get("channel") or {})
+        ][:count]
         if not messages:
             return "No Slack messages found."
         lines = []

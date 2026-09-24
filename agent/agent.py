@@ -78,11 +78,13 @@ def _inject_poster(params: dict, user_id: str) -> dict:
     """Inject username and icon_url into chat.postMessage params so the message
     appears as the user who prompted coolton, not as the bot.
 
-    Always strips any pre-existing username/icon_url first (fail closed): if the
-    display-info lookup fails, params must end up with no override rather than
-    passing through whatever value was already there (e.g. model-supplied)."""
+    Always strips any pre-existing username/icon_url/icon_emoji first (fail
+    closed): if the display-info lookup fails, params must end up with no
+    override rather than passing through whatever value was already there
+    (e.g. model-supplied, impersonating someone else)."""
     params.pop("username", None)
     params.pop("icon_url", None)
+    params.pop("icon_emoji", None)
     if user_id:
         name, pfp = _get_user_display_info(user_id)
         if name:
@@ -620,7 +622,9 @@ def get_slack_file_tool(ctx: RunContext[AgentDeps], file: str, filename: str = "
     """Download a Slack file (upload, snippet, image, canvas, any type) into the sandbox by file id.
 
     Takes a Slack file id (e.g. F0123ABCD), which you can get from a message attachment or a
-    Slack file permalink. Not for arbitrary web URLs; use fetch_url for those. When downloading
+    Slack file permalink. Not for arbitrary web URLs; use fetch_url for those. Only files
+    shared in the current conversation or a public channel (or uploaded by the person
+    asking) can be downloaded. When downloading
     images, pass a filename with the correct extension (.png, .jpg, .jpeg, .webp).
     NEVER guess the file id — pull the real F... id from the message's attachments or permalink.
 
@@ -643,7 +647,10 @@ def get_slack_file_tool(ctx: RunContext[AgentDeps], file: str, filename: str = "
             sandbox = Sandbox.connect(sandbox_id)
         except Exception as e:
             return f"Error connecting to sandbox: {e}"
-    return download_file_by_id(file, user_token, sandbox, filename=filename)
+    return download_file_by_id(
+        file, user_token, sandbox, filename=filename,
+        current_channel_id=ctx.deps.channel_id, requester_id=ctx.deps.user_id,
+    )
 
 
 @agent.tool
@@ -1127,6 +1134,10 @@ def summarize_thread_tool(ctx: RunContext[AgentDeps], channel_id: str = "", thre
         channel_id = ctx.deps.channel_id
     if not thread_ts:
         thread_ts = ctx.deps.thread_ts
+    from agent.slack_access import channel_read_error
+    denied = channel_read_error(channel_id, ctx.deps.channel_id)
+    if denied:
+        return f"Error: {denied}"
     user_token = ctx.deps.user_token or os.environ.get("SLACK_USER_TOKEN")
     from agent.tools.summarize_thread import summarize_thread
     return summarize_thread(channel_id, thread_ts, user_token)
@@ -1144,6 +1155,10 @@ def list_channel_threads_tool(ctx: RunContext[AgentDeps], channel_id: str = "", 
     """
     if not channel_id:
         channel_id = ctx.deps.channel_id
+    from agent.slack_access import channel_read_error
+    denied = channel_read_error(channel_id, ctx.deps.channel_id)
+    if denied:
+        return f"Error: {denied}"
     user_token = ctx.deps.user_token or os.environ.get("SLACK_USER_TOKEN")
     from agent.tools.list_threads import list_channel_threads
     return list_channel_threads(channel_id, limit, user_token)
@@ -1264,23 +1279,23 @@ def get_channel_info_tool(ctx: RunContext[AgentDeps], channel_id: str) -> str:
 
 @agent.tool
 def post_message_tool(ctx: RunContext[AgentDeps], channel_id: str, text: str, thread_ts: str = "") -> str:
-    """Post a message as coolton to a Slack channel/thread — but ONLY to the current channel
-    (or a thread within it), or a DM with the user who asked. Posting elsewhere is refused.
+    """Post a message as coolton to any Slack channel, thread, or DM (a user id opens a DM).
+    The message always carries a "(sent from <@user>)" footer crediting who asked.
 
     Use when the user explicitly asks you to post somewhere mid-turn (progress updates,
     standalone posts). For replies in the current thread, prefer the final response instead.
 
     Args:
-        channel_id: Target channel ID.
+        channel_id: Target channel ID (or a user ID for a DM).
         text: Message text (Markdown supported).
         thread_ts: Optional thread timestamp to post into.
     """
-    from agent.attribution import attribute_text
+    from agent.attribution import attribute_text, attribution_user_id
     from agent.tools.slack_info import post_message_to_target
-    name, pfp = _get_user_display_info(ctx.deps.user_id)
+    credited = attribution_user_id(ctx.deps)
+    name, pfp = _get_user_display_info(credited) if credited else ("", "")
     return post_message_to_target(
-        channel_id=channel_id, text=attribute_text(text, ctx.deps.user_id), thread_ts=thread_ts,
-        from_user=ctx.deps.user_id, current_channel=ctx.deps.channel_id,
+        channel_id=channel_id, text=attribute_text(text, credited), thread_ts=thread_ts,
         username=name, icon_url=pfp,
     )
 
@@ -1344,16 +1359,17 @@ def submit_feedback_tool(ctx: RunContext[AgentDeps], kind: str, body: str) -> st
 
 @agent.tool
 def search_slack_tool(ctx: RunContext[AgentDeps], query: str, count: int = 5) -> str:
-    """Search Slack messages across the workspace (channels, DMs, files) with the user token.
+    """Search Slack messages in public channels (plus the current conversation).
 
-    Supports Slack search syntax like `in:#channel from:@user` and keywords.
+    Supports Slack search syntax like `in:#channel from:@user` and keywords. Matches in
+    private channels or DMs other than the current conversation are left out.
 
     Args:
         query: The search query.
         count: Number of results to return (default 5, max 20).
     """
     from agent.tools.slack_search import search_slack_messages
-    return search_slack_messages(query, count)
+    return search_slack_messages(query, count, current_channel_id=ctx.deps.channel_id)
 
 
 @agent.tool
@@ -1737,39 +1753,60 @@ def _parse_api_parameters(api_parameters: str) -> tuple[dict | None, str | None]
 
 
 
+def _prepare_slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str) -> tuple[dict | None, str | None]:
+    """Shared by slack_api_call and slack_api_call_as_bot_tool: parse the
+    params, enforce the method allowlist and read rules (agent.slack_access),
+    and credit any message to whoever asked (agent.attribution)."""
+    parsed_parameters, parse_error = _parse_api_parameters(api_parameters)
+    if parse_error:
+        return None, parse_error
+    from agent.attribution import MESSAGE_METHODS, attribute_api_params, attribution_user_id, is_valid_method
+    from agent.slack_access import check_api_call
+    if not is_valid_method(method):
+        return None, f"Error: invalid Slack API method {method!r} — pass just the method name, e.g. 'chat.postMessage'."
+    denied = check_api_call(method, parsed_parameters, ctx.deps.channel_id)
+    if denied:
+        return None, denied
+    if method == "chat.postMessage":
+        if not parsed_parameters.get("channel"):
+            return None, "Error: chat.postMessage requires a 'channel' (channel id or user id for a DM) param — use the chat_postMessage tool instead."
+        if not parsed_parameters.get("text"):
+            return None, "Error: chat.postMessage requires a 'text' param — use the chat_postMessage tool instead."
+    credited = attribution_user_id(ctx.deps)
+    if method.lower() in MESSAGE_METHODS:
+        # No username/icon override on any message call except the requester's own
+        # identity on a new post (the only method that takes one here).
+        parsed_parameters = {
+            k: v for k, v in parsed_parameters.items() if k not in ("username", "icon_url", "icon_emoji")
+        }
+        if method == "chat.postMessage":
+            parsed_parameters = _inject_poster(parsed_parameters, credited)
+    return attribute_api_params(method, parsed_parameters, credited), None
+
+
 @agent.tool
 def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str) -> str:
-    """Make an arbitrary Slack API call as cooltonUser.
+    """Make a Slack Web API call as cooltonUser.
 
-    Use for any Slack Web API method not covered by other tools. Most methods need at
-    least one param — don't guess with an empty object, check what the method actually
-    requires first.
+    Use for Slack Web API methods not covered by other tools. Only an allowlisted set of
+    methods works (reads, posting, reactions, pins, joining/leaving channels, user/team
+    lookups) — anything else is refused with the full list. Reading a channel other than
+    the current one only works for public channels. Most methods need at least one param —
+    don't guess with an empty object, check what the method actually requires first.
 
     Example: slack_api_call(method="conversations.join", api_parameters='{"channel": "C0123456"}')
 
     Args:
-        method: Slack API method (e.g., 'chat.postMessage', 'conversations.list').
+        method: Slack API method (e.g., 'chat.postMessage', 'conversations.info').
         api_parameters: JSON-encoded object of parameters for the method, as a plain
             STRING (e.g. '{"channel": "C0123456"}') — not a nested object.
     """
     user_token = os.environ.get("SLACK_USER_TOKEN")
     if not user_token:
         return "Error: SLACK_USER_TOKEN not configured"
-    parsed_parameters, parse_error = _parse_api_parameters(api_parameters)
-    if parse_error:
-        return parse_error
-    from agent.attribution import attribute_api_params, is_valid_method
-    if not is_valid_method(method):
-        return f"Error: invalid Slack API method {method!r} — pass just the method name, e.g. 'chat.postMessage'."
-    if method.startswith("apps.manifest."):
-        return f"Error: {method} requires a Slack App Configuration Token (xoxe), not a user token. Use the create_slack_bot tool instead."
-    if method == "chat.postMessage":
-        if not parsed_parameters.get("channel"):
-            return "Error: chat.postMessage requires a 'channel' (channel id or user id for a DM) param — use the chat_postMessage tool instead."
-        if not parsed_parameters.get("text"):
-            return "Error: chat.postMessage requires a 'text' param — use the chat_postMessage tool instead."
-        parsed_parameters = _inject_poster(dict(parsed_parameters), ctx.deps.user_id)
-    parsed_parameters = attribute_api_params(method, parsed_parameters, ctx.deps.user_id)
+    parsed_parameters, error = _prepare_slack_api_call(ctx, method, api_parameters)
+    if error:
+        return error
     url = f"https://slack.com/api/{method}"
     headers = {"Authorization": f"Bearer {user_token}"}
     form = {
@@ -1788,12 +1825,12 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str)
 
 @agent.tool
 def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_parameters: str) -> str:
-    """Make an arbitrary Slack API call as the BOT (not cooltonUser).
+    """Make a Slack Web API call as the BOT (not cooltonUser).
 
     Uses SLACK_BOT_TOKEN. Use for bot-level actions like posting messages as the bot,
-    updating bot messages, managing bot's own reactions, etc. Most methods need at
-    least one param — don't guess with an empty object, check what the method actually
-    requires first.
+    updating bot messages, managing bot's own reactions, etc. Same method allowlist and
+    read rules as slack_api_call. Most methods need at least one param — don't guess with
+    an empty object, check what the method actually requires first.
 
     Example: slack_api_call_as_bot_tool(method="conversations.join", api_parameters='{"channel": "C0123456"}')
 
@@ -1802,15 +1839,9 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_para
         api_parameters: JSON-encoded object of parameters for the method, as a plain
             STRING (e.g. '{"channel": "C0123456"}') — not a nested object.
     """
-    parsed_parameters, parse_error = _parse_api_parameters(api_parameters)
-    if parse_error:
-        return parse_error
-    from agent.attribution import attribute_api_params, is_valid_method
-    if not is_valid_method(method):
-        return f"Error: invalid Slack API method {method!r} — pass just the method name, e.g. 'chat.postMessage'."
-    if method == "chat.postMessage":
-        parsed_parameters = _inject_poster(dict(parsed_parameters), ctx.deps.user_id)
-    parsed_parameters = attribute_api_params(method, parsed_parameters, ctx.deps.user_id)
+    parsed_parameters, error = _prepare_slack_api_call(ctx, method, api_parameters)
+    if error:
+        return error
     from agent.tools.slack_bot_api import slack_api_call_as_bot
     return slack_api_call_as_bot(method, parsed_parameters)
 
@@ -2015,11 +2046,12 @@ def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread
     if not text:
         return "Error: text is required — provide the message content."
     try:
-        from agent.attribution import attribute_text
-        kwargs = {"channel": channel, "markdown_text": attribute_text(_redact(text, context="chat_postMessage"), ctx.deps.user_id)}
+        from agent.attribution import attribute_text, attribution_user_id
+        credited = attribution_user_id(ctx.deps)
+        kwargs = {"channel": channel, "markdown_text": attribute_text(_redact(text, context="chat_postMessage"), credited)}
         if thread_ts:
             kwargs["thread_ts"] = thread_ts
-        kwargs = _inject_poster(kwargs, ctx.deps.user_id)
+        kwargs = _inject_poster(kwargs, credited)
         resp = ctx.deps.client.chat_postMessage(**kwargs)
         if not resp.get("ok"):
             return f"Failed to send message: {resp}"
@@ -2133,6 +2165,11 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
 
     from e2b import FileType
 
+    from agent import skill_review
+
+    # Everything is staged first and only lands in .agents/skills/ once the
+    # change is approved (immediately, for the maintainer — see agent.skill_review).
+    staging = skill_review.new_staging_dir(_repo_root())
     imported, rejected = [], []
     try:
         entries = sandbox.files.list("/home/user/.agents_skills_install/.agents/skills")
@@ -2153,8 +2190,8 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
         if not ok:
             rejected.append(f"{entry.name} ({err})")
             continue
-        target_dir = os.path.join(_repo_root(), ".agents", "skills", slug)
-        if not _is_within(target_dir, os.path.join(_repo_root(), ".agents", "skills")):
+        target_dir = os.path.join(staging, slug)
+        if not _is_within(target_dir, staging):
             rejected.append(entry.name)
             continue
         os.makedirs(target_dir, exist_ok=True)
@@ -2195,9 +2232,15 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
         imported.append(slug)
 
     if not imported:
+        shutil.rmtree(staging, ignore_errors=True)
         detail = f" Rejected entries: {', '.join(rejected)}." if rejected else ""
         return f"No valid skill found in '{package}' (the installer ran but produced nothing usable).{detail}"
-    msg = f"Installed skill(s): {', '.join(imported)}. Available now via list_skills / load_skill."
+    spec = {"op": "install", "staged_dir": staging, "slugs": imported}
+    if skill_review.needs_review(ctx.deps):
+        preview = "\n\n".join(_staged_skill_preview(staging, slug) for slug in imported)
+        msg = skill_review.submit(spec, ctx.deps, f"install {', '.join(imported)} from `{package}`", preview)
+    else:
+        msg = apply_skill_change(spec)
     if rejected:
         msg += f" Skipped invalid entries: {', '.join(rejected)}."
     return msg
@@ -2515,15 +2558,118 @@ def _safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "-", name.strip().lower())
 
 
+def _staged_skill_preview(staging: str, slug: str) -> str:
+    """What the reviewer sees for one staged skill: its SKILL.md and file list."""
+    skill_dir = os.path.join(staging, slug)
+    try:
+        with open(os.path.join(skill_dir, "SKILL.md")) as f:
+            skill_md = f.read()
+    except OSError:
+        skill_md = "(no SKILL.md)"
+    files = sorted(
+        os.path.relpath(os.path.join(root, name), skill_dir)
+        for root, _dirs, names in os.walk(skill_dir) for name in names
+    )
+    return f"--- {slug} ---\nfiles: {', '.join(files)}\n\n{skill_md}"
+
+
+def apply_skill_change(spec: dict) -> str:
+    """Carry out a skill change — straight away for the maintainer, or once a
+    proposal is approved (agent.skill_review). Re-checks everything, since a
+    proposal can sit for a while and the skill dirs may have changed since."""
+    op = spec.get("op")
+    if op == "create":
+        slug = spec["slug"]
+        target = os.path.join(_repo_root(), "skills", slug)
+        if not _is_within(target, os.path.join(_repo_root(), "skills")):
+            return "Error: invalid skill name (must not escape the skills directory)."
+        if os.path.exists(target):
+            return f"Error: a skill named '{slug}' already exists at {target}."
+        try:
+            os.makedirs(target)
+            with open(os.path.join(target, "SKILL.md"), "w") as f:
+                f.write(spec["content"])
+        except OSError as e:
+            return f"Error creating skill: {e}"
+        return f"Created skill '{slug}' at skills/{slug}/SKILL.md. It is now available via list_skills / load_skill."
+
+    if op == "install":
+        from agent import skill_review
+
+        staging = spec["staged_dir"]
+        skills_dir = os.path.join(_repo_root(), ".agents", "skills")
+        installed = []
+        try:
+            for slug in spec["slugs"]:
+                src, dst = os.path.join(staging, slug), os.path.join(skills_dir, slug)
+                if not _is_within(dst, skills_dir) or not os.path.isdir(src):
+                    continue
+                if os.path.exists(dst):
+                    shutil.rmtree(dst)
+                os.makedirs(skills_dir, exist_ok=True)
+                shutil.move(src, dst)
+                installed.append(slug)
+        except OSError as e:
+            return f"Error installing skill(s): {e}"
+        finally:
+            skill_review.discard({"spec": spec})
+        if not installed:
+            return "Error: the staged skill files are gone; nothing was installed."
+        return f"Installed skill(s): {', '.join(installed)}. Available now via list_skills / load_skill."
+
+    if op == "rename":
+        src = _resolve_skill(spec["old_name"])
+        if not src:
+            return f"Error: skill '{spec['old_name']}' not found in any skill directory."
+        new_slug = spec["new_slug"]
+        dst = os.path.join(os.path.dirname(src), new_slug)
+        if os.path.exists(dst):
+            return f"Error: a skill named '{new_slug}' already exists."
+        try:
+            os.rename(src, dst)
+            sk_md = os.path.join(dst, "SKILL.md")
+            if os.path.exists(sk_md):
+                with open(sk_md, "r") as f:
+                    txt = f.read()
+                txt = re.sub(r"(?m)^name:\s*.*$", f"name: {new_slug}", txt, count=1)
+                with open(sk_md, "w") as f:
+                    f.write(txt)
+        except OSError as e:
+            return f"Error renaming skill: {e}"
+        return f"Renamed skill '{spec['old_name']}' -> '{new_slug}'."
+
+    if op == "delete":
+        src = _resolve_skill(spec["name"])
+        if not src:
+            return f"Error: skill '{spec['name']}' not found in any skill directory."
+        try:
+            shutil.rmtree(src)
+        except OSError as e:
+            return f"Error deleting skill: {e}"
+        return f"Deleted skill '{spec['name']}' from {src}."
+
+    return f"Error: unknown skill change {op!r}."
+
+
+def _apply_or_submit_skill_change(ctx: RunContext[AgentDeps], spec: dict, description: str, preview: str = "") -> str:
+    from agent import skill_review
+
+    if skill_review.needs_review(ctx.deps):
+        return skill_review.submit(spec, ctx.deps, description, preview)
+    return apply_skill_change(spec)
+
+
 @agent.tool
 def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: str = "") -> str:
     """Create a new custom agent skill in the repo's `skills/` directory.
 
     Use this when the user wants to "make a skill", "create a skill for X",
     "turn this workflow into a skill", or save a reusable playbook. This writes
-    a proper SKILL.md (frontmatter + instructions) so the skill is immediately
-    discoverable via list_skills / load_skill. Do NOT use shell/CLI commands in
-    the sandbox to create skills — they have no effect on the agent.
+    a proper SKILL.md (frontmatter + instructions) so the skill is discoverable
+    via list_skills / load_skill. Unless the coolton maintainer asked for it, the
+    new skill goes to the maintainer for review first and only goes live once
+    approved — say so instead of claiming it's done. Do NOT use shell/CLI commands
+    in the sandbox to create skills — they have no effect on the agent.
 
     Args:
         name: Skill name (will be slugified, e.g. "My Cool Skill" -> "my-cool-skill").
@@ -2540,10 +2686,6 @@ def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: 
         return "Error: invalid skill name (must not escape the skills directory)."
     if os.path.exists(target):
         return f"Error: a skill named '{slug}' already exists at {target}."
-    try:
-        os.makedirs(target, exist_ok=True)
-    except OSError as e:
-        return f"Error creating skill directory: {e}"
     if not body.strip():
         body = (
             "# " + slug.replace("-", " ").title() + "\n\n"
@@ -2560,14 +2702,8 @@ def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: 
             "NOT created. Fix the description/body (avoid unquoted colons in the "
             "description) and try again."
         )
-    try:
-        with open(os.path.join(target, "SKILL.md"), "w") as f:
-            f.write(content)
-    except OSError as e:
-        return f"Error writing SKILL.md: {e}"
-    return (
-        f"Created skill '{slug}' at skills/{slug}/SKILL.md. "
-        "It is now available via list_skills / load_skill."
+    return _apply_or_submit_skill_change(
+        ctx, {"op": "create", "slug": slug, "content": content}, f"create skill `{slug}`", content,
     )
 
 
@@ -2576,8 +2712,9 @@ def rename_skill(ctx: RunContext[AgentDeps], old_name: str, new_name: str) -> st
     """Rename an existing agent skill (moves its folder and updates frontmatter name).
 
     Use this when the user wants to rename a skill. Operates on skills found in
-    the repo's `skills/` or `.agents/skills/` directories. Do NOT use sandbox
-    shell commands — they have no effect on the agent.
+    the repo's `skills/` or `.agents/skills/` directories. Unless the coolton
+    maintainer asked for it, the rename waits for maintainer review. Do NOT use
+    sandbox shell commands — they have no effect on the agent.
 
     Args:
         old_name: Current skill name/folder.
@@ -2589,21 +2726,12 @@ def rename_skill(ctx: RunContext[AgentDeps], old_name: str, new_name: str) -> st
     new_slug = _safe_name(new_name)
     if not new_slug:
         return "Error: invalid new skill name."
-    dst = os.path.join(os.path.dirname(src), new_slug)
-    if os.path.exists(dst):
+    if os.path.exists(os.path.join(os.path.dirname(src), new_slug)):
         return f"Error: a skill named '{new_slug}' already exists."
-    try:
-        os.rename(src, dst)
-        sk_md = os.path.join(dst, "SKILL.md")
-        if os.path.exists(sk_md):
-            with open(sk_md, "r") as f:
-                txt = f.read()
-            txt = re.sub(r"(?m)^name:\s*.*$", f"name: {new_slug}", txt, count=1)
-            with open(sk_md, "w") as f:
-                f.write(txt)
-    except OSError as e:
-        return f"Error renaming skill: {e}"
-    return f"Renamed skill '{old_name}' -> '{new_slug}'."
+    return _apply_or_submit_skill_change(
+        ctx, {"op": "rename", "old_name": old_name, "new_slug": new_slug},
+        f"rename skill `{old_name}` -> `{new_slug}`",
+    )
 
 
 @agent.tool
@@ -2612,7 +2740,8 @@ def delete_skill(ctx: RunContext[AgentDeps], name: str) -> str:
 
     Use this when the user wants to remove/uninstall a skill. This is permanent.
     Operates on skills in the repo's `skills/` or `.agents/skills/` directories.
-    Do NOT use sandbox shell commands — they have no effect on the agent.
+    Unless the coolton maintainer asked for it, the deletion waits for maintainer
+    review. Do NOT use sandbox shell commands — they have no effect on the agent.
 
     Args:
         name: Skill name/folder to delete.
@@ -2620,11 +2749,9 @@ def delete_skill(ctx: RunContext[AgentDeps], name: str) -> str:
     src = _resolve_skill(name)
     if not src:
         return f"Error: skill '{name}' not found in any skill directory."
-    try:
-        shutil.rmtree(src)
-    except OSError as e:
-        return f"Error deleting skill: {e}"
-    return f"Deleted skill '{name}' from {src}."
+    return _apply_or_submit_skill_change(
+        ctx, {"op": "delete", "name": name}, f"delete skill `{name}` ({os.path.relpath(src, _repo_root())})",
+    )
 
 
 class _SkipResult:
