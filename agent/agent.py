@@ -106,15 +106,7 @@ def enforce_rate_limit():
     logger.warning(f"Rate Limit Check: Sleeping for {sleep_needed:.2f}s")
     time.sleep(sleep_needed)
 
-GIT_IDENTITY_PROMPT = """\
-
-## GIT IDENTITY
-Before doing any Git operation, configure the repository's local Git identity:
-`git config user.email coolton@tanjim.org` and `git config user.name Coolton`.
-Always use email `coolton@tanjim.org` and name `Coolton` for Git commits.
-"""
-
-SYSTEM_PROMPT = SlackPlatform().system_prompt + GIT_IDENTITY_PROMPT
+SYSTEM_PROMPT = SlackPlatform().system_prompt
 
 _cached_model: str | None = None
 
@@ -2841,15 +2833,16 @@ def run_agent(text, deps, message_history=None, images=None):
         first_model = ""
     is_vision = provider_config.is_vision_model(first_model)
 
-    # Everything folded into full_prompt (the Agent's system_prompt) must be
-    # byte-identical across every turn of a thread, or providers can never
-    # build a cached prefix past it. build_context_prompt is thread-stable by
-    # design; the per-turn bits (message_ts, current model/capability) go into
-    # the user prompt instead, via build_turn_context below.
-    context_info = platform.build_context_prompt(deps)
-    full_prompt = platform.system_prompt + GIT_IDENTITY_PROMPT + context_info
+    # The system prompt (and the tool definitions) must be byte-identical for
+    # EVERY request — every turn of every thread, every user — so providers can
+    # cache that whole prefix once and reuse it everywhere. Anything that varies
+    # by thread, sender, or turn (CURRENT CONTEXT, the sender's custom
+    # instructions, message_ts, the current model) goes at the end instead: in
+    # the user prompt, via `dynamic_context` below.
+    full_prompt = platform.system_prompt
+    dynamic_context = platform.build_context_prompt(deps).strip() + "\n\n"
     if custom_instructions:
-        full_prompt += f"\n\n## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n"
+        dynamic_context += f"## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n\n"
 
     deps.user_token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
     toolsets = platform.toolsets(deps)
@@ -2879,7 +2872,7 @@ def run_agent(text, deps, message_history=None, images=None):
         from agent.debug_timing import build_timing_hooks
         capabilities.append(build_timing_hooks(deps.debug_timer))
 
-    turn_context = platform.build_turn_context(deps, first_model, is_vision)
+    turn_context = dynamic_context + platform.build_turn_context(deps, first_model, is_vision)
     text_with_turn_context = turn_context + text
 
     user_prompt: str | list = text_with_turn_context
@@ -2919,16 +2912,19 @@ def run_agent(text, deps, message_history=None, images=None):
         #   calls WITH a stable prompt_cache_key showed a 7372/7386-token
         #   cache hit (~90% cost reduction) on the second call. Without a
         #   cache key, a load-balanced backend has no way to route repeat
-        #   requests for the same thread back to the worker holding its
-        #   cache. Keying by (channel_id, thread_ts) groups every turn of one
-        #   Slack thread onto the same cache; 24h retention covers realistic
-        #   gaps between messages in a thread (the in-memory default is much
-        #   shorter-lived).
+        #   requests back to the worker holding the cache. The key is shared
+        #   by every thread (one per platform, since Slack and the web UI
+        #   have different system prompts): the system prompt + tools prefix
+        #   is identical everywhere (see full_prompt above), so even a brand
+        #   new thread's first turn hits cache for it, and each thread's own
+        #   growing history still caches on top of that on the same worker.
+        #   24h retention covers realistic gaps between messages (the
+        #   in-memory default is much shorter-lived).
         model_settings={
             "anthropic_cache_instructions": True,
             "anthropic_cache_tool_definitions": True,
             "anthropic_cache": True,
-            "openai_prompt_cache_key": f"coolton-{deps.channel_id}-{deps.thread_ts}",
+            "openai_prompt_cache_key": f"coolton-{platform.name}",
             "openai_prompt_cache_retention": "24h",
         },
     )

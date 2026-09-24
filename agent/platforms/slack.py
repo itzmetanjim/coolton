@@ -67,8 +67,9 @@ class SlackPlatform(PlatformAdapter):
         return user_id
 
     def build_context_prompt(self, deps: Any) -> str:
-        # Stable for every turn of this thread — safe inside the cached system
-        # prompt. Nothing here may vary turn to turn (see build_turn_context).
+        # Varies by thread and sender, so run_agent puts it in the user prompt,
+        # never the system prompt (which must be identical for every request
+        # to share one cached prefix across all threads).
         code_channel_note = ""
         if not deps.thread_ts:
             from agent.code_channel_store import is_code_channel

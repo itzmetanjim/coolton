@@ -95,42 +95,47 @@ def test_run_agent_enables_anthropic_prompt_caching(captured_runs):
     assert settings["anthropic_cache"] is True
 
 
-def test_run_agent_sets_a_stable_openai_prompt_cache_key(captured_runs):
+def test_run_agent_sets_one_openai_prompt_cache_key_for_every_thread(captured_runs):
     """The actually-configured production provider (HCAI, an OpenAI-compatible
-    proxy) does NOT auto-cache on a matching prefix alone — verified live: an
-    identical system prompt sent twice with no cache key showed cached_tokens=0
-    both times; with a stable prompt_cache_key, the second call hit cache for
-    ~90% of prompt tokens. Every turn of the SAME thread must reuse the same key."""
-    agent_mod.run_agent("hello", _deps("100.100"))
-    agent_mod.run_agent("hello", _deps("200.200"))
-
-    settings_1 = captured_runs[0][1]["model_settings"]
-    settings_2 = captured_runs[1][1]["model_settings"]
-
-    assert settings_1["openai_prompt_cache_key"] == settings_2["openai_prompt_cache_key"]
-    assert "C1" in settings_1["openai_prompt_cache_key"]
-    assert "1.1" in settings_1["openai_prompt_cache_key"]
-    assert settings_1["openai_prompt_cache_retention"] == "24h"
-
-
-def test_run_agent_prompt_cache_key_differs_across_threads(captured_runs):
+    proxy) only caches when requests carry a prompt_cache_key (verified live).
+    The key is shared by every thread: the system prompt + tools prefix is the
+    same everywhere, so a new thread's first turn should land on the worker
+    that already has it cached — verified live 2026-09-24: with a shared key,
+    a second thread's first turn hit cache for 28,293 of 28,488 tokens, vs 0
+    with a per-thread key."""
     from agent.deps import AgentDeps
-    deps_thread_a = AgentDeps(client=Mock(), user_id="U1", channel_id="C1", thread_ts="1.1", message_ts="100.100", platform=FakePlatform())
-    deps_thread_b = AgentDeps(client=Mock(), user_id="U1", channel_id="C1", thread_ts="2.2", message_ts="100.100", platform=FakePlatform())
+    thread_a = AgentDeps(client=Mock(), user_id="U1", channel_id="C1", thread_ts="1.1", message_ts="100.100", platform=FakePlatform())
+    thread_b = AgentDeps(client=Mock(), user_id="U2", channel_id="C2", thread_ts="2.2", message_ts="200.200", platform=FakePlatform())
 
-    agent_mod.run_agent("hello", deps_thread_a)
-    agent_mod.run_agent("hello", deps_thread_b)
+    agent_mod.run_agent("hello", thread_a)
+    agent_mod.run_agent("hello", thread_b)
 
-    key_a = captured_runs[0][1]["model_settings"]["openai_prompt_cache_key"]
-    key_b = captured_runs[1][1]["model_settings"]["openai_prompt_cache_key"]
-    assert key_a != key_b
+    settings_a = captured_runs[0][1]["model_settings"]
+    settings_b = captured_runs[1][1]["model_settings"]
+    assert settings_a["openai_prompt_cache_key"] == settings_b["openai_prompt_cache_key"]
+    assert settings_a["openai_prompt_cache_retention"] == "24h"
 
 
-def test_custom_instructions_still_change_the_system_prompt(captured_runs, monkeypatch):
-    """Custom instructions are per-user, not per-turn — they SHOULD vary the
-    cached prefix (once) when a user sets/changes them, unlike message_ts."""
+def test_system_prompt_is_identical_across_threads_and_users(captured_runs):
+    """Thread/sender-specific context must never be in the system prompt, or
+    the shared cached prefix breaks for every thread but one."""
+    from agent.deps import AgentDeps
+    agent_mod.run_agent("hello", AgentDeps(client=Mock(), user_id="U1", channel_id="C1", thread_ts="1.1", message_ts="1.0", platform=FakePlatform()))
+    agent_mod.run_agent("hello", AgentDeps(client=Mock(), user_id="U2", channel_id="C2", thread_ts="2.2", message_ts="2.0", platform=FakePlatform()))
+
+    system_a = captured_runs[0][0]._system_prompts[0]
+    system_b = captured_runs[1][0]._system_prompts[0]
+    assert system_a == system_b
+    assert "stable context for" not in system_a
+    assert "stable context for C1" in captured_runs[0][1]["user_prompt"]
+    assert "stable context for C2" in captured_runs[1][1]["user_prompt"]
+
+
+def test_custom_instructions_go_in_the_user_prompt_not_the_system_prompt(captured_runs, monkeypatch):
+    """Custom instructions are per-user, so they'd split the shared cached
+    prefix if they lived in the system prompt."""
     monkeypatch.setattr("listeners.actions.instructions_actions.get_user_instructions", lambda uid: "Be extra concise.")
     agent_mod.run_agent("hello", _deps("100.100"))
 
-    system_prompt = captured_runs[0][0]._system_prompts[0]
-    assert "Be extra concise." in system_prompt
+    assert "Be extra concise." not in captured_runs[0][0]._system_prompts[0]
+    assert "Be extra concise." in captured_runs[0][1]["user_prompt"]
