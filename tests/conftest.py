@@ -16,13 +16,24 @@ for that reason again.
 The one exception is a genuine data-completeness/structural check on the
 real config itself (e.g. "every model declares a context_window") — those
 intentionally read the live providers.json and should keep doing so.
+
+`_isolated_leave_thread_store` (autouse) points agent.leave_thread_store at a
+per-test temp file. Handler tests (message/app_mention, policy opt-in) join
+threads as a side effect; without this they wrote leave_thread_store.json
+into the working directory, and the "joined" threads it recorded leaked into
+later runs (e.g. making a thread look engaged that a test expects not to be).
 """
 
 import json
 
 import pytest
 
-from agent import provider_config
+from agent import leave_thread_store, provider_config
+
+
+@pytest.fixture(autouse=True)
+def _isolated_leave_thread_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(leave_thread_store, "LEAVE_THREAD_STORE_FILE", str(tmp_path / "leave_thread_store.json"))
 
 
 @pytest.fixture
