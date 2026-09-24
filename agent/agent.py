@@ -2875,6 +2875,9 @@ def run_agent(text, deps, message_history=None, images=None):
         capabilities.append(surface_hooks)
 
     capabilities.append(build_skills_capability())
+    if getattr(deps, "debug_timer", None) is not None:
+        from agent.debug_timing import build_timing_hooks
+        capabilities.append(build_timing_hooks(deps.debug_timer))
 
     turn_context = platform.build_turn_context(deps, first_model, is_vision)
     text_with_turn_context = turn_context + text
@@ -3077,8 +3080,13 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
         # had before). Reused across retries of the same provider and updated
         # again if it falls back to a different one.
         set_model_task(deps, f"{provider_name} / {model_name}")
+        timer = getattr(deps, "debug_timer", None)
         for attempt in range(provider_max_retries):
             raw_response: dict = {}
+            attempt_label = f"{provider_name} / {model_name} (attempt {attempt + 1})"
+            attempt_started = time.perf_counter()
+            if timer:
+                timer.current_provider = provider_name
             try:
                 # Create model object if custom base_url (BYOK, HCAI)
                 model_obj = None
@@ -3128,15 +3136,24 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                 else:
                     run_kwargs["model_settings"] = base_model_settings
                 result = agent_dynamic.run_sync(**run_kwargs)
+                if timer:
+                    timer.record("attempt", attempt_label, attempt_started, time.perf_counter())
                 if provider_name != "byok":
                     set_working_provider(provider_name)
                 deps.model_used = f"{provider_name} / {model_name}"
                 return result, provider_name
 
             except HaltRun:
+                if timer:
+                    timer.record("attempt", attempt_label, attempt_started, time.perf_counter(), "halted (skip / wait / !stop)")
                 raise
 
             except Exception as e:
+                if timer:
+                    timer.record(
+                        "attempt", attempt_label, attempt_started, time.perf_counter(),
+                        f"failed: {_redact(str(e), context='debug timing')[:150]}",
+                    )
                 if is_fatal_error(e):
                     logger.critical(f"Fatal error in {provider_name}: {_redact(str(e), context='provider {provider_name}')}")
                     raise
@@ -3180,7 +3197,10 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                 if is_retryable_error(e) and attempt < provider_max_retries - 1:
                     delay = base_delay * (2 ** attempt)
                     logger.warning(f"{provider_name} attempt {attempt + 1} failed with retryable error: {err}. Retrying in {delay}s...")
+                    backoff_started = time.perf_counter()
                     time.sleep(delay)
+                    if timer:
+                        timer.record("backoff", f"before retrying {provider_name}", backoff_started, time.perf_counter())
                     continue
                 else:
                     logger.warning(f"{provider_name} failed (attempt {attempt + 1}/{provider_max_retries}): {err}")

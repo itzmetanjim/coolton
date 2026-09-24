@@ -84,6 +84,14 @@ def _post_fallback_response(
         logger.warning(f"Failed to post feedback buttons after streaming fallback: {e}")
 
 
+def _post_debug_report(conv_surface, debug_timer, logger) -> None:
+    """[!DEBUG]'s timing breakdown, posted in the same thread (agent.debug_timing)."""
+    try:
+        conv_surface.post_text(debug_timer.format_report())
+    except Exception:
+        logger.exception("Failed to post [!DEBUG] timing report")
+
+
 def run_agent_turn(
     *,
     client: WebClient,
@@ -143,6 +151,9 @@ def run_agent_turn(
     mark_run_started(channel_id, thread_ts, time.time())
     _record_inflight_start(channel_id, thread_ts, message_ts=message_ts, user_id=user_id, text=text, is_slack=is_slack)
     try:
+        from agent.debug_timing import TurnTimer, extract_debug_directive
+        text, debug = extract_debug_directive(text)
+        debug_timer = TurnTimer() if debug else None
         from agent.provider_config import extract_tag_directive
         text, tag_filter, tag_error = extract_tag_directive(text)
         if tag_error:
@@ -175,6 +186,7 @@ def run_agent_turn(
             on_behalf_of=on_behalf_of,
             provider_tag_filter=tag_filter,
             surface=surface,
+            debug_timer=debug_timer,
         )
         conv_surface = _surface(deps)
 
@@ -192,7 +204,15 @@ def run_agent_turn(
         plan_ts = send_plan_message(deps) if is_slack else None
         deps.plan_ts = plan_ts
 
-        result = run_agent(text, deps, message_history=history, images=images)
+        if debug_timer:
+            debug_timer.record("phase", "setup (before the model started)", debug_timer.started_at, time.perf_counter())
+        run_started = time.perf_counter()
+        try:
+            result = run_agent(text, deps, message_history=history, images=images)
+        finally:
+            if debug_timer:
+                debug_timer.record("phase", "agent run", run_started, time.perf_counter())
+        post_started = time.perf_counter()
 
         if deps.should_skip:
             if "!stop" in deps.halt_reason:
@@ -252,6 +272,9 @@ def run_agent_turn(
             complete_plan_message(deps)
 
         conv_surface.finish_turn(deps)
+        if debug_timer:
+            debug_timer.record("phase", "posting the reply", post_started, time.perf_counter())
+        history_started = time.perf_counter()
 
         # Store conversation history, compacting it first if the thread has run long
         # enough that carrying the full raw history would waste context on every
@@ -271,6 +294,10 @@ def run_agent_turn(
         except Exception:
             logger.exception("Failed to persist conversation training log")
 
+        if debug_timer:
+            debug_timer.record("phase", "saving history", history_started, time.perf_counter())
+            _post_debug_report(conv_surface, debug_timer, logger)
+
         # kevinton: silent background skill-capture agent (runs after every turn)
         if not deps.should_skip:
             from agent.kevinton import spawn_kevinton
@@ -285,6 +312,8 @@ def run_agent_turn(
                 set_plan_error(deps, str(e))
         except Exception:
             pass
+        if deps is not None and getattr(deps, "debug_timer", None) is not None:
+            _post_debug_report(_surface(deps), deps.debug_timer, logger)
         error_text = f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})"
         if say:
             say(text=error_text, thread_ts=thread_ts)

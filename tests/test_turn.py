@@ -35,6 +35,7 @@ def mocks(monkeypatch):
         message_ts=kw["message_ts"],
         user_token=kw["user_token"],
         provider_tag_filter=kw.get("provider_tag_filter"),
+        debug_timer=kw.get("debug_timer"),
         plan_ts=None,
         plan_tasks={},
         should_skip=False,
@@ -649,3 +650,41 @@ def test_resume_orphaned_runs_skips_a_web_entry_with_a_bad_message_ts():
 def test_resume_orphaned_runs_is_a_noop_with_nothing_orphaned():
     result = turn.resume_orphaned_runs(Mock(), Mock())
     assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# [!DEBUG] timing report
+# ---------------------------------------------------------------------------
+
+
+def _posted_texts(mocks):
+    return [c.kwargs.get("markdown_text") or c.kwargs.get("text") or "" for c in mocks.client.chat_postMessage.call_args_list]
+
+
+def test_debug_directive_is_stripped_and_posts_a_timing_report_after_the_reply(mocks):
+    _run_turn(mocks, text="hi [!DEBUG] there")
+
+    call_text = turn.run_agent.call_args.args[0]
+    assert "[!DEBUG]" not in call_text and "hi" in call_text and "there" in call_text
+    assert turn.run_agent.call_args.args[1].debug_timer is not None
+
+    reports = [t for t in _posted_texts(mocks) if "[!DEBUG] timing" in t]
+    assert len(reports) == 1
+    for phase in ("setup (before the model started)", "agent run", "posting the reply", "saving history"):
+        assert phase in reports[0]
+    # posted in the same thread, after the reply was streamed
+    report_call = next(c for c in mocks.client.chat_postMessage.call_args_list if "[!DEBUG] timing" in (c.kwargs.get("markdown_text") or ""))
+    assert report_call.kwargs["thread_ts"] == "1.1"
+    mocks.say_stream.return_value.stop.assert_called_once()
+
+
+def test_no_debug_directive_means_no_timer_and_no_report(mocks):
+    _run_turn(mocks, text="hi there")
+    assert turn.run_agent.call_args.args[1].debug_timer is None
+    assert not any("[!DEBUG] timing" in t for t in _posted_texts(mocks))
+
+
+def test_debug_report_is_still_posted_when_the_run_fails(mocks):
+    turn.run_agent.side_effect = RuntimeError("boom")
+    _run_turn(mocks, text="[!DEBUG] hi")
+    assert any("[!DEBUG] timing" in t for t in _posted_texts(mocks))
