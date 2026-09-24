@@ -9,7 +9,7 @@ import shutil
 import threading
 import requests
 from pydantic_ai import RunContext
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ToolOutput
 from pydantic_ai.messages import BinaryContent, ToolReturn
 from pydantic_ai.capabilities import Hooks, PrepareTools
 from dataclasses import replace
@@ -2070,6 +2070,31 @@ def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread
         return f"Failed to send message: {_redact(str(e), context='chat_postMessage')}"
 
 
+async def text_only_response(ctx: RunContext[AgentDeps], emoji_name: str, response: str) -> str:
+    """React to the user's message AND send your final reply in one call, ending your turn.
+
+    Use this instead of add_emoji_reaction + a final text reply whenever the reply needs no
+    other tools at all (chat, a quick answer from what you already know, a clarifying question)
+    — it saves a whole round trip. Call it as your ONLY tool call. If you need any other tool,
+    don't use this: react with add_emoji_reaction and answer normally at the end.
+
+    Args:
+        emoji_name: Slack emoji name without colons to react with (same rules as add_emoji_reaction).
+        response: Your complete final reply, exactly as you'd otherwise write it (Markdown supported).
+    """
+    try:
+        await add_emoji_reaction(ctx, emoji_name)
+    except Exception:
+        logger.exception("text_only_response: reaction failed; sending the reply anyway")
+    return response
+
+
+# `text_only_response` is an output function, not a regular tool: calling it ends the
+# run immediately with its return value as result.output, so run_agent_turn posts it
+# exactly like a plain-text final answer. Plain text stays a valid final answer too.
+OUTPUT_TYPE = [str, ToolOutput(text_only_response, name="text_only_response")]
+
+
 @agent.tool
 def skip(ctx: RunContext[AgentDeps], preserve: bool = False) -> str:
     """Skip sending the final response message at the end of your turn.
@@ -2838,6 +2863,7 @@ def run_agent(text, deps, message_history=None, images=None):
         deps_type=AgentDeps,
         system_prompt=full_prompt,
         tools=tool_functions,
+        output_type=OUTPUT_TYPE,
     )
 
     capabilities = [_hooks, PrepareTools(disable_strict_for_all_tools)]
