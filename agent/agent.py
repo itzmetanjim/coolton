@@ -2974,7 +2974,7 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
     Uses the global fallback cache: skips providers known to be dead and prefers the
     last-known-good provider first.
     """
-    from agent.fallback_cache import get_dead_families, mark_dead, mark_family_dead, set_working_provider
+    from agent.fallback_cache import mark_alive, mark_dead, mark_family_dead, set_working_provider
     from agent.plan_block import set_model_task
 
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
@@ -2995,10 +2995,15 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
         error_str = str(error).lower()
         return next((m for m in family_outage_markers if m in error_str), None)
 
-    # Refreshed in-loop (not just at the top) so marking a family dead mid-turn
-    # immediately skips its remaining models too, instead of only affecting
-    # future turns.
-    dead_families_this_turn = set(get_dead_families())
+    # Families that hit a family-wide outage DURING this turn — the loop skips
+    # their remaining models immediately. Families already cached as dead are
+    # NOT seeded in here: _resolve_provider_order has already dropped them
+    # from provider_order, except when that would leave nothing to try (e.g.
+    # a forced [!WITH:tag] whose every model is in a dead family), and in that
+    # case trying them anyway is the point — skipping them here too made such
+    # a turn fail without a single attempt, so the family could never be seen
+    # recovering.
+    dead_families_this_turn: set[str] = set()
 
     # Retry configuration
     max_retries = 3
@@ -3135,7 +3140,12 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                 if timer:
                     timer.record("attempt", attempt_label, attempt_started, time.perf_counter())
                 if provider_name != "byok":
-                    set_working_provider(provider_name)
+                    if getattr(deps, "provider_tag_filter", None):
+                        # A forced [!WITH:tag] run proves this model is up, but
+                        # shouldn't make it everyone's first choice.
+                        mark_alive(provider_name)
+                    else:
+                        set_working_provider(provider_name)
                 deps.model_used = f"{provider_name} / {model_name}"
                 return result, provider_name
 

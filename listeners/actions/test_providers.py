@@ -41,14 +41,17 @@ def handle_test_providers(ack: Ack, body: dict, client: WebClient, context: Bolt
         user_id = context.user_id
         if _refuse_unless_admin(client, user_id):
             return
-        _probe_and_report(client, user_id, _build_provider_order(user_id), "Testing all AI providers...")
+        _probe_and_report(client, user_id, _build_provider_order(user_id), "Testing all AI providers...", full_sweep=True)
     except Exception as e:
         logger.exception("Failed to test providers: %s", e)
 
 
-def _probe_and_report(client: WebClient, user_id: str, order: list[tuple[str, dict]], header_text: str) -> None:
+def _probe_and_report(
+    client: WebClient, user_id: str, order: list[tuple[str, dict]], header_text: str, full_sweep: bool = False,
+) -> None:
     """Shared by "Test All Providers" and "Test a Provider" (the latter passes
-    a one-entry `order`), so both report exactly the same way."""
+    a one-entry `order`), so both report exactly the same way — and both feed
+    their results into the fallback cache (see _update_fallback_cache)."""
     # A real (non-ephemeral) top-level message, so it has a genuine `ts` the
     # rest of the run can thread off of — an ephemeral message can't anchor
     # a thread. Everything after this — the "may take a minute" notice and
@@ -69,8 +72,11 @@ def _probe_and_report(client: WebClient, user_id: str, order: list[tuple[str, di
     # to not hammer a single upstream's rate limits) — a fully sequential
     # sweep of every configured model took roughly the sum of all of their
     # latencies, tens of seconds to minutes.
+    probe_results = probe_all(order)
+    _update_fallback_cache(probe_results, full_sweep)
+
     results = []
-    for provider_name, ok, display, elapsed, detail in probe_all(order):
+    for provider_name, ok, display, elapsed, detail in probe_results:
         status = ":white_check_mark:" if ok else ":x:"
         line = f"{status} *{display}* — {elapsed:.1f}s"
         if ok:
@@ -82,6 +88,29 @@ def _probe_and_report(client: WebClient, user_id: str, order: list[tuple[str, di
     text = "*AI Provider Test Results*\n" + "\n".join(results)
     for chunk in _chunk_text(text):
         client.chat_postMessage(channel=user_id, thread_ts=thread_ts, text=chunk, mrkdwn=True)
+
+
+def _update_fallback_cache(probe_results: list, full_sweep: bool) -> None:
+    """A provider test is as good a health signal as the background refresh:
+    a model that passes is marked up (clearing a stale dead mark, its
+    family's too), one that fails is marked dead. Test All covers the whole
+    chain, so it rewrites the cache the same way the background refresh does
+    (including which provider is preferred); a single test only touches the
+    one entry it tested. BYOK is never cached (it's per user)."""
+    from agent.fallback_cache import mark_alive, mark_dead, refresh_from_results
+
+    tested = [r for r in probe_results if r[0] != "byok"]
+    try:
+        if full_sweep:
+            refresh_from_results([(name, ok) for name, ok, *_ in tested], reason="provider test failed")
+            return
+        for name, ok, _display, _elapsed, detail in tested:
+            if ok:
+                mark_alive(name)
+            else:
+                mark_dead(name, f"provider test failed: {detail}")
+    except Exception:
+        logger.exception("Couldn't update the fallback cache from provider test results")
 
 
 # Slack caps a static_select at 100 options and each option's text at 75 chars.

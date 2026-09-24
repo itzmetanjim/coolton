@@ -2274,3 +2274,23 @@ def test_computer_use_screenshot_action_posts_to_thread(monkeypatch):
     ctx = RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
     agent_mod.computer_use(ctx, action="screenshot")
     assert posted == [b"fake-png-bytes"]
+
+
+def test_forced_tag_success_marks_the_model_up_without_making_it_preferred(monkeypatch, clean_env):
+    """[!WITH:luna] succeeding proves luna is up, so a stale dead mark must go —
+    but one user forcing a model mustn't reorder the chain for everyone."""
+    from types import SimpleNamespace
+
+    from agent import fallback_cache as fc
+    fc.set_working_provider("groq_0")
+    fc.mark_dead("hcai_0", "earlier failure")
+    fc.mark_family_dead("hcai", "Daily spending limit reached")
+    monkeypatch.setattr(agent_mod, "_resolve_provider_order", lambda user_id, tag=None: [("hcai_0", {"model": "openai/luna"})])
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+
+    deps = SimpleNamespace(user_id="U1", provider_tag_filter="luna", plan_ts=None, last_attempt_messages=None)
+    agent_mod._run_with_provider_chain(SimpleNamespace(run_sync=lambda **kw: SimpleNamespace(output="ok")), {}, deps)
+
+    assert "hcai_0" not in fc.get_dead_providers()
+    assert "hcai" not in fc.get_dead_families()
+    assert fc.get_working_provider() == "groq_0"
