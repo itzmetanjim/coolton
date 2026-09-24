@@ -69,7 +69,7 @@ def test_refuses_non_slack_download_url(monkeypatch):
         if "files.info" in url:
             return Mock(json=lambda: {
                 "ok": True,
-                "file": {"url_private_download": "https://evil.com/file", "name": "x.txt"},
+                "file": {"url_private_download": "https://evil.com/file", "name": "x.txt", "is_public": True},
             })
         return Mock(content=b"data", status_code=200)
 
@@ -87,6 +87,7 @@ def test_success_to_sandbox_sanitizes_filename(monkeypatch):
             return Mock(json=lambda: {
                 "ok": True,
                 "file": {
+                    "is_public": True,
                     "url_private_download": "https://files.slack.com/files-pri/T123-F123/x",
                     "name": "../evil.sh",
                     "mimetype": "text/plain",
@@ -110,6 +111,7 @@ def test_success_returns_base64_summary(monkeypatch):
             return Mock(json=lambda: {
                 "ok": True,
                 "file": {
+                    "is_public": True,
                     "url_private_download": "https://files.slack.com/files-pri/T123-F123/x",
                     "name": "notes.txt",
                     "mimetype": "text/plain",
@@ -148,7 +150,55 @@ def test_no_download_url(monkeypatch):
     monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-token")
 
     def fake_get(url, **kwargs):
-        return Mock(json=lambda: {"ok": True, "file": {"name": "x.txt"}})
+        return Mock(json=lambda: {"ok": True, "file": {"name": "x.txt", "is_public": True}})
 
     monkeypatch.setattr("agent.tools.slack_file_download.requests.get", fake_get)
     assert "No download URL available" in download_file_by_id("F12345678", user_token="xoxp-token")
+
+
+# ---------------------------------------------------------------------------
+# download_file_by_id — only files the person asking could see themselves
+# ---------------------------------------------------------------------------
+
+
+def _file_info_then_bytes(monkeypatch, file_info):
+    downloads = []
+
+    def fake_get(url, **kwargs):
+        if "files.info" in url:
+            return Mock(json=lambda: {"ok": True, "file": {
+                "url_private_download": "https://files.slack.com/files-pri/T1-F1/x",
+                "name": "secret.txt", **file_info,
+            }})
+        downloads.append(url)
+        return Mock(content=b"data", status_code=200)
+
+    monkeypatch.setattr("agent.tools.slack_file_download.requests.get", fake_get)
+    return downloads
+
+
+def test_refuses_a_file_only_shared_in_a_private_channel(monkeypatch):
+    downloads = _file_info_then_bytes(monkeypatch, {
+        "user": "U_UPLOADER", "groups": ["G_PRIVATE"], "shares": {"private": {"G_PRIVATE": []}},
+    })
+    result = download_file_by_id(
+        "F12345678", user_token="xoxp-token", current_channel_id="C_HERE", requester_id="U_ASKER",
+    )
+    assert result.startswith("Error: can't download")
+    assert downloads == []
+
+
+def test_allows_a_private_file_shared_in_the_current_conversation(monkeypatch):
+    _file_info_then_bytes(monkeypatch, {"shares": {"private": {"G_HERE": []}}})
+    result = download_file_by_id(
+        "F12345678", user_token="xoxp-token", current_channel_id="G_HERE", requester_id="U_ASKER",
+    )
+    assert result.startswith("Downloaded secret.txt")
+
+
+def test_allows_the_requesters_own_upload(monkeypatch):
+    _file_info_then_bytes(monkeypatch, {"user": "U_ASKER", "ims": ["D_ELSEWHERE"]})
+    result = download_file_by_id(
+        "F12345678", user_token="xoxp-token", current_channel_id="C_HERE", requester_id="U_ASKER",
+    )
+    assert result.startswith("Downloaded secret.txt")

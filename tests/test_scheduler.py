@@ -564,11 +564,13 @@ def test_fire_wait_dispatches_a_wake_when_nothing_is_active(tmp_files, monkeypat
 
     assert len(submitted) == 1
     from agent.background_jobs_poller import AUTOMATED_USER_ID, _dispatch_wake
-    fn, channel_id, thread_ts, user_id, banner, prompt = submitted[0]
+    fn, channel_id, thread_ts, user_id, banner, prompt, owner_id = submitted[0]
     assert fn is _dispatch_wake
     assert channel_id == "C1"
     assert thread_ts == "1.1"
     assert user_id == AUTOMATED_USER_ID
+    # Posts from the wake-up turn are credited to whoever started the wait.
+    assert owner_id == OWNER
     assert "the deploy" in banner
     assert "the deploy" in prompt
 

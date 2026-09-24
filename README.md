@@ -55,7 +55,10 @@ two things only: bare social replies & one-line factual lookups ("hi", "what is 
   (name, description) plus instructions, and can bundle their own scripts, reference docs, and
   resources. coolton can create, rename, delete, and install skills on request; installing one
   fetches it from the [skills.sh](https://skills.sh) marketplace inside the sandbox and copies
-  the whole validated directory back, never runs the installer on the host.
+  the whole validated directory back, never runs the installer on the host. skills are shared by
+  every user, so any skill change not requested by the maintainer (and every change kevinton
+  makes) is DM'd to the maintainer with Approve/Reject buttons and only goes live once approved
+  (`agent/skill_review.py`).
 
 ### reliability
 

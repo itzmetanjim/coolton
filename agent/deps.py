@@ -21,6 +21,13 @@ class AgentDeps:
     # them, so they need zero changes.
     surface: object | None = None
     user_token: str | None = None
+    # The real person an automated turn (background job / `wait` wake-up, whose
+    # user_id is the synthetic "AUTOMATED") acts for — who tool-posted
+    # messages are credited to (agent.attribution.attribution_user_id).
+    on_behalf_of: str = ""
+    # Set for kevinton's runs: skill changes it makes always go through
+    # maintainer review, whoever's turn it was reading (agent.skill_review).
+    skill_review_required: bool = False
     custom_instructions: str = ""
     plan_ts: str | None = None
     plan_tasks: dict = field(default_factory=dict)

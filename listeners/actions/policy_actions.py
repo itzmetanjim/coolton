@@ -2,6 +2,7 @@ from logging import Logger
 
 from slack_sdk import WebClient
 
+from agent.admin_alerts import ADMIN_USER_ID
 from agent.policy_consent import (
     POLICY_CHANNEL_ID,
     clear_pending_for_user,
@@ -66,6 +67,6 @@ def handle_policy_opt_out(ack, body: dict, client: WebClient, logger: Logger):
     try:
         revoke_consent(user_id)
         from listeners.views.app_home_builder import build_app_home_view
-        client.views_publish(user_id=user_id, view=build_app_home_view(has_policy_consent=False))
+        client.views_publish(user_id=user_id, view=build_app_home_view(has_policy_consent=False, is_admin=user_id == ADMIN_USER_ID))
     except Exception:
         logger.exception("Failed to handle policy opt-out for %s", user_id)

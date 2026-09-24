@@ -142,7 +142,14 @@ def test_fallback_cache_actions_present():
     view = build_app_home_view()
     buttons = _button_ids(view)
     assert "fallback_cache_clear" in buttons
-    assert "test_providers" in buttons
+
+
+def test_provider_test_buttons_are_shown_only_to_the_maintainer():
+    assert "test_providers" not in _button_ids(build_app_home_view())
+    assert "test_provider_open" not in _button_ids(build_app_home_view())
+    admin_buttons = _button_ids(build_app_home_view(is_admin=True))
+    assert "test_providers" in admin_buttons
+    assert "test_provider_open" in admin_buttons
 
 
 def test_mcp_servers_section_empty():

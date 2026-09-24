@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 import threading
@@ -106,8 +107,11 @@ will never know to review it. You never reply in the user's channel or thread; a
 goes as a DM.
 - Load the `manage-skills` skill (via list_skills -> load_skill) when authoring a new \
 skill, to follow good authoring structure.
-- Keep your output short. If you did nothing, just say "no skill needed". If you created/installed \
-one or opened a PR, say which.
+- Every skill change you make (create, install, rename, delete) goes to the maintainer for review \
+and only takes effect once approved — the tool result says "Submitted for review"; that is the \
+expected outcome, not a failure, so don't retry it.
+- Keep your output short. If you did nothing, just say "no skill needed". If you proposed a skill \
+or opened a PR, say which.
 """
 
 
@@ -195,6 +199,12 @@ def run_kevinton(
         )
         agent, capabilities = build_kevinton_agent()
         model = _kevinton_model(deps)
+        # kevinton works from untrusted transcripts, so any skill it creates,
+        # installs, renames, or deletes waits for maintainer review — even on
+        # the maintainer's own turns (agent.skill_review). A copy, so the
+        # finished turn's deps object itself isn't changed.
+        deps = copy.copy(deps)
+        deps.skill_review_required = True
         result = agent.run_sync(
             user_prompt=prompt,
             deps=deps,
