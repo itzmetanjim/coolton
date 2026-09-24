@@ -191,3 +191,37 @@ def test_refresh_extends_working_ttl_so_it_does_not_go_stale_between_cycles(cloc
     fc.refresh_from_results([("openai", True)])  # the next cycle lands in time
     clock(fc.REFRESH_INTERVAL_SECONDS - 60)
     assert fc.get_working_provider() == "openai"
+
+
+# ---------------------------------------------------------------------------
+# mark_alive / family clearing — a model that just worked (forced [!WITH:tag]
+# run, provider test, background refresh) must stop being skipped as dead.
+# ---------------------------------------------------------------------------
+
+
+def test_mark_alive_clears_the_provider_and_its_family_but_keeps_working():
+    fc.set_working_provider("hcai_0")
+    fc.mark_dead("hcai_2", "boom")
+    fc.mark_family_dead("hcai", "Daily spending limit reached")
+    fc.set_working_provider("groq_0")
+
+    fc.mark_alive("hcai_2")
+
+    assert "hcai_2" not in fc.get_dead_providers()
+    assert "hcai" not in fc.get_dead_families()
+    assert fc.get_working_provider() == "groq_0"  # a forced run doesn't reorder everyone
+
+
+def test_mark_alive_leaves_other_providers_dead():
+    fc.mark_dead("groq_0", "boom")
+    fc.mark_alive("hcai_0")
+    assert "groq_0" in fc.get_dead_providers()
+
+
+def test_refresh_success_clears_a_family_wide_outage():
+    fc.mark_family_dead("hcai", "Daily spending limit reached")
+    fc.refresh_from_results([("hcai_0", True), ("groq_0", False)], reason="provider test failed")
+
+    assert "hcai" not in fc.get_dead_families()
+    assert fc.get_dead_providers() == {"groq_0": "provider test failed"}
+    assert fc.get_working_provider() == "hcai_0"

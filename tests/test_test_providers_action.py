@@ -211,3 +211,48 @@ def test_provider_tests_are_maintainer_only(monkeypatch, entry):
     client.views_open.assert_not_called()
     client.chat_postMessage.assert_not_called()
     assert "maintainer" in client.chat_postEphemeral.call_args.kwargs["text"]
+
+
+# ---------------------------------------------------------------------------
+# Provider test results feed the fallback cache
+# ---------------------------------------------------------------------------
+
+
+def test_single_provider_test_success_marks_a_dead_provider_up(monkeypatch):
+    from agent import fallback_cache as fc
+    fc.mark_dead("hcai_1", "earlier failure")
+    fc.set_working_provider("groq_0")
+
+    _submit(monkeypatch, [("hcai_1", {"model": "m1"})], "hcai_1")  # probe reports ok
+
+    assert "hcai_1" not in fc.get_dead_providers()
+    assert fc.get_working_provider() == "groq_0"
+
+
+def test_single_provider_test_failure_marks_it_dead(monkeypatch):
+    from agent import fallback_cache as fc
+    monkeypatch.setattr(
+        "listeners.actions.test_providers.provider_config.build_provider_order",
+        lambda user_id: [("hcai_1", {"model": "m1"})],
+    )
+    monkeypatch.setattr("listeners.actions.test_providers.probe_all", Mock(return_value=[("hcai_1", False, "HCAI", 1.0, "429 rate limited")]))
+    client = Mock()
+    client.chat_postMessage.return_value = {"ts": _HEADER_TS}
+    view = {"state": {"values": {"provider": {"value": {"selected_option": {"value": "hcai_1"}}}}}}
+    handle_test_provider_submit(Mock(), {"user": {"id": ADMIN_USER_ID}}, client, view)
+
+    assert "429 rate limited" in fc.get_dead_providers()["hcai_1"]
+
+
+def test_test_all_rewrites_the_cache_like_a_background_refresh_and_skips_byok(monkeypatch):
+    from agent import fallback_cache as fc
+    fc.mark_dead("hcai_0", "earlier failure")
+    order = [("byok", {"model": "b"}), ("hcai_0", {"model": "m0"}), ("groq_0", {"model": "m1"})]
+    _call(monkeypatch, order, [
+        ("byok", True, "BYOK", 0.1, "ok"),
+        ("hcai_0", True, "HCAI", 0.5, "ok"),
+        ("groq_0", False, "Groq", 0.3, "404"),
+    ])
+
+    assert fc.get_working_provider() == "hcai_0"  # BYOK is per-user, never cached
+    assert fc.get_dead_providers() == {"groq_0": "provider test failed"}

@@ -56,9 +56,38 @@ def set_working_provider(provider_name: str):
     with _cache_lock:
         cache = _load_cache()
         cache["working"] = {"provider": provider_name, "timestamp": time.time()}
-        cache.setdefault("dead", {}).pop(provider_name, None)
+        _clear_dead_marks(cache, provider_name)
         _save_cache(cache)
     logger.info(f"Fallback cache: working provider -> {provider_name}")
+
+
+def mark_alive(provider_name: str) -> None:
+    """A provider just worked (a forced [!WITH:tag] run, a provider test):
+    clear its dead mark, and its family's, without making it the preferred
+    `working` provider — that stays reserved for the normal fallback order,
+    so one forced run of a low-priority model doesn't reorder everyone else's."""
+    with _cache_lock:
+        cache = _load_cache()
+        cleared = _clear_dead_marks(cache, provider_name)
+        if cleared:
+            _save_cache(cache)
+    if cleared:
+        logger.info(f"Fallback cache: {provider_name} succeeded, cleared dead mark(s): {', '.join(cleared)}")
+
+
+def _clear_dead_marks(cache: dict, provider_name: str) -> list[str]:
+    """Drop `provider_name`'s dead mark and its family's from `cache` in
+    place — one model of a family working proves the family-wide outage
+    (e.g. a shared account's spending cap) is over. Returns what was cleared."""
+    from agent.provider_config import provider_family
+
+    cleared = []
+    if cache.setdefault("dead", {}).pop(provider_name, None) is not None:
+        cleared.append(provider_name)
+    family = provider_family(provider_name)
+    if cache.setdefault("dead_families", {}).pop(family, None) is not None:
+        cleared.append(f"family '{family}'")
+    return cleared
 
 
 def get_dead_providers() -> dict:
@@ -129,12 +158,13 @@ def get_dead_families() -> dict:
         }
 
 
-def refresh_from_results(results: list[tuple[str, bool]]) -> None:
+def refresh_from_results(results: list[tuple[str, bool]], reason: str = "background refresh probe failed") -> None:
     """Atomically rewrite working/dead from a full-chain background probe.
 
     `results` is (provider_name, ok) pairs in fallback-priority order, as
     produced by agent.provider_probe.refresh_fallback_cache. The first ok=True
-    entry becomes the cached `working` provider; every ok=False entry gets a
+    entry becomes the cached `working` provider; every ok=True entry has its
+    dead marks (its own and its family's) cleared; every ok=False entry gets a
     fresh `dead` mark. A provider not present in `results` (e.g. BYOK, or one
     with no key configured) is left untouched — this function only updates
     entries it actually just tested.
@@ -151,9 +181,9 @@ def refresh_from_results(results: list[tuple[str, bool]]) -> None:
         dead = cache.setdefault("dead", {})
         for name, ok in results:
             if ok:
-                dead.pop(name, None)
+                _clear_dead_marks(cache, name)
             else:
-                dead[name] = {"since": now, "reason": "background refresh probe failed"}
+                dead[name] = {"since": now, "reason": reason}
 
         cache["last_refreshed_at"] = now
         _save_cache(cache)
