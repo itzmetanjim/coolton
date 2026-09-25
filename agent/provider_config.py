@@ -259,6 +259,7 @@ def build_provider_order(user_id: str | None = None, tag: str | None = None) -> 
             "base_url": pconf.get("api_url"),
             "api_key": api_key or "",
             "display": get_provider_display(model_entry, pmap),
+            "context_window": model_entry.get("context_window"),
         }
         if pconf.get("max_retries"):
             config["max_retries"] = pconf["max_retries"]

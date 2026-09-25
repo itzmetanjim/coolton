@@ -22,13 +22,17 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 logger = logging.getLogger(__name__)
 
 # What triggers a compaction pass, and how much survives it, both scale off
-# the smallest context window actually reachable in the provider fallback
-# chain (see get_min_context_window in provider_config.py, and
-# _compaction_budget below) — NOT a fixed constant. Providers.json has models
-# ranging from ~131K to 1M+ tokens; a threshold sized for the small end wastes
-# most of a 1M-token model's headroom, while one sized for the large end would
-# risk overflowing a 131K one. Deriving it per-turn from whichever models
-# could actually serve this turn keeps it safe either way.
+# the context window of the model actually in use (see _compaction_budget) —
+# NOT a fixed constant, and NOT the smallest window anywhere in the fallback
+# chain: providers.json has models from ~65K to 1M+ tokens, and sizing for
+# the smallest (a last-resort model that almost never serves a turn) made
+# every thread compact at ~23K tokens even on a 1M-token model. Instead:
+# - after a turn, the budget comes from the model that served it
+#   (AgentDeps.model_context_window);
+# - before each provider attempt, the fallback chain compacts just in time
+#   if the history doesn't fit THAT model's budget (see
+#   agent.agent._run_with_provider_chain), so falling back to a small model
+#   is still safe.
 #
 # Fractions of that context window: trigger compaction once accumulated
 # history would use more than this share of it, and keep this share as a
@@ -172,14 +176,23 @@ def _safe_split_index(messages: list[ModelMessage], keep_tail_tokens: int) -> in
     return split
 
 
-def maybe_compact_history(messages: list[ModelMessage], deps) -> list[ModelMessage]:
+def maybe_compact_history(
+    messages: list[ModelMessage], deps, context_window: int | None = None,
+) -> list[ModelMessage]:
     """Return `messages` unchanged if small enough, otherwise a compacted list: one
     synthetic summary message covering everything before the tail, plus the tail
-    kept verbatim. Never raises — falls back to the untouched history on any error."""
-    from agent.provider_config import get_min_context_window
+    kept verbatim. Never raises — falls back to the untouched history on any error.
 
+    The budget comes from `context_window` if given (the fallback chain passes the
+    model it's about to try), else the model this turn used
+    (deps.model_context_window), else — nothing ran, or it declared no window —
+    the smallest window reachable in the chain, the old conservative default."""
     total_tokens = _estimate_tokens(messages)
-    context_window = get_min_context_window(getattr(deps, "provider_tag_filter", None))
+    if not context_window:
+        context_window = getattr(deps, "model_context_window", 0) or 0
+    if not context_window:
+        from agent.provider_config import get_min_context_window
+        context_window = get_min_context_window(getattr(deps, "provider_tag_filter", None))
     threshold, keep_tail_tokens = _compaction_budget(context_window)
     if total_tokens <= threshold:
         return messages

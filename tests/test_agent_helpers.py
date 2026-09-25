@@ -2313,3 +2313,36 @@ def test_subagent_runs_leave_the_turns_model_display_alone(monkeypatch, clean_en
 
     assert shown == []
     assert deps.model_used == "hcai_1 / main-model"
+
+
+def _run_chain_with_history(monkeypatch, window: int, history: list):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(agent_mod, "_resolve_provider_order", lambda user_id, tag=None: [("p_0", {"model": "m", "context_window": window})])
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+    monkeypatch.setattr("agent.history_compaction._summarize", lambda transcript, deps: "summary of earlier turns")
+    seen = {}
+
+    def run_sync(**kwargs):
+        seen["history"] = kwargs["message_history"]
+        return SimpleNamespace(output="ok")
+
+    deps = SimpleNamespace(user_id="U1", provider_tag_filter=None, plan_ts=None, last_attempt_messages=None)
+    agent_mod._run_with_provider_chain(SimpleNamespace(run_sync=run_sync), {"message_history": history}, deps)
+    return seen["history"], deps
+
+
+def test_chain_compacts_just_in_time_only_for_a_model_too_small_for_the_history(monkeypatch, clean_env):
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    from agent import history_compaction as hc
+    small_threshold, _ = hc._compaction_budget(65_536)
+    history = [ModelResponse(parts=[TextPart(content="x" * 4000)]) for _ in range(small_threshold // 1000 + 5)]
+
+    sent, deps = _run_chain_with_history(monkeypatch, 1_050_000, history)
+    assert sent is history  # fits a 1M-token model: untouched
+    assert deps.model_context_window == 1_050_000
+
+    sent, _ = _run_chain_with_history(monkeypatch, 65_536, history)
+    assert len(sent) < len(history)  # compacted before trying the 65K model
+    assert "summary of earlier turns" in str(sent[0])
