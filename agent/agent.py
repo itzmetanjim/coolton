@@ -2967,6 +2967,25 @@ def run_agent(text, deps, message_history=None, images=None):
                 pass
 
 
+def _fit_history_to_model(run_kwargs: dict, deps, prov_config: dict) -> None:
+    """Record the window of the model about to be tried, and compact the
+    history first if it doesn't fit that model's budget — so compaction only
+    happens when a turn actually lands on a model too small for the thread,
+    not pre-emptively for the smallest model anywhere in the chain (see
+    agent.history_compaction)."""
+    window = prov_config.get("context_window") or 0
+    deps.model_context_window = window
+    history = run_kwargs.get("message_history")
+    if not window or not history:
+        return
+    from agent.history_compaction import maybe_compact_history
+
+    compacted = maybe_compact_history(history, deps, context_window=window)
+    if compacted is not history:
+        logger.info(f"Compacted history to fit {prov_config.get('model')} ({window:,}-token window) before trying it")
+        run_kwargs["message_history"] = compacted
+
+
 def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | None = None):
     """Run an agent against the provider fallback chain, returning (result, provider_name).
 
@@ -3096,6 +3115,8 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
             attempt_started = time.perf_counter()
             if timer and run_label is None:
                 timer.current_provider = provider_name
+            if run_label is None:
+                _fit_history_to_model(run_kwargs, deps, prov_config)
             try:
                 # Create model object if custom base_url (BYOK, HCAI)
                 model_obj = None

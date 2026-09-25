@@ -334,3 +334,35 @@ def test_maybe_compact_history_never_orphans_a_tool_return(monkeypatch):
     # never sent to a provider with the call summarized away.
     assert call_ids_with_returns <= call_ids_with_calls
     assert "call_1" in call_ids_with_returns  # confirms the scenario actually exercised the guard
+
+
+# ---------------------------------------------------------------------------
+# The budget follows the model actually in use, not the smallest one anywhere
+# in the chain (a 65K last-resort model made every thread compact at ~23K
+# tokens even on a 1M-token model).
+# ---------------------------------------------------------------------------
+
+
+def test_budget_comes_from_the_model_that_served_the_turn(monkeypatch):
+    monkeypatch.setattr(hc, "_summarize", lambda transcript, deps: "dense summary text")
+    min_window = _patch_context_window(monkeypatch, 65_536)
+    small_threshold, _ = hc._compaction_budget(65_536)
+    messages = [_tokens_msg(1000) for _ in range(small_threshold // 1000 + 5)]
+
+    assert hc.maybe_compact_history(messages, _deps(model_context_window=1_050_000)) == messages
+    min_window.assert_not_called()
+
+
+def test_explicit_context_window_wins_over_the_turns_model(monkeypatch):
+    monkeypatch.setattr(hc, "_summarize", lambda transcript, deps: "dense summary text")
+    small_threshold, _ = hc._compaction_budget(65_536)
+    messages = [_tokens_msg(1000) for _ in range(small_threshold // 1000 + 5)]
+
+    result = hc.maybe_compact_history(messages, _deps(model_context_window=1_050_000), context_window=65_536)
+    assert result != messages
+
+
+def test_falls_back_to_the_chain_minimum_when_no_model_ran(monkeypatch):
+    min_window = _patch_context_window(monkeypatch, 128_000)
+    hc.maybe_compact_history(_messages(2), _deps(model_context_window=0))
+    min_window.assert_called_once()
