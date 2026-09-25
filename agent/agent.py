@@ -2967,12 +2967,19 @@ def run_agent(text, deps, message_history=None, images=None):
                 pass
 
 
-def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
+def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | None = None):
     """Run an agent against the provider fallback chain, returning (result, provider_name).
 
     Shared by run_agent (main orchestrator) and subagents (research/explore/summarizer).
     Uses the global fallback cache: skips providers known to be dead and prefers the
     last-known-good provider first.
+
+    `run_label` marks a run that isn't the turn's own model call (a subagent, which
+    shares the turn's deps): it then leaves the turn's "Model: ..." display and
+    deps.model_used alone — otherwise a subagent mid-turn relabels the turn's model,
+    and history compaction's summarizer after the turn appended a stray model step
+    to the finished web conversation, which the UI showed as a new turn still
+    running — and its [!DEBUG] attempts are labelled with it.
     """
     from agent.fallback_cache import mark_alive, mark_dead, mark_family_dead, set_working_provider
     from agent.plan_block import set_model_task
@@ -3080,13 +3087,14 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
         # synchronously, so waiting for it to return was the only signal callers
         # had before). Reused across retries of the same provider and updated
         # again if it falls back to a different one.
-        set_model_task(deps, f"{provider_name} / {model_name}")
+        if run_label is None:
+            set_model_task(deps, f"{provider_name} / {model_name}")
         timer = getattr(deps, "debug_timer", None)
         for attempt in range(provider_max_retries):
             raw_response: dict = {}
-            attempt_label = f"{provider_name} / {model_name} (attempt {attempt + 1})"
+            attempt_label = f"{run_label + ': ' if run_label else ''}{provider_name} / {model_name} (attempt {attempt + 1})"
             attempt_started = time.perf_counter()
-            if timer:
+            if timer and run_label is None:
                 timer.current_provider = provider_name
             try:
                 # Create model object if custom base_url (BYOK, HCAI)
@@ -3146,7 +3154,8 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps):
                         mark_alive(provider_name)
                     else:
                         set_working_provider(provider_name)
-                deps.model_used = f"{provider_name} / {model_name}"
+                if run_label is None:
+                    deps.model_used = f"{provider_name} / {model_name}"
                 return result, provider_name
 
             except HaltRun:

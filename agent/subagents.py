@@ -113,7 +113,7 @@ def run_subagent(target: str, task: str, deps: AgentDeps) -> str:
     )
 
     logger.info(f"Running subagent: {target}")
-    result, provider = _run_with_provider_chain(agent_dynamic, run_kwargs, deps)
+    result, provider = _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label=f"{target} subagent")
     output = (result.output or "").strip()
     logger.info(f"Subagent {target} done (provider: {provider}, {len(output)} chars)")
     return output

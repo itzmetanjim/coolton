@@ -2294,3 +2294,22 @@ def test_forced_tag_success_marks_the_model_up_without_making_it_preferred(monke
     assert "hcai_0" not in fc.get_dead_providers()
     assert "hcai" not in fc.get_dead_families()
     assert fc.get_working_provider() == "groq_0"
+
+
+def test_subagent_runs_leave_the_turns_model_display_alone(monkeypatch, clean_env):
+    """History compaction's summarizer runs after the turn with the turn's own
+    deps; announcing its model appended a step to the finished web
+    conversation, which the web UI rendered as a new turn stuck "working"."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(agent_mod, "_resolve_provider_order", lambda user_id, tag=None: [("hcai_0", {"model": "openai/luna"})])
+    shown = []
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda deps, model_used, status="complete": shown.append(model_used))
+
+    deps = SimpleNamespace(user_id="U1", provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None, model_used="hcai_1 / main-model")
+    agent_mod._run_with_provider_chain(
+        SimpleNamespace(run_sync=lambda **kw: SimpleNamespace(output="summary")), {}, deps, run_label="summarizer subagent",
+    )
+
+    assert shown == []
+    assert deps.model_used == "hcai_1 / main-model"
