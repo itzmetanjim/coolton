@@ -976,6 +976,11 @@ def render_frame(fi):
     if b < 0 or b >= T.TOTAL_BEATS:
         return np.full((H, W, 3), BLACK, np.uint8).tobytes()
     cv, fx, hud = scene(b, fi)
+    return finish(cv, fx, hud, fi, lambda d: always_hud(d, b, fi))
+
+
+def finish(cv, fx, hud, fi, frame_hud=None):
+    """Dither + palette + HUD + post FX -> raw rgb24 bytes."""
     rng = np.random.default_rng(fi * 7919)
 
     # camera punch happens *before* dithering so the Bayer grid stays screen-locked
@@ -990,7 +995,8 @@ def render_frame(fi):
     d = ImageDraw.Draw(img)
     for h in hud:
         h(d, img)
-    always_hud(d, b, fi)
+    if frame_hud:
+        frame_hud(d)
 
     a = np.asarray(img).copy()
 
