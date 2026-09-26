@@ -57,5 +57,14 @@ from the 140 BPM layout.
 Other flags: `--frames a:b` renders a preview range, `--crf` sets quality
 (28 by default, about 80 MB; dithering is hard on codecs) and `--lossless` writes a lossless master.
 
+For a sub-30 MB 720p cut (the 3px dither blocks map exactly to 2px):
+
+```bash
+python render.py --lossless --out master.mkv
+ffmpeg -i master.mkv -vf scale=720:1280:flags=area -c:v libx264 -preset slow -b:v 4400k -pass 1 -an -f mp4 /dev/null
+ffmpeg -i master.mkv -vf scale=720:1280:flags=area -c:v libx264 -preset slow -b:v 4400k -pass 2 \
+       -pix_fmt yuv420p -c:a aac -b:a 160k -movflags +faststart heaven_root_720p.mp4
+```
+
 Fonts (all SIL OFL, from Google Fonts): Anton, UnifrakturMaguntia, VT323,
 Press Start 2P.
