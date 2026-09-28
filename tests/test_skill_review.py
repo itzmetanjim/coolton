@@ -22,6 +22,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(agent_mod, "_skill_dirs", lambda: [str(tmp_path / "skills"), str(tmp_path / ".agents" / "skills")])
     monkeypatch.setattr(skill_review, "PROPOSALS_FILE", str(tmp_path / "skill_proposals.json"))
+    monkeypatch.delenv("AUTO_ACCEPT_SKILLS", raising=False)
     dms = []
     monkeypatch.setattr(skill_review, "notify_admin", lambda text, blocks=None: dms.append((text, blocks)))
     return SimpleNamespace(root=tmp_path, dms=dms)
@@ -155,3 +156,42 @@ def test_rejected_install_deletes_the_staged_files(repo):
     _click(handle_skill_review_reject, _proposal_id(repo.dms))
     assert not os.path.exists(staging)
     assert not (repo.root / ".agents" / "skills" / "cool-skill").exists()
+
+
+# ---------------------------------------------------------------------------
+# AUTO_ACCEPT_SKILLS — everything applies immediately, with an FYI DM instead
+# of an Approve/Reject one.
+# ---------------------------------------------------------------------------
+
+
+def test_auto_accept_applies_another_users_change_and_sends_an_fyi(repo, monkeypatch):
+    monkeypatch.setenv("AUTO_ACCEPT_SKILLS", "true")
+    result = agent_mod.create_skill(_ctx(USER), "Cool Skill", "does a thing", "Steps.")
+
+    assert (repo.root / "skills" / "cool-skill" / "SKILL.md").exists()
+    assert "LIVE now" in result and "AUTO_ACCEPT_SKILLS is on" in result
+    assert len(repo.dms) == 1
+    text, blocks = repo.dms[0]
+    assert "auto-accepted" in text and USER in text
+    assert blocks is None  # FYI only, no Approve/Reject buttons
+    assert not os.path.exists(skill_review.PROPOSALS_FILE)
+
+
+def test_auto_accept_covers_kevinton_too(repo, monkeypatch):
+    monkeypatch.setenv("AUTO_ACCEPT_SKILLS", "1")
+    agent_mod.create_skill(_ctx(ADMIN_USER_ID, skill_review_required=True), "Kev Skill", "does a thing", "Steps.")
+    assert (repo.root / "skills" / "kev-skill" / "SKILL.md").exists()
+    assert "kevinton" in repo.dms[0][0]
+
+
+def test_maintainers_own_changes_send_no_fyi_even_with_auto_accept(repo, monkeypatch):
+    monkeypatch.setenv("AUTO_ACCEPT_SKILLS", "true")
+    agent_mod.create_skill(_ctx(ADMIN_USER_ID), "Mine", "does a thing", "Steps.")
+    assert repo.dms == []
+
+
+def test_a_falsy_auto_accept_still_reviews(repo, monkeypatch):
+    monkeypatch.setenv("AUTO_ACCEPT_SKILLS", "false")
+    result = agent_mod.create_skill(_ctx(USER), "Cool Skill", "does a thing", "Steps.")
+    assert result.startswith("Submitted for review")
+    assert not (repo.root / "skills" / "cool-skill").exists()

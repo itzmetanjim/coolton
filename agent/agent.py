@@ -2267,7 +2267,7 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
         preview = "\n\n".join(_staged_skill_preview(staging, slug) for slug in imported)
         msg = skill_review.submit(spec, ctx.deps, f"install {', '.join(imported)} from `{package}`", preview)
     else:
-        msg = _applied_directly(apply_skill_change(spec))
+        msg = _applied_directly(apply_skill_change(spec), ctx.deps, f"install {', '.join(imported)} from `{package}`")
     if rejected:
         msg += f" Skipped invalid entries: {', '.join(rejected)}."
     return msg
@@ -2697,16 +2697,20 @@ def _apply_or_submit_skill_change(ctx: RunContext[AgentDeps], spec: dict, descri
 
     if skill_review.needs_review(ctx.deps):
         return skill_review.submit(spec, ctx.deps, description, preview)
-    return _applied_directly(apply_skill_change(spec))
+    return _applied_directly(apply_skill_change(spec), ctx.deps, description)
 
 
-def _applied_directly(result: str) -> str:
+def _applied_directly(result: str, deps, description: str) -> str:
     """Say outright that a change skipped review — without this the model,
     primed by every "goes to review unless the maintainer asked" note, told the
-    maintainer their already-live skill was pending review."""
+    maintainer their already-live skill was pending review. Also sends the
+    maintainer an FYI when AUTO_ACCEPT_SKILLS is what let it through."""
+    from agent import skill_review
+
     if result.startswith("Error"):
         return result
-    return f"{result} This is LIVE now — it did NOT go to review (the maintainer asked for it directly)."
+    skill_review.note_auto_accepted(deps, description)
+    return f"{result} This is LIVE now — it did NOT go to review ({skill_review.skip_reason(deps)})."
 
 
 @agent.tool

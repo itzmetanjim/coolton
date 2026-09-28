@@ -32,8 +32,34 @@ _PREVIEW_CHARS = 2500
 _lock = threading.Lock()
 
 
-def needs_review(deps) -> bool:
+def auto_accept_enabled() -> bool:
+    """AUTO_ACCEPT_SKILLS (off unless set truthy): apply every skill change
+    immediately, including other users' and kevinton's, instead of queueing
+    it for review. The maintainer still gets an FYI DM for each one that
+    would otherwise have been reviewed (see note_auto_accepted)."""
+    return os.environ.get("AUTO_ACCEPT_SKILLS", "").strip().lower() in ("true", "1", "yes", "on")
+
+
+def _review_policy_applies(deps) -> bool:
     return bool(getattr(deps, "skill_review_required", False)) or getattr(deps, "user_id", "") != ADMIN_USER_ID
+
+
+def needs_review(deps) -> bool:
+    return _review_policy_applies(deps) and not auto_accept_enabled()
+
+
+def skip_reason(deps) -> str:
+    """Why a change that didn't go to review skipped it — for the tool result."""
+    return "AUTO_ACCEPT_SKILLS is on" if _review_policy_applies(deps) else "the maintainer asked for it directly"
+
+
+def note_auto_accepted(deps, description: str) -> None:
+    """FYI DM to the maintainer for a change AUTO_ACCEPT_SKILLS let through
+    that would otherwise have waited for their review."""
+    if not (_review_policy_applies(deps) and auto_accept_enabled()):
+        return
+    who = "kevinton" if getattr(deps, "skill_review_required", False) else f"<@{getattr(deps, 'user_id', '') or '?'}>"
+    notify_admin(f":mag: Skill change auto-accepted (AUTO_ACCEPT_SKILLS) from {who}: {description}")
 
 
 def new_staging_dir(repo_root: str) -> str:
