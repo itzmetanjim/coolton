@@ -78,6 +78,13 @@ def check_mcp_health() -> tuple[bool, str]:
     return asyncio.run(_probe())
 
 
+def get_cached_health() -> dict:
+    """The last background check's result (healthy, last_checked, last_detail),
+    without probing — {} if it hasn't run yet."""
+    with _lock:
+        return dict(_load())
+
+
 def refresh_mcp_health() -> None:
     """Probe the Slack MCP Server and DM the admin on a healthy<->down transition, or
     periodically while it stays down so an outage doesn't get forgotten about."""

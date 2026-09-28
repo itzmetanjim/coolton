@@ -1041,3 +1041,47 @@ def test_app_mentioned_appends_unseen_thread_messages_to_existing_history(ctx):
     assert unseen.call_args.args[3] == "100.000"
     assert unseen.call_args.kwargs["exclude_ts"] == "111.111"
     assert run_turn.call_args.kwargs["history"] == ["old-history", "header", "unseen"]
+
+
+# ---------------------------------------------------------------------------
+# !help / !connections — answered ephemerally, never start a turn
+# ---------------------------------------------------------------------------
+
+
+def test_app_mentioned_help_replies_ephemerally_without_a_turn(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
+        _mention(ctx, text="!help")
+    run_turn.assert_not_called()
+    kwargs = ctx.client.chat_postEphemeral.call_args.kwargs
+    assert kwargs["user"] == "U1" and kwargs["channel"] == "C123"
+    assert "!connections" in kwargs["text"] and "!stop" in kwargs["text"]
+
+
+def test_message_connections_in_dm_lists_the_users_setup(monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr("agent.mcp_health.get_cached_health", lambda: {"healthy": False, "last_detail": "timeout"})
+    monkeypatch.setattr("agent.mcp_server_store.get_user_servers", lambda uid: [{"id": "m1", "name": "Notion", "url": "https://mcp.notion.com/mcp"}])
+    monkeypatch.setattr("agent.byok_store.get_user_endpoints", lambda uid: [{"id": "e1", "name": "mine", "model": "gpt-x"}])
+    monkeypatch.setattr("agent.byok_store.get_text_endpoint_id", lambda uid: "e1")
+    monkeypatch.setattr("agent.byok_store.get_image_endpoint_id", lambda uid: None)
+
+    with patch("listeners.events.message.run_agent_turn") as run_turn:
+        client, context = Mock(), Mock(channel_id="D123", user_id="U1")
+        handle_message(client, context, {"type": "message", "text": "!connections", "ts": "1.1", "channel_type": "im"}, Mock(), Mock(), Mock(), None)
+    run_turn.assert_not_called()
+    text = client.chat_postEphemeral.call_args.kwargs["text"]
+    assert "Slack MCP server: down (timeout)" in text
+    assert "Notion" in text and "Context7" in text
+    assert "`gpt-x`, used for text" in text
+
+
+def test_help_mentioned_mid_sentence_is_a_normal_prompt(ctx):
+    from unittest.mock import patch
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
+        _mention(ctx, text="<@BOT1> what does !help do?")
+    run_turn.assert_called_once()
+    ctx.client.chat_postEphemeral.assert_not_called()

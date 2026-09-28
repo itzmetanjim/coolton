@@ -11,6 +11,7 @@ from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import join_thread
 from agent.steering_store import queue_steering_message
 from agent.stop_store import is_stop_command, request_stop
+from listeners.commands import parse_command, respond
 from thread_context import conversation_store
 from listeners.events.turn import run_agent_turn
 
@@ -75,6 +76,12 @@ def handle_app_mentioned(
                 text="⏹️ stopping all your running coolton instances…",
                 thread_ts=thread_ts,
             )
+            return
+
+        # !help / !connections: answered ephemerally, no turn started.
+        command = parse_command(text, bot_id)
+        if command:
+            respond(client, command, channel_id, context.user_id, thread_ts)
             return
 
         # !ban / !unban: silently ignored (not even a "not authorized" reply)

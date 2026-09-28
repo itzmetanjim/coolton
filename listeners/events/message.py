@@ -13,6 +13,7 @@ from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel
 from agent.leave_thread_store import is_thread_engaged
 from agent.steering_store import queue_steering_message
 from agent.stop_store import is_stop_command, request_stop
+from listeners.commands import parse_command, respond
 from thread_context import conversation_store
 from listeners.events.turn import run_agent_turn
 
@@ -112,6 +113,15 @@ def handle_message(
                 text="⏹️ stopping all your running coolton instances…",
                 thread_ts=thread_ts,
             )
+        return
+
+    # !help / !connections: same addressing rule as !stop (a DM or a code
+    # channel's channel level; mentions go through handle_app_mentioned).
+    # Answered ephemerally without starting a turn.
+    command = parse_command(text, bot_id)
+    if command:
+        if is_dm or at_channel_level:
+            respond(client, command, channel_id, user_id, None if is_dm else thread_ts)
         return
 
     # !ban / !unban: only handled in a DM, same reasoning as !stop above — a
