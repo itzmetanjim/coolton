@@ -2854,7 +2854,7 @@ def run_agent(text, deps, message_history=None, images=None):
     # by thread, sender, or turn (CURRENT CONTEXT, the sender's custom
     # instructions, message_ts, the current model) goes at the end instead: in
     # the user prompt, via `dynamic_context` below.
-    full_prompt = platform.system_prompt
+    full_prompt = platform.system_prompt + _current_year_note()
     dynamic_context = platform.build_context_prompt(deps).strip() + "\n\n"
     if custom_instructions:
         dynamic_context += f"## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n\n"
@@ -2980,6 +2980,21 @@ def run_agent(text, deps, message_history=None, images=None):
                     Sandbox.connect(sandbox_id).pause()
             except Exception:
                 pass
+
+
+def _current_year_note() -> str:
+    """The current year, at the very end of the system prompt. Models trained
+    before it otherwise assume their training year and treat real search
+    results as "future dates". Only the year, not the full date: the system
+    prompt must stay byte-identical for the shared prompt cache, and a year
+    changes that once a year instead of every day."""
+    import datetime
+
+    year = datetime.datetime.now(datetime.timezone.utc).year
+    return (
+        f"\n\n## CURRENT YEAR\nIt is {year}. Your training data may end earlier — dates up to "
+        f"and including {year} are not \"in the future\"; trust them.\n"
+    )
 
 
 def _fit_history_to_model(run_kwargs: dict, deps, prov_config: dict) -> None:

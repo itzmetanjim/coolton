@@ -139,3 +139,15 @@ def test_custom_instructions_go_in_the_user_prompt_not_the_system_prompt(capture
 
     assert "Be extra concise." not in captured_runs[0][0]._system_prompts[0]
     assert "Be extra concise." in captured_runs[0][1]["user_prompt"]
+
+
+def test_system_prompt_ends_with_the_current_year(captured_runs):
+    """Models otherwise assume their training year and call real search
+    results "future dates"."""
+    import datetime
+
+    agent_mod.run_agent("hello", _deps("100.100"))
+    system_prompt = captured_runs[0][0]._system_prompts[0]
+    year = datetime.datetime.now(datetime.timezone.utc).year
+    assert system_prompt.rstrip().endswith("trust them.")
+    assert f"It is {year}." in system_prompt.split("## CURRENT YEAR")[-1]
