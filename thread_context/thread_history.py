@@ -56,9 +56,25 @@ def _timestamp(msg: dict):
         return None
 
 
+def _attachments_note(msg: dict) -> str:
+    """" [attachments: name (F123), ...]" for a message's files, so the model
+    knows they exist and can fetch one by id (get_slack_file)."""
+    files = [f for f in (msg.get("files") or []) if isinstance(f, dict)]
+    if not files:
+        return ""
+    described = ", ".join(
+        f"{f.get('name') or f.get('title') or f.get('filetype') or 'file'} ({f.get('id', '?')})" for f in files
+    )
+    return f" [attachments: {described}]"
+
+
+def _has_content(msg: dict) -> bool:
+    return bool((msg.get("text") or "").strip() or msg.get("files"))
+
+
 def _to_model_message(client, msg: dict, name_cache: dict, coolton_bot_id: str):
     """One Slack thread message as model history (None if it can't be built)."""
-    text = msg.get("text", "")
+    text = (msg.get("text") or "") + _attachments_note(msg)
     try:
         is_bot_message = bool(msg.get("bot_id")) or msg.get("subtype") == "bot_message"
         if is_bot_message and coolton_bot_id and msg.get("user") == coolton_bot_id:
@@ -129,9 +145,9 @@ def build_unseen_messages(
             continue
         if ts <= after or msg.get("ts") == exclude_ts:
             continue
-        if not text.strip() or text.strip().startswith("##") or msg.get("user") in own_ids:
+        if not _has_content(msg) or text.strip().startswith("##") or msg.get("user") in own_ids:
             continue
-        if text.strip() in seen_text:
+        if text.strip() and text.strip() in seen_text:
             continue
         unseen.append(msg)
     if not unseen:
@@ -168,7 +184,7 @@ def build_thread_context(
     # thread's history for the first time.
     prior = [
         m for m in fetched
-        if m.get("ts") != exclude_ts and m.get("text") and not m["text"].strip().startswith("##")
+        if m.get("ts") != exclude_ts and _has_content(m) and not (m.get("text") or "").strip().startswith("##")
     ]
     if not prior:
         return None

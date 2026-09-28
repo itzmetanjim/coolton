@@ -147,3 +147,24 @@ def test_unseen_fetch_failure_returns_none():
     client = Mock()
     client.conversations_replies.return_value = {"ok": False, "error": "ratelimited"}
     assert build_unseen_messages(client, "C1", "1.0", "5.0", exclude_ts="10.0", history=[]) is None
+
+
+def test_attachments_are_listed_with_their_file_ids():
+    client = _client_with_messages([
+        {"ts": "1.0", "user": "U1", "text": "here's the log", "files": [{"id": "F0AAA", "name": "build.log"}]},
+        {"ts": "2.0", "user": "U2", "text": "", "files": [{"id": "F0BBB", "name": "screenshot.png"}, {"id": "F0CCC", "title": "notes"}]},
+    ])
+    history = build_thread_context(client, "C1", "1.0", exclude_ts="9.0")
+    texts = [p.content for m in history for p in m.parts]
+    assert texts[0].endswith("here's the log [attachments: build.log (F0AAA)]")
+    # A file-only message is kept, not dropped for having no text.
+    assert texts[1].endswith(" [attachments: screenshot.png (F0BBB), notes (F0CCC)]")
+
+
+def test_unseen_catch_up_includes_file_only_messages():
+    client = _client_with_messages([
+        {"ts": "6.0", "user": "U3", "text": "", "files": [{"id": "F0DDD", "name": "diagram.png"}]},
+        {"ts": "10.0", "user": "U1", "text": "<@UBOT> thoughts?"},
+    ])
+    unseen = build_unseen_messages(client, "C1", "1.0", "5.0", exclude_ts="10.0", history=[])
+    assert unseen[1].parts[0].content.endswith("[attachments: diagram.png (F0DDD)]")
