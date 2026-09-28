@@ -12,6 +12,7 @@ from pydantic_ai import RunContext
 from pydantic_ai import Agent, ToolOutput
 from pydantic_ai.messages import BinaryContent, ToolReturn
 from pydantic_ai.capabilities import Hooks, PrepareTools
+from pydantic_ai.toolsets import DeferredLoadingToolset, FunctionToolset
 from dataclasses import replace
 from agent.deps import AgentDeps
 from agent.surface import get_surface as _surface
@@ -2879,12 +2880,14 @@ def run_agent(text, deps, message_history=None, images=None):
     all_tools = list(agent._function_toolset.tools.values())
     if not is_vision:
         all_tools = [t for t in all_tools if t.name != "see_image_from_sandbox"]
-    tool_functions = [t.function for t in all_tools]
+    core_functions = [t.function for t in all_tools if t.name not in DEFERRED_TOOLS]
+    deferred_functions = [t.function for t in all_tools if t.name in DEFERRED_TOOLS]
+    toolsets = [DeferredLoadingToolset(FunctionToolset(deferred_functions)), *toolsets]
 
     agent_dynamic = Agent(
         deps_type=AgentDeps,
         system_prompt=full_prompt,
-        tools=tool_functions,
+        tools=core_functions,
         output_type=OUTPUT_TYPE,
     )
 
@@ -2994,6 +2997,31 @@ def run_agent(text, deps, message_history=None, images=None):
                     Sandbox.connect(sandbox_id).pause()
             except Exception:
                 pass
+
+
+# Tools hidden from the model until it finds them with `search_tools` (which
+# pydantic-ai's ToolSearch adds automatically whenever deferred tools exist).
+# Every tool definition is sent on every request, so the rarely-used ones here
+# were most of a ~46k-token base prompt; the model loads them on demand instead.
+# Keep anything most turns need OUT of this set.
+DEFERRED_TOOLS = frozenset({
+    "agentmail_create_inbox", "agentmail_list_inboxes", "agentmail_list_messages",
+    "agentmail_read_message", "agentmail_send_email",
+    "huddlefm_request_control_tool", "huddlefm_command_tool",
+    "create_slack_bot_tool", "check_bot_install_status_tool", "register_bot_tokens_tool",
+    "update_slack_bot_manifest_tool", "wrangler_bot_deploy_tool",
+    "create_scheduled_task_tool", "list_scheduled_tasks_tool", "pause_scheduled_task_tool",
+    "resume_scheduled_task_tool", "delete_scheduled_task_tool",
+    "create_code_channel_tool",
+    "analyze_csv_tool", "run_sql_on_csv_tool", "run_python_data_analysis_tool", "extract_tar_gz_tool",
+    "install_opencode_tool", "run_opencode_tool",
+    "send_html_embed_tool", "send_whiteboard_embed_tool", "render_mermaid_tool",
+    "upload_emoji_tool", "submit_feedback_tool",
+    "create_skill", "rename_skill", "delete_skill", "install_skill",
+    "set_sandbox_keepalive_tool", "computer_stream_tool", "agent_browser_stream_tool",
+    "invite_coolton_user_to_channel", "remove_reaction_tool", "leave_channel_tool",
+    "slack_api_call_as_bot_tool",
+})
 
 
 def _current_year_note() -> str:

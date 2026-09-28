@@ -372,6 +372,7 @@ TOOL_DISPLAY_NAMES = {
     "join_thread_tool": "Joining thread",
     "send_message": "Sending message",
     "get_datetime": "Checking the date and time",
+    "search_tools": "Looking for a tool",
     "agentmail_create_inbox": "Creating AgentMail inbox",
     "agentmail_list_inboxes": "Listing AgentMail inboxes",
     "agentmail_list_messages": "Listing AgentMail messages",

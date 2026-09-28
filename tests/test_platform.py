@@ -61,9 +61,9 @@ def test_toolsets_includes_users_registered_mcp_servers(monkeypatch):
 
     toolsets = SlackPlatform().toolsets(deps)
 
-    # one for the official Slack MCP server, one for the user's registered server
-    assert len(toolsets) == 2
-    assert toolsets[1].kwargs["id"] == "user_mcp_mcp_abc"
+    # the official Slack MCP server, built-in Context7, then the user's registered server
+    assert len(toolsets) == 3
+    assert toolsets[2].wrapped.kwargs["id"] == "user_mcp_mcp_abc"
 
 
 def test_toolsets_skips_user_mcp_when_none_registered(monkeypatch):
@@ -72,7 +72,7 @@ def test_toolsets_skips_user_mcp_when_none_registered(monkeypatch):
     monkeypatch.setattr("agent.platforms.slack.MCPToolset", lambda transport, **kwargs: SimpleNamespace(kwargs=kwargs))
 
     toolsets = SlackPlatform().toolsets(deps)
-    assert len(toolsets) == 1
+    assert len(toolsets) == 2  # Slack MCP + built-in Context7
 
 
 def test_toolsets_one_broken_user_server_does_not_break_others(monkeypatch):
@@ -97,9 +97,9 @@ def test_toolsets_one_broken_user_server_does_not_break_others(monkeypatch):
     monkeypatch.setattr("agent.platforms.slack.MCPToolset", fake_mcp_toolset)
 
     toolsets = SlackPlatform().toolsets(deps)
-    # official Slack MCP toolset + the one good user server, bad one dropped
-    assert len(toolsets) == 2
-    assert toolsets[1].kwargs["id"] == "user_mcp_mcp_good"
+    # official Slack MCP toolset + Context7 + the one good user server, bad one dropped
+    assert len(toolsets) == 3
+    assert toolsets[2].wrapped.kwargs["id"] == "user_mcp_mcp_good"
 
 
 def test_toolsets_no_user_id_skips_user_mcp_lookup(monkeypatch):

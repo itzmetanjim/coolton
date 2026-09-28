@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
+from pydantic_ai.toolsets import DeferredLoadingToolset, WrapperToolset
 
 from agent.platform import PlatformAdapter
 
@@ -37,6 +39,57 @@ def _load_system_prompt() -> str:
 
 
 SYSTEM_PROMPT = _load_system_prompt()
+
+
+CONTEXT7_MCP_URL = "https://mcp.context7.com/mcp"
+
+
+@dataclass
+class ResilientToolset(WrapperToolset[Any]):
+    """A toolset that can't fail the turn: if the wrapped one (a third-party
+    MCP server, like Context7) can't connect or list its tools, it logs and
+    offers no tools instead of raising. Without this, an outage of a server
+    every turn loads would break every turn."""
+
+    label: str = "toolset"
+    _failed: bool = field(default=False, repr=False)
+
+    async def __aenter__(self):
+        self._failed = False
+        try:
+            await super().__aenter__()
+        except Exception:
+            self._failed = True
+            logger.warning("%s unavailable this turn (connect failed); continuing without it", self.label, exc_info=True)
+        return self
+
+    async def __aexit__(self, *args):
+        if self._failed:
+            return None
+        try:
+            return await super().__aexit__(*args)
+        except Exception:
+            logger.warning("%s failed to disconnect cleanly", self.label, exc_info=True)
+            return None
+
+    async def get_tools(self, ctx):
+        if self._failed:
+            return {}
+        try:
+            return await super().get_tools(ctx)
+        except Exception:
+            self._failed = True
+            logger.warning("%s unavailable this turn (listing tools failed); continuing without it", self.label, exc_info=True)
+            return {}
+
+
+def _context7_toolset():
+    """Context7 (up-to-date library/framework docs), built in for everyone.
+    Works without a key (rate-limited); CONTEXT7_API_KEY raises the limit."""
+    key = os.environ.get("CONTEXT7_API_KEY", "")
+    headers = {"CONTEXT7_API_KEY": key} if key else {}
+    transport = StreamableHttpTransport(CONTEXT7_MCP_URL, headers=headers)
+    return DeferredLoadingToolset(ResilientToolset(MCPToolset(transport, id="context7"), label="Context7 MCP"))
 
 
 class SlackPlatform(PlatformAdapter):
@@ -127,7 +180,7 @@ class SlackPlatform(PlatformAdapter):
                 # Same read and attribution rules as coolton's own Slack tools
                 # (see agent/slack_mcp_guard.py).
                 from agent.slack_mcp_guard import GuardedSlackMCPToolset
-                toolsets.append(GuardedSlackMCPToolset(MCPToolset(transport)))
+                toolsets.append(DeferredLoadingToolset(GuardedSlackMCPToolset(MCPToolset(transport))))
             except Exception as e:
                 logger.exception("Failed to create MCP server")
                 from agent.admin_alerts import notify_admin
@@ -137,6 +190,7 @@ class SlackPlatform(PlatformAdapter):
                     dedupe_key="mcp_construct_error", min_interval_seconds=1800,
                 )
 
+        toolsets.append(_context7_toolset())
         toolsets.extend(self._user_mcp_toolsets(getattr(deps, "user_id", None)))
         return toolsets
 
@@ -161,7 +215,7 @@ class SlackPlatform(PlatformAdapter):
             try:
                 headers = {"Authorization": f"Bearer {server['token']}"} if server.get("token") else {}
                 transport = StreamableHttpTransport(server["url"], headers=headers)
-                result.append(MCPToolset(transport, id=f"user_mcp_{server['id']}"))
+                result.append(DeferredLoadingToolset(MCPToolset(transport, id=f"user_mcp_{server['id']}")))
             except Exception:
                 logger.exception("Failed to build user MCP toolset %s (%s) for %s", server["id"], server["name"], user_id)
         return result

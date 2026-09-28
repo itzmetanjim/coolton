@@ -120,4 +120,5 @@ def test_slack_mcp_toolset_is_guarded():
     with patch("agent.platforms.slack.MCPToolset", return_value=Mock()), \
          patch("agent.mcp_server_store.get_user_servers", return_value=[]):
         toolset = SlackPlatform().toolsets(SimpleNamespace(user_id=ASKER, user_token="xoxp-test"))[0]
-    assert isinstance(toolset, GuardedSlackMCPToolset)
+    # Deferred (loaded on demand via search_tools), with the guard inside.
+    assert isinstance(toolset.wrapped, GuardedSlackMCPToolset)
