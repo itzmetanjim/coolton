@@ -11,7 +11,7 @@ import requests
 from pydantic_ai import RunContext
 from pydantic_ai import Agent, ToolOutput
 from pydantic_ai.messages import BinaryContent, ToolReturn
-from pydantic_ai.capabilities import Hooks, PrepareTools
+from pydantic_ai.capabilities import Hooks, PrepareTools, ProcessHistory
 from pydantic_ai.toolsets import DeferredLoadingToolset, FunctionToolset
 from dataclasses import replace
 from agent.deps import AgentDeps
@@ -2919,6 +2919,8 @@ def run_agent(text, deps, message_history=None, images=None):
         capabilities.append(surface_hooks)
 
     capabilities.append(build_skills_capability())
+    from agent.image_cap import cap_images
+    capabilities.append(ProcessHistory(cap_images))
     if getattr(deps, "debug_timer", None) is not None:
         from agent.debug_timing import build_timing_hooks
         capabilities.append(build_timing_hooks(deps.debug_timer))
