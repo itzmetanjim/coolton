@@ -3,13 +3,15 @@ of being sent on every request — the full tool list was most of a ~46k-token
 base prompt."""
 import asyncio
 import importlib
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelResponse, TextPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+import httpx
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.toolsets import FunctionToolset, WrapperToolset
 from pydantic_ai.usage import RunUsage
@@ -61,18 +63,29 @@ def test_run_agent_hides_deferred_tools_until_searched(monkeypatch):
     deps = AgentDeps(client=Mock(), user_id="U1", channel_id="C1", thread_ts="1.1", message_ts="1.0", platform=FakePlatform())
     agent_mod.run_agent("hi", deps)
 
-    seen = {}
+    # Check the request an OpenAI-compatible provider (HCAI) actually receives —
+    # pydantic-ai's FunctionModel reports deferred tools differently across
+    # versions, the wire request doesn't.
+    sent = {}
 
-    def model(messages, info: AgentInfo):
-        seen["tools"] = {t.name for t in info.function_tools}
-        return ModelResponse(parts=[TextPart("done")])
+    def handler(request):
+        sent["tools"] = {t["function"]["name"] for t in json.loads(request.content).get("tools", [])}
+        return httpx.Response(200, json={
+            "id": "x", "object": "chat.completion", "created": 0, "model": "m",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
 
+    model = OpenAIChatModel("m", provider=OpenAIProvider(
+        base_url="https://hcai.invalid/v1", api_key="k", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    ))
     kwargs = {k: v for k, v in captured["kwargs"].items() if k not in ("model", "capabilities", "model_settings")}
-    captured["agent"].run_sync(model=FunctionModel(model), **kwargs)
+    captured["agent"].run_sync(model=model, **kwargs)
 
-    assert "render_mermaid_tool" not in seen["tools"]
-    assert "agentmail_send_email" not in seen["tools"]
-    assert "run_linux_command" in seen["tools"]
+    assert "search_tools" in sent["tools"]
+    assert "render_mermaid_tool" not in sent["tools"]
+    assert "agentmail_send_email" not in sent["tools"]
+    assert "run_linux_command" in sent["tools"]
 
 
 class _BrokenToolset(WrapperToolset):
