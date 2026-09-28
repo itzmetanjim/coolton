@@ -7,9 +7,11 @@ tools:
 
 - reads of a channel, thread, file, canvas, or list follow agent.slack_access
   (the current conversation, or public channels/files, only);
-- anything that puts new content in front of other people (scheduled
-  messages, canvases, file shares, new lists) carries the
-  "(sent from <@user>)" footer (agent.attribution);
+- anything that puts a new post in front of other people (scheduled
+  messages, file shares, new lists) carries the "(sent from <@user>)"
+  footer (agent.attribution). Canvases don't: a canvas is one document
+  edited over and over, so a footer per edit just piled up inside it
+  (headings included), and Slack already records who edited it;
 - slack_send_message (no way to force the footer onto an immediate post —
   chat_postMessage does that instead) and slack_search_public_and_private (its
   whole point is searching private channels and DMs) are hidden entirely.
@@ -24,7 +26,7 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import WrapperToolset
 
-from agent.attribution import attribute_text, attribution_user_id, canvas_footer
+from agent.attribution import attribute_text, attribution_user_id
 
 BLOCKED_SLACK_MCP_TOOLS = {"slack_send_message", "slack_search_public_and_private"}
 
@@ -42,17 +44,6 @@ _FILE_READ_TOOLS = {
     "slack_read_canvas": "canvas_id",
     "slack_read_list": "list_id",
 }
-
-
-def _foot_canvas(content: str, user_id: str) -> str:
-    footer = canvas_footer(user_id)
-    if footer in content:
-        return content
-    # A one-line section (a heading, the canvas title) can't take a new
-    # paragraph without breaking it — keep the credit on the same line.
-    if "\n" not in content.strip():
-        return f"{content.rstrip()} {footer}"
-    return f"{content.rstrip()}\n\n{footer}"
 
 
 def guard_args(name: str, args: dict[str, Any], deps: Any) -> tuple[dict[str, Any] | None, str | None]:
@@ -78,19 +69,6 @@ def guard_args(name: str, args: dict[str, Any], deps: Any) -> tuple[dict[str, An
     args = dict(args)
     if name == "slack_schedule_message":
         args["message"] = attribute_text(str(args.get("message") or ""), credited)
-    elif name == "slack_create_canvas":
-        args["content"] = _foot_canvas(str(args.get("content") or ""), credited)
-    elif name == "slack_update_canvas":
-        if args.get("content"):
-            args["content"] = _foot_canvas(str(args["content"]), credited)
-        sections = []
-        for section in args.get("sections") or []:
-            section = dict(section)
-            if section.get("content") and section.get("edit_type") != "delete":
-                section["content"] = _foot_canvas(str(section["content"]), credited)
-            sections.append(section)
-        if sections:
-            args["sections"] = sections
     elif name == "slack_create_list":
         args["description"] = attribute_text(str(args.get("description") or ""), credited).strip()
     elif name == "slack_complete_file_upload" and args.get("channel_id"):

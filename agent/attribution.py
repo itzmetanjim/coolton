@@ -2,7 +2,7 @@
 
 Applied in code by every tool that can post or edit a Slack message on the
 model's say-so (post_message_tool, chat_postMessage, slack_api_call,
-slack_api_call_as_bot_tool, and the Slack MCP posting/canvas tools — see
+slack_api_call_as_bot_tool, and the Slack MCP posting tools — see
 agent.slack_mcp_guard) — NOT left to the system prompt, where a user can talk
 the model out of it ("don't mention me", "stay anonymous"). The only exempt
 tool is send_message: it posts in-thread status updates, where the person who
@@ -106,11 +106,3 @@ def attribute_api_params(method: str, params: dict, user_id: str) -> dict:
     if not footed:
         params["text"] = footer_line(user_id)
     return params
-
-
-def canvas_footer(user_id: str) -> str:
-    """footer_line in Canvas-flavored Markdown, where a user mention is
-    written `![](@U123)` rather than `<@U123>`."""
-    if not _attributable(user_id):
-        return AUTOMATED_FOOTER
-    return f"(sent from ![](@{user_id}))"

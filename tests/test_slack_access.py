@@ -212,19 +212,16 @@ def test_mcp_scheduled_message_is_footed():
     assert args["message"] == f"later\n\n(sent from <@{ASKER}>)"
 
 
-def test_mcp_canvas_create_and_update_are_footed():
-    args, _ = guard_args("slack_create_canvas", {"title": "t", "content": "# Hi\n\nbody"}, _deps())
-    assert args["content"].endswith(f"(sent from ![](@{ASKER}))")
+def test_mcp_canvas_create_and_update_are_not_footed():
+    """A canvas is one document edited repeatedly — a footer per edit piled
+    up inside it, headings included."""
+    create = {"title": "t", "content": "# Hi\n\nbody"}
+    args, _ = guard_args("slack_create_canvas", create, _deps())
+    assert args == create
 
-    args, _ = guard_args("slack_update_canvas", {"canvas_id": "F1", "sections": [
-        {"edit_type": "append", "section_id": "s1", "content": "more\ntext"},
-        {"edit_type": "replace", "section_id": "s2", "content": "# New heading"},
-        {"edit_type": "delete", "section_id": "s3"},
-    ]}, _deps())
-    appended, heading, deleted = args["sections"]
-    assert appended["content"] == f"more\ntext\n\n(sent from ![](@{ASKER}))"
-    assert heading["content"] == f"# New heading (sent from ![](@{ASKER}))"
-    assert "content" not in deleted
+    update = {"canvas_id": "F1", "sections": [{"edit_type": "replace", "section_id": "s2", "content": "# New heading"}]}
+    args, _ = guard_args("slack_update_canvas", update, _deps())
+    assert args == update
 
 
 def test_mcp_file_share_comment_is_footed_even_when_empty():

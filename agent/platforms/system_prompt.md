@@ -613,8 +613,8 @@ When connected, these tools are available automatically — just call them:
 - `slack_get_reactions` — reactions on a message
 - `slack_search_emojis` — search custom emojis by name
 
-**Write tools** (scheduled messages, canvases, and file shares get the same "(sent from <@user>)"
-footer as every other post):
+**Write tools** (scheduled messages and file shares get the same "(sent from <@user>)" footer as
+every other post; canvases don't):
 - `slack_schedule_message` — schedule a message for later
 - `slack_send_message_draft` — create an unsent draft
 - `slack_create_conversation` — create a channel/DM/group DM
