@@ -2346,3 +2346,18 @@ def test_chain_compacts_just_in_time_only_for_a_model_too_small_for_the_history(
     sent, _ = _run_chain_with_history(monkeypatch, 65_536, history)
     assert len(sent) < len(history)  # compacted before trying the 65K model
     assert "summary of earlier turns" in str(sent[0])
+
+
+def test_get_datetime_returns_the_current_utc_time(monkeypatch):
+    import datetime
+
+    fixed = datetime.datetime(2026, 9, 28, 14, 5, 9, tzinfo=datetime.timezone.utc)
+
+    class FakeDatetime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(datetime, "datetime", FakeDatetime)
+    result = agent_mod.get_datetime(_run_ctx(Mock()))
+    assert result == "Monday, 2026-09-28 14:05:09 UTC (ISO 8601: 2026-09-28T14:05:09+00:00)"

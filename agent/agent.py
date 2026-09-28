@@ -2088,6 +2088,20 @@ OUTPUT_TYPE = [str, ToolOutput(text_only_response, name="text_only_response")]
 
 
 @agent.tool
+def get_datetime(ctx: RunContext[AgentDeps]) -> str:
+    """Get the current date and time in UTC.
+
+    Use whenever the answer depends on today's date or the current time ("what's the
+    date", "how long until X", "is this recent", checking a timestamp or deadline) —
+    never assume it from your training data.
+    """
+    import datetime
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return f"{now.strftime('%A, %Y-%m-%d %H:%M:%S')} UTC (ISO 8601: {now.isoformat(timespec='seconds')})"
+
+
+@agent.tool
 def skip(ctx: RunContext[AgentDeps], preserve: bool = False) -> str:
     """Skip sending the final response message at the end of your turn.
 
@@ -2993,7 +3007,8 @@ def _current_year_note() -> str:
     year = datetime.datetime.now(datetime.timezone.utc).year
     return (
         f"\n\n## CURRENT YEAR\nIt is {year}. Your training data may end earlier — dates up to "
-        f"and including {year} are not \"in the future\"; trust them.\n"
+        f"and including {year} are not \"in the future\"; trust them. For today's exact date or "
+        f"time, call get_datetime.\n"
     )
 
 

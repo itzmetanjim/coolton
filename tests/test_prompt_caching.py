@@ -149,5 +149,5 @@ def test_system_prompt_ends_with_the_current_year(captured_runs):
     agent_mod.run_agent("hello", _deps("100.100"))
     system_prompt = captured_runs[0][0]._system_prompts[0]
     year = datetime.datetime.now(datetime.timezone.utc).year
-    assert system_prompt.rstrip().endswith("trust them.")
+    assert system_prompt.rstrip().endswith("call get_datetime.")
     assert f"It is {year}." in system_prompt.split("## CURRENT YEAR")[-1]
