@@ -2267,7 +2267,7 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
         preview = "\n\n".join(_staged_skill_preview(staging, slug) for slug in imported)
         msg = skill_review.submit(spec, ctx.deps, f"install {', '.join(imported)} from `{package}`", preview)
     else:
-        msg = apply_skill_change(spec)
+        msg = _applied_directly(apply_skill_change(spec))
     if rejected:
         msg += f" Skipped invalid entries: {', '.join(rejected)}."
     return msg
@@ -2697,7 +2697,16 @@ def _apply_or_submit_skill_change(ctx: RunContext[AgentDeps], spec: dict, descri
 
     if skill_review.needs_review(ctx.deps):
         return skill_review.submit(spec, ctx.deps, description, preview)
-    return apply_skill_change(spec)
+    return _applied_directly(apply_skill_change(spec))
+
+
+def _applied_directly(result: str) -> str:
+    """Say outright that a change skipped review — without this the model,
+    primed by every "goes to review unless the maintainer asked" note, told the
+    maintainer their already-live skill was pending review."""
+    if result.startswith("Error"):
+        return result
+    return f"{result} This is LIVE now — it did NOT go to review (the maintainer asked for it directly)."
 
 
 @agent.tool
@@ -2709,7 +2718,7 @@ def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: 
     a proper SKILL.md (frontmatter + instructions) so the skill is discoverable
     via list_skills / load_skill. Unless the coolton maintainer asked for it, the
     new skill goes to the maintainer for review first and only goes live once
-    approved — say so instead of claiming it's done. Do NOT use shell/CLI commands
+    approved. The result says which happened — relay that, don't guess. Do NOT use shell/CLI commands
     in the sandbox to create skills — they have no effect on the agent.
 
     Args:
@@ -2754,7 +2763,8 @@ def rename_skill(ctx: RunContext[AgentDeps], old_name: str, new_name: str) -> st
 
     Use this when the user wants to rename a skill. Operates on skills found in
     the repo's `skills/` or `.agents/skills/` directories. Unless the coolton
-    maintainer asked for it, the rename waits for maintainer review. Do NOT use
+    maintainer asked for it, the rename waits for maintainer review (the result says
+    which happened — relay that, don't guess). Do NOT use
     sandbox shell commands — they have no effect on the agent.
 
     Args:
@@ -2781,7 +2791,8 @@ def delete_skill(ctx: RunContext[AgentDeps], name: str) -> str:
 
     Use this when the user wants to remove/uninstall a skill. This is permanent.
     Operates on skills in the repo's `skills/` or `.agents/skills/` directories.
-    Unless the coolton maintainer asked for it, the deletion waits for maintainer
+    Unless the coolton maintainer asked for it (the result says which happened — relay
+    that, don't guess), the deletion waits for maintainer
     review. Do NOT use sandbox shell commands — they have no effect on the agent.
 
     Args:

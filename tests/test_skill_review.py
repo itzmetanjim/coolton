@@ -53,6 +53,8 @@ def test_maintainer_creates_a_skill_immediately(repo):
     assert result.startswith("Created skill 'cool-skill'")
     assert (repo.root / "skills" / "cool-skill" / "SKILL.md").exists()
     assert repo.dms == []
+    # Said outright: the model otherwise told the maintainer it was pending review.
+    assert "LIVE now" in result and "did NOT go to review" in result
 
 
 def test_anyone_else_proposes_instead_of_creating(repo):

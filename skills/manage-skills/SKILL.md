@@ -38,7 +38,8 @@ a skill via sandbox commands, and never ask the user to run such commands. Alway
 - `delete_skill` is permanent — double-check the name and get explicit confirmation.
 - Skills are shared by every coolton user, so unless the coolton maintainer is the one asking, a
   create/install/rename/delete is sent to the maintainer for review and only takes effect once
-  approved. The tool replies "Submitted for review" — relay that; don't claim the change is live.
+  approved. Relay exactly what the tool returned: "Submitted for review" means pending; a result
+  saying it's live means it's live (the maintainer asked) — never call that pending.
 - Curated skills live in `skills/` (committed to git); CLI-installed skills live in `.agents/skills/`
   (gitignored but work fine). Both are picked up automatically via `auto_reload`.
 
