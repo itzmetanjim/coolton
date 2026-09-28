@@ -1000,8 +1000,14 @@ def generate_image_tool(
     size: str = "1024x1024",
     aspect_ratio: str = "",
     quality: str = "low",
+    reference_images: list[str] | None = None,
 ) -> str:
-    """Generate AI images from a text prompt.
+    """Generate AI images from a text prompt, or edit existing ones.
+
+    To EDIT or combine images ("make the sky purple", "put this logo on that
+    shirt"), pass their sandbox paths as `reference_images` (up to 4, each under
+    8MB; get Slack attachments into the sandbox first with
+    download_attachments_to_sandbox). Editing always uses HCAI's image models.
 
     Tries, in order: the user's BYOK image endpoint if they have one set
     (quality has no effect on this — it's their own model, not a choice
@@ -1026,16 +1032,29 @@ def generate_image_tool(
             better) or "low" (HCAI google/gemini-2.5-flash-image —
             faster, default). Only chooses between HCAI's two models; ignored
             entirely when a BYOK image endpoint is used instead.
+        reference_images: Sandbox paths of images to edit/combine (optional).
     """
     quality = (quality or "low").strip().lower()
     if quality not in ("high", "low"):
         return f"Error: quality must be \"high\" or \"low\", got {quality!r}."
 
-    from agent.tools.image_gen import generate_image, save_images_to_sandbox
+    from agent.tools.image_gen import edit_images, generate_image, save_images_to_sandbox
 
-    result = generate_image(
-        ctx.deps.user_id, prompt, n, size, aspect_ratio or None, quality,
-    )
+    if reference_images:
+        if len(reference_images) > 4:
+            return "Error: pass at most 4 reference_images."
+        if not os.environ.get("E2B_API_KEY"):
+            return "Error: editing images needs the sandbox (E2B_API_KEY), which isn't configured."
+        try:
+            sandbox, _ = get_or_create_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
+            references = [bytes(sandbox.files.read(path, format="bytes")) for path in reference_images]
+        except Exception as e:
+            return f"Error reading reference images from the sandbox: {_redact(str(e), context='generate_image_tool')}"
+        result = edit_images(prompt, references, quality)
+    else:
+        result = generate_image(
+            ctx.deps.user_id, prompt, n, size, aspect_ratio or None, quality,
+        )
     if "image(s)" not in result:
         return result
 

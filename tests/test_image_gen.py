@@ -319,3 +319,70 @@ def test_a_failed_download_is_skipped():
 
     sandbox.commands.run = failing_run
     assert image_gen.save_images_to_sandbox(sandbox, ["https://example.com/a.png"], batch="b") == []
+
+
+# ---------------------------------------------------------------------------
+# edit_images — reference images go to HCAI's image model as a multimodal
+# chat completion; the edited image comes back in message.images (response
+# shape verified live against HCAI).
+# ---------------------------------------------------------------------------
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+_JPEG = b"\xff\xd8\xff" + b"\x00" * 16
+
+
+def _hcai_order(monkeypatch):
+    from agent import provider_config
+    monkeypatch.setattr(
+        provider_config, "build_image_provider_order",
+        lambda quality: [
+            {"model": "flash-model", "base_url": "https://hcai.example/v1", "api_key": "hk", "display": "low", "provider": "hcai"},
+            {"model": "pro-model", "base_url": "https://hcai.example/v1", "api_key": "hk", "display": "high", "provider": "hcai"},
+        ],
+    )
+
+
+def test_edit_sends_the_prompt_and_every_reference_image(monkeypatch):
+    _hcai_order(monkeypatch)
+    captured = {}
+
+    def fake_post(url, json, headers, timeout):
+        captured["url"], captured["body"] = url, json
+        return _FakeResp({"choices": [{"message": {"images": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,EDITED"}}]}}]})
+
+    with patch.object(image_gen.requests, "post", side_effect=fake_post):
+        result = image_gen.edit_images("make it blue", [_PNG, _JPEG])
+
+    assert result == "Generated 1 image(s):\n1. data:image/png;base64,EDITED"
+    assert captured["url"] == "https://hcai.example/v1/chat/completions"
+    body = captured["body"]
+    assert body["model"] == "flash-model" and body["modalities"] == ["image", "text"]
+    content = body["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "make it blue"}
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert content[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_edit_falls_back_to_the_other_hcai_model_when_no_image_comes_back(monkeypatch):
+    _hcai_order(monkeypatch)
+    models = []
+
+    def fake_post(url, json, headers, timeout):
+        models.append(json["model"])
+        if json["model"] == "flash-model":
+            return _FakeResp({"choices": [{"message": {"content": "I can't edit that."}}]})
+        return _FakeResp({"choices": [{"message": {"images": [{"image_url": {"url": "data:image/png;base64,OK"}}]}}]})
+
+    with patch.object(image_gen.requests, "post", side_effect=fake_post):
+        result = image_gen.edit_images("make it blue", [_PNG])
+
+    assert models == ["flash-model", "pro-model"]
+    assert "image(s)" in result
+
+
+def test_edit_rejects_an_oversized_reference_without_calling_hcai(monkeypatch):
+    _hcai_order(monkeypatch)
+    with patch.object(image_gen.requests, "post") as post:
+        result = image_gen.edit_images("x", [b"\x00" * (image_gen.MAX_REFERENCE_BYTES + 1)])
+    assert result.startswith("Error: reference image 1 is")
+    post.assert_not_called()

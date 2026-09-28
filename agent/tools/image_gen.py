@@ -100,6 +100,87 @@ def generate_image(
     return result
 
 
+MAX_REFERENCE_BYTES = 8 * 1024 * 1024
+
+
+def _image_media_type(data: bytes) -> str:
+    """Sniff an image's media type from its magic bytes (PNG default)."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return "image/png"
+
+
+def edit_images(prompt: str, references: list[bytes], quality: str = "low") -> str:
+    """Edit/combine reference images with a prompt (e.g. "make the sky purple",
+    "put the cat from image 1 into image 2"), via HCAI's image models.
+
+    Same result format as generate_image. HCAI only: its image models take
+    reference images through a multimodal chat completion, which BYOK image
+    endpoints and OpenAI's images/generations fallback don't — there's no
+    fallback beyond HCAI's own two models.
+    """
+    for i, data in enumerate(references, 1):
+        if len(data) > MAX_REFERENCE_BYTES:
+            return f"Error: reference image {i} is {len(data) // (1024 * 1024)}MB; resize it below 8MB first."
+
+    from agent.fallback_cache import get_dead_families, mark_family_dead
+    from agent.provider_config import build_image_provider_order
+
+    dead_families = set(get_dead_families())
+    attempts = [c for c in build_image_provider_order(quality) if c.get("provider") not in dead_families]
+    if not attempts:
+        return "Error: image editing needs HCAI (HCAI_API_KEY), which isn't available right now."
+
+    result = ""
+    for config in attempts:
+        if config.get("provider") in dead_families:
+            continue
+        result = _edit_via_chat_completions(config["api_key"], config["base_url"], config["model"], prompt, references)
+        if "image(s)" in result:
+            return result
+        if config.get("provider") and _family_outage(result):
+            mark_family_dead(config["provider"], result)
+            dead_families.add(config["provider"])
+    return result
+
+
+def _edit_via_chat_completions(api_key: str, base_url: str, model: str, prompt: str, references: list[bytes]) -> str:
+    """One multimodal chat completion that returns image(s) in
+    choices[0].message.images[].image_url.url (verified live against HCAI)."""
+    import base64
+
+    content = [{"type": "text", "text": prompt}]
+    for data in references:
+        encoded = base64.b64encode(data).decode()
+        content.append({"type": "image_url", "image_url": {"url": f"data:{_image_media_type(data)};base64,{encoded}"}})
+    try:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            json={"model": model, "modalities": ["image", "text"], "messages": [{"role": "user", "content": content}]},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=120,
+        )
+        res = response.json()
+    except Exception as e:
+        return f"Error editing image: {e}"
+    if res.get("error"):
+        return f"Image error: {(res['error'] or {}).get('message', 'unknown')}"
+    message = ((res.get("choices") or [{}])[0].get("message") or {})
+    urls = [
+        (img.get("image_url") or {}).get("url", "")
+        for img in (message.get("images") or [])
+    ]
+    urls = [u for u in urls if u]
+    if not urls:
+        reply = (message.get("content") or "").strip()
+        return f"Image error: the model returned no image{': ' + reply[:300] if reply else ''}"
+    return "Generated {} image(s):\n".format(len(urls)) + "\n".join(f"{i}. {u}" for i, u in enumerate(urls, 1))
+
+
 def _generate_openai_compatible(api_key: str, base_url: str, model: str, prompt: str, n: int, size: str, aspect_ratio: str | None = None) -> str:
     url = f"{base_url.rstrip('/')}/images/generations"
     try:

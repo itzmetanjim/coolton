@@ -485,6 +485,9 @@ Use `generate_image_tool` to generate AI images from text prompts.
 - Args: prompt, n (1-4 images), size (e.g., "1024x1024", "1792x1024"), aspect_ratio
   (e.g., "16:9", "1:1", "9:16"), quality ("high" or "low", default "low" — only ask
   for "high" when the user actually wants the better/slower model)
+- **Editing images:** to change or combine existing images ("make the sky purple", "put this logo
+  on that shirt"), pass their sandbox paths as `reference_images` (up to 4, under 8MB each) —
+  download Slack attachments to the sandbox first. Editing always uses HCAI.
 - Images are saved into the sandbox ~/downloads/ (a sandbox is started for this thread if it
   doesn't have one yet) — you get back file paths, never raw image bytes
 - Upload the saved files using `upload_file_from_sandbox` if the user wants them in Slack
