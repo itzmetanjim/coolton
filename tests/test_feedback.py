@@ -110,3 +110,38 @@ def test_feedback_submit_handles_missing_permalink_and_empty_comment(monkeypatch
     sent_text = post_mock.call_args.kwargs["json"]["text"]
     assert "(no comment)" in sent_text
     assert "👍" in sent_text
+
+
+# ---------------------------------------------------------------------------
+# Stored feedback (agent.feedback_store)
+# ---------------------------------------------------------------------------
+
+
+def test_click_stores_the_rating_even_if_the_comment_box_is_skipped():
+    from agent import feedback_store
+
+    body = {"message": {"ts": "111.222", "thread_ts": "100.000", "text": "the reply"},
+            "actions": [{"value": "bad-feedback"}], "trigger_id": "t"}
+    handle_feedback_button(Mock(), body, Mock(), Mock(channel_id="C1", user_id="U1"), Mock())
+
+    [record] = feedback_store.all_feedback()
+    assert record["rating"] == "bad" and record["comment"] == ""
+    assert (record["channel_id"], record["thread_ts"], record["message_ts"], record["user_id"]) == ("C1", "100.000", "111.222", "U1")
+    assert record["response_text"] == "the reply"
+
+
+def test_submitted_comment_is_added_to_the_same_record(monkeypatch):
+    from agent import feedback_store
+
+    monkeypatch.setattr("listeners.views.feedback_views.notify_admin", lambda *a, **k: None)
+    handle_feedback_button(Mock(), {"message": {"ts": "111.222", "text": "reply"}, "actions": [{"value": "good-feedback"}], "trigger_id": "t"},
+                           Mock(), Mock(channel_id="C1", user_id="U1"), Mock())
+    view = {"private_metadata": json.dumps({"channel_id": "C1", "message_ts": "111.222", "feedback_value": "good-feedback"}),
+            "state": {"values": {"comment": {"value": {"value": "  spot on  "}}}}}
+    client = Mock()
+    client.chat_getPermalink.return_value = {"ok": False}
+    handle_feedback_submit(Mock(), {"view": view}, client, Mock(user_id="U1"), Mock())
+
+    [record] = feedback_store.all_feedback()
+    assert record["rating"] == "good" and record["comment"] == "spot on"
+    assert record["response_text"] == "reply"

@@ -70,6 +70,11 @@ def handle_feedback_submit(ack, body, client, context, logger):
             logger.exception("Failed to fetch permalink for feedback message")
 
         is_positive = feedback_value == "good-feedback"
+        try:
+            from agent.feedback_store import add_comment
+            add_comment(channel_id, message_ts, user_id, "good" if is_positive else "bad", comment)
+        except Exception:
+            logger.exception("Failed to store feedback comment")
         emoji = "👍" if is_positive else "👎"
         text = f"{emoji} Feedback from <@{user_id}>"
         if link:

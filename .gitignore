@@ -114,5 +114,6 @@ coolton_bots.json
 codechannelinternal.sh
 code_channels.json
 skill_proposals.json
+feedback.json
 skill_proposals/
 inflight_runs.json

@@ -6,6 +6,10 @@ from slack_sdk import WebClient
 from listeners.views.feedback_views import build_feedback_modal
 
 
+def _rating(feedback_value: str) -> str:
+    return "good" if feedback_value == "good-feedback" else "bad"
+
+
 def handle_feedback_button(
     ack: Ack, body: dict, client: WebClient, context: BoltContext, logger: Logger
 ):
@@ -17,6 +21,15 @@ def handle_feedback_button(
         channel_id = context.channel_id
         message_ts = body["message"]["ts"]
         feedback_value = body["actions"][0]["value"]
+        try:
+            from agent.feedback_store import record_rating
+            message = body.get("message") or {}
+            record_rating(
+                channel_id, message_ts, context.user_id, _rating(feedback_value),
+                thread_ts=message.get("thread_ts", ""), response_text=message.get("text", ""),
+            )
+        except Exception:
+            logger.exception("Failed to store feedback rating")
         modal = build_feedback_modal(feedback_value, channel_id, message_ts)
         client.views_open(trigger_id=body["trigger_id"], view=modal)
     except Exception as e:

@@ -28,7 +28,7 @@ import json
 
 import pytest
 
-from agent import fallback_cache, leave_thread_store, provider_config
+from agent import fallback_cache, feedback_store, leave_thread_store, provider_config
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +42,13 @@ def _isolated_fallback_cache(tmp_path, monkeypatch):
     fallback cache as a side effect — never let a test touch the real
     fallback_cache.json in the working directory."""
     monkeypatch.setattr(fallback_cache, "FALLBACK_CACHE_FILE", str(tmp_path / "fallback_cache.json"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_feedback_store(tmp_path, monkeypatch):
+    """Feedback button/modal handlers store ratings as a side effect — keep
+    them out of the real feedback.json."""
+    monkeypatch.setattr(feedback_store, "FEEDBACK_FILE", str(tmp_path / "feedback.json"))
 
 
 @pytest.fixture
