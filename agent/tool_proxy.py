@@ -123,6 +123,11 @@ class _Handler(BaseHTTPRequestHandler):
         kwargs = body.get("kwargs", {}) or {}
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             return self._send_json(400, {"ok": False, "error": "args must be a list, kwargs a dict"})
+        from agent.slack_budget import spend
+
+        over = spend(reg["deps"], tool_name)
+        if over:
+            return self._send_json(200, {"ok": False, "error": over})
         try:
             result = func(RunContext(deps=reg["deps"], model=None, usage=RunUsage()), *args, **kwargs)
             if result is None:

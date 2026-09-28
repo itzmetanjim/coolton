@@ -237,7 +237,17 @@ def _redact_output(ctx, *, output_context, output):
     return output
 
 
+async def _enforce_slack_budget(ctx, *, call, tool_def, args, handler):
+    from agent.slack_budget import spend
+
+    over = spend(ctx.deps, call.tool_name)
+    if over:
+        return over
+    return await handler(args)
+
+
 _hooks = Hooks(
+    tool_execute=_enforce_slack_budget,
     after_tool_execute=_redact_tool_result,
     after_output_process=_redact_output,
 )

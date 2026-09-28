@@ -45,6 +45,8 @@ class AgentDeps:
     # Declared context_window of the model the provider chain is using this
     # turn (0 if unknown, e.g. BYOK) — history compaction sizes itself by it.
     model_context_window: int = 0
+    # Slack tool calls made this turn (agent.slack_budget caps them).
+    slack_calls: int = 0
     # Snapshot of the in-progress message history, captured right before a
     # `!stop` halts the run (see plan_block.before_tool). Lets run_agent keep
     # everything up to the halt (the user's message, any completed tool
