@@ -688,3 +688,33 @@ def test_debug_report_is_still_posted_when_the_run_fails(mocks):
     turn.run_agent.side_effect = RuntimeError("boom")
     _run_turn(mocks, text="[!DEBUG] hi")
     assert any("[!DEBUG] timing" in t for t in _posted_texts(mocks))
+
+
+# ---------------------------------------------------------------------------
+# Footer line under the reply: how long it took, or that a background job
+# is still going.
+# ---------------------------------------------------------------------------
+
+
+def _footer_text(mocks):
+    blocks = mocks.say_stream.return_value.stop.call_args.kwargs["blocks"]
+    return blocks[0].to_dict()["elements"][0]["text"]
+
+
+def test_reply_footer_says_how_long_the_turn_took(mocks, monkeypatch):
+    monkeypatch.setattr("agent.background_jobs_store.has_pending_jobs", lambda ch, th: False)
+    _run_turn(mocks)
+    footer = _footer_text(mocks)
+    assert footer.startswith("_done in ") and footer.endswith("s_")
+
+
+def test_reply_footer_says_background_work_is_still_running(mocks, monkeypatch):
+    monkeypatch.setattr("agent.background_jobs_store.has_pending_jobs", lambda ch, th: (ch, th) == ("C1", "1.1"))
+    _run_turn(mocks)
+    assert _footer_text(mocks) == "_working in the background, I'll post here when it's done_"
+
+
+def test_turn_footer_formats_long_turns_in_minutes(monkeypatch):
+    monkeypatch.setattr("agent.background_jobs_store.has_pending_jobs", lambda ch, th: False)
+    monkeypatch.setattr(turn.time, "perf_counter", lambda: 1000.0 + 133.4)
+    assert turn._turn_footer("C1", "1.1", 1000.0) == "_done in 2m 13s_"

@@ -84,6 +84,21 @@ def _post_fallback_response(
         logger.warning(f"Failed to post feedback buttons after streaming fallback: {e}")
 
 
+def _turn_footer(channel_id: str, thread_ts: str, turn_started: float) -> str:
+    """The small line under a Slack reply: how long the turn took, or — if a
+    background job is still running in this thread — that more is coming."""
+    try:
+        from agent.background_jobs_store import has_pending_jobs
+        if has_pending_jobs(channel_id, thread_ts):
+            return "_working in the background, I'll post here when it's done_"
+    except Exception:
+        pass
+    elapsed = time.perf_counter() - turn_started
+    if elapsed >= 60:
+        return f"_done in {int(elapsed // 60)}m {int(elapsed % 60)}s_"
+    return f"_done in {elapsed:.1f}s_"
+
+
 def _post_debug_report(conv_surface, debug_timer, logger) -> None:
     """[!DEBUG]'s timing breakdown, posted in the same thread (agent.debug_timing)."""
     try:
@@ -148,6 +163,7 @@ def run_agent_turn(
     deps = None
     from agent.active_runs import mark_run_finished, mark_run_started
     from agent.inflight_runs import record_finished as _record_inflight_finished, record_start as _record_inflight_start
+    turn_started = time.perf_counter()
     mark_run_started(channel_id, thread_ts, time.time())
     _record_inflight_start(channel_id, thread_ts, message_ts=message_ts, user_id=user_id, text=text, is_slack=is_slack)
     try:
@@ -234,7 +250,7 @@ def run_agent_turn(
 
             output = _redact(result.output, context="final response")
             if is_slack:
-                feedback_blocks = build_feedback_blocks()
+                feedback_blocks = build_feedback_blocks(_turn_footer(channel_id, thread_ts, turn_started))
                 if not thread_ts:
                     # A code channel's channel-level conversation (thread_ts=""
                     # — see agent.code_channel_store) has no thread to stream
