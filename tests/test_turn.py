@@ -123,7 +123,7 @@ def test_happy_path(mocks):
     streamer.stop.assert_called_once()
 
     # history persisted
-    turn.conversation_store.set_history.assert_called_once_with("C1", "1.1", ["msg1"])
+    turn.conversation_store.set_history.assert_called_once_with("C1", "1.1", ["msg1"], last_seen_ts="111.111")
 
     import agent.kevinton as kev
     kev.spawn_kevinton.assert_called_once()
@@ -178,7 +178,7 @@ def test_skip_preserve_path_keeps_plan_and_history_but_still_sends_nothing(mocks
     pb.finalize_plan_message.assert_not_called()
     pb.set_plan_error.assert_not_called()
     mocks.say_stream.assert_not_called()
-    turn.conversation_store.set_history.assert_called_once_with("C1", "1.1", halted)
+    turn.conversation_store.set_history.assert_called_once_with("C1", "1.1", halted, last_seen_ts="111.111")
 
     import agent.kevinton as kev
     kev.spawn_kevinton.assert_not_called()
@@ -465,7 +465,7 @@ def test_stopped_run_context_preserved_for_stranded_steering_message(mocks, monk
     turn.run_agent.side_effect = fake_run_agent
 
     store = {}
-    monkeypatch.setattr(turn.conversation_store, "set_history", lambda ch, th, msgs: store.__setitem__((ch, th), msgs))
+    monkeypatch.setattr(turn.conversation_store, "set_history", lambda ch, th, msgs, **kw: store.__setitem__((ch, th), msgs))
     monkeypatch.setattr(turn.conversation_store, "get_history", lambda ch, th: store.get((ch, th)))
 
     try:

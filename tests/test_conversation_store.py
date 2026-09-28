@@ -263,3 +263,17 @@ def test_conversation_trace_contains_thread_metadata_and_all_trace_parts(tmp_pat
     assert {part["type"] for part in parts} == {"user", "thinking", "tool_call", "tool_result", "output"}
     assert next(part for part in parts if part["type"] == "thinking")["content"] == "inspect the failing test"
     assert next(part for part in parts if part["type"] == "tool_call")["tool_name"] == "read_file"
+
+
+def test_last_seen_ts_only_moves_forward_and_survives_a_restart(tmp_path):
+    path = str(tmp_path / "conversations.json")
+    store = ConversationStore(file_path=path)
+    assert store.get_last_seen_ts("C1", "1.1") is None
+
+    store.set_history("C1", "1.1", _history("a"), last_seen_ts="200.000")
+    store.set_history("C1", "1.1", _history("b"), last_seen_ts="150.000")  # older ts: ignored
+    assert store.get_last_seen_ts("C1", "1.1") == "200.000"
+    store.set_history("C1", "1.1", _history("c"))  # none given: kept
+    assert store.get_last_seen_ts("C1", "1.1") == "200.000"
+
+    assert ConversationStore(file_path=path).get_last_seen_ts("C1", "1.1") == "200.000"

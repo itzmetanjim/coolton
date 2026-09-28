@@ -98,3 +98,52 @@ def test_build_thread_context_attributes_coolton_own_messages_as_response(monkey
     assert len(history) == 1
     assert isinstance(history[0], ModelResponse)
     assert history[0].parts[0].content == "sure, on it"
+
+
+# ---------------------------------------------------------------------------
+# build_unseen_messages — a mention in a thread coolton already has context
+# for picks up what was said since its last turn there.
+# ---------------------------------------------------------------------------
+
+from pydantic_ai.messages import ModelRequest  # noqa: E402
+
+from thread_context.thread_history import build_unseen_messages  # noqa: E402
+
+
+def _texts(model_messages):
+    return [p.content for m in model_messages for p in m.parts]
+
+
+def test_unseen_messages_keep_only_new_human_and_other_bot_messages(monkeypatch):
+    monkeypatch.setenv("COOLTON_BOT_ID", "UBOT")
+    monkeypatch.setenv("COOLTON_USER_ID", "UHELPER")
+    history = [ModelRequest(parts=[UserPromptPart(content="U2 (Bob):\nsteered in already")])]
+    client = _client_with_messages([
+        {"ts": "1.0", "user": "U1", "text": "thread starter"},            # before the cutoff
+        {"ts": "5.0", "user": "U1", "text": "what coolton already answered"},  # == cutoff
+        {"ts": "6.0", "user": "UBOT", "bot_id": "B1", "text": "coolton's own reply"},
+        {"ts": "6.5", "user": "UHELPER", "text": "posted by cooltonUser"},
+        {"ts": "7.0", "user": "U2", "text": "steered in already"},
+        {"ts": "8.0", "user": "U2", "text": "## private aside"},
+        {"ts": "9.0", "user": "U3", "text": "new point from Carol"},
+        {"ts": "9.5", "bot_id": "B9", "username": "otherbot", "text": "build failed"},
+        {"ts": "10.0", "user": "U1", "text": "<@UBOT> what do you think?"},  # the mention being answered
+    ])
+
+    unseen = build_unseen_messages(client, "C1", "1.0", "5.0", exclude_ts="10.0", history=history)
+
+    texts = _texts(unseen)
+    assert "haven't seen them" in texts[0]  # header first
+    assert texts[1:] == ["U3 (Alice):\nnew point from Carol", "[other bot] otherbot:\nbuild failed"]
+    assert client.conversations_replies.call_args.kwargs["oldest"] == "5.0"
+
+
+def test_no_unseen_messages_returns_none():
+    client = _client_with_messages([{"ts": "10.0", "user": "U1", "text": "<@UBOT> hi"}])
+    assert build_unseen_messages(client, "C1", "1.0", "5.0", exclude_ts="10.0", history=[]) is None
+
+
+def test_unseen_fetch_failure_returns_none():
+    client = Mock()
+    client.conversations_replies.return_value = {"ok": False, "error": "ratelimited"}
+    assert build_unseen_messages(client, "C1", "1.0", "5.0", exclude_ts="10.0", history=[]) is None

@@ -142,6 +142,20 @@ def handle_app_mentioned(
             history = build_thread_context(
                 client, channel_id, thread_ts, exclude_ts=event["ts"]
             )
+        # Mentioned in a thread we DO have context for, but people may have
+        # kept talking since our last turn without mentioning us: add those
+        # messages so we don't answer blind to them.
+        elif history is not None and event.get("thread_ts"):
+            last_seen_ts = conversation_store.get_last_seen_ts(channel_id, thread_ts)
+            if last_seen_ts:
+                from thread_context.thread_history import build_unseen_messages
+
+                unseen = build_unseen_messages(
+                    client, channel_id, thread_ts, last_seen_ts, exclude_ts=event["ts"], history=history,
+                )
+                if unseen:
+                    logger.info(f"Adding {len(unseen) - 1} unseen thread message(s) to {channel_id}/{thread_ts}")
+                    history = [*history, *unseen]
 
         from agent.tools.vision import download_attached_images
         images = download_attached_images(client, event.get("files"))

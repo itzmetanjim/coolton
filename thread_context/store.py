@@ -39,6 +39,21 @@ def _is_valid_history(messages: list[ModelMessage]) -> bool:
     return call_ids == return_ids
 
 
+def _latest_ts(a: str | None, b: str | None) -> str | None:
+    """The later of two Slack timestamps (either may be None or malformed)."""
+    def as_float(ts):
+        try:
+            return float(ts)
+        except (TypeError, ValueError):
+            return None
+    fa, fb = as_float(a), as_float(b)
+    if fa is None:
+        return b if fb is not None else None
+    if fb is None:
+        return a
+    return a if fa >= fb else b
+
+
 class ConversationStore:
     """Thread-safe, file-persisted conversation history store.
 
@@ -110,14 +125,21 @@ class ConversationStore:
         return None
 
     def set_history(
-        self, channel_id: str, thread_ts: str, messages: list[ModelMessage]
+        self, channel_id: str, thread_ts: str, messages: list[ModelMessage],
+        last_seen_ts: str | None = None,
     ) -> None:
-        """Store conversation history for a thread and persist to disk."""
+        """Store conversation history for a thread and persist to disk.
+
+        `last_seen_ts` is the Slack ts of the latest thread message this history
+        covers (see get_last_seen_ts). It only ever moves forward.
+        """
         key = (channel_id, thread_ts)
         with self._lock:
+            previous = (self._store.get(key) or {}).get("last_seen_ts")
             self._store[key] = {
                 "messages": messages,
                 "timestamp": time.time(),
+                "last_seen_ts": _latest_ts(previous, last_seen_ts),
             }
             self._cleanup()
             snapshot = dict(self._store)
@@ -132,6 +154,14 @@ class ConversationStore:
         # it instead — see _write_snapshot for the resulting write-ordering
         # tradeoff.
         self._write_snapshot(snapshot, seq)
+
+    def get_last_seen_ts(self, channel_id: str, thread_ts: str) -> str | None:
+        """Slack ts of the latest thread message coolton's stored history for
+        this thread covers — anything posted after it (while coolton wasn't
+        mentioned) is something it hasn't seen. None if unknown."""
+        with self._lock:
+            entry = self._store.get((channel_id, thread_ts))
+            return entry.get("last_seen_ts") if entry else None
 
     def _cleanup(self) -> None:
         """Remove expired entries and enforce max conversation limit.
@@ -195,7 +225,8 @@ class ConversationStore:
 
                         self._store[key_tuple] = {
                             "messages": messages,
-                            "timestamp": entry["timestamp"]
+                            "timestamp": entry["timestamp"],
+                            "last_seen_ts": entry.get("last_seen_ts"),
                         }
                         loaded_count += 1
                     except Exception as e:
@@ -229,7 +260,8 @@ class ConversationStore:
                 key_str = f"{channel_id}:{thread_ts}"
                 serialized_data[key_str] = {
                     "messages": serialized_messages,
-                    "timestamp": entry["timestamp"]
+                    "timestamp": entry["timestamp"],
+                    "last_seen_ts": entry.get("last_seen_ts"),
                 }
 
             # Atomic write (write to a unique temp file first, then replace).

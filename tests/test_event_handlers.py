@@ -1025,3 +1025,19 @@ def test_mention_in_dm_ignores_code_channel_check(ctx):
         # thread_ts (the message ts) is used regardless of is_code_channel.
         assert kwargs["thread_ts"] == "1.1"
         is_code_channel.assert_not_called()
+
+
+def test_app_mentioned_appends_unseen_thread_messages_to_existing_history(ctx):
+    from unittest.mock import patch
+
+    store = Mock(get_history=Mock(return_value=["old-history"]), get_last_seen_ts=Mock(return_value="100.000"))
+
+    with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
+         patch("listeners.events.app_mentioned.conversation_store", store), \
+         patch("thread_context.thread_history.build_unseen_messages", return_value=["header", "unseen"]) as unseen:
+        _mention(ctx, text="<@BOT1> thoughts?", ts="111.111", thread_ts="1.1")
+
+    unseen.assert_called_once()
+    assert unseen.call_args.args[3] == "100.000"
+    assert unseen.call_args.kwargs["exclude_ts"] == "111.111"
+    assert run_turn.call_args.kwargs["history"] == ["old-history", "header", "unseen"]

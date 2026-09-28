@@ -286,7 +286,7 @@ def run_agent_turn(
         except Exception:
             logger.exception("History compaction failed; storing full history")
             stored_messages = all_messages
-        conversation_store.set_history(channel_id, thread_ts, stored_messages)
+        conversation_store.set_history(channel_id, thread_ts, stored_messages, last_seen_ts=message_ts)
         try:
             conversation_trace_store.write_from_slack(
                 client, channel_id, thread_ts, all_messages
