@@ -160,6 +160,11 @@ def refresh_fallback_cache() -> None:
     """
     from agent.fallback_cache import refresh_from_results
 
+    # Jev (agent.tool_preload) isn't a chat model, so it's probed separately:
+    # its alive/dead mark decides whether turns even try it.
+    from agent.tool_preload import probe_jev
+    probe_jev()
+
     order = provider_config.build_provider_order(None)
     if not order:
         logger.info("Fallback cache refresh: no providers configured, skipping")

@@ -2904,13 +2904,23 @@ def run_agent(text, deps, message_history=None, images=None):
         dynamic_context += f"## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n\n"
 
     deps.user_token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
+    from agent.tool_preload import collect_preloads, tools_for
+    preload_started = time.perf_counter()
+    deps.preloaded_tool_groups = collect_preloads(getattr(deps, "tool_preload", None))
+    if getattr(deps, "debug_timer", None) is not None and getattr(deps, "tool_preload", None) is not None:
+        loaded = ", ".join(sorted(deps.preloaded_tool_groups)) or "nothing"
+        deps.debug_timer.record("jev", "waiting on Jev tool preload", preload_started, time.perf_counter(), f"loaded {loaded}")
+    preloaded_tools = tools_for(deps.preloaded_tool_groups)
+
     toolsets = platform.toolsets(deps)
 
     all_tools = list(agent._function_toolset.tools.values())
     if not is_vision:
         all_tools = [t for t in all_tools if t.name != "see_image_from_sandbox"]
-    core_functions = [t.function for t in all_tools if t.name not in DEFERRED_TOOLS]
-    deferred_functions = [t.function for t in all_tools if t.name in DEFERRED_TOOLS]
+    # Jev-preloaded groups (agent.tool_preload) are loaded like core tools this turn.
+    deferred_names = DEFERRED_TOOLS - preloaded_tools
+    core_functions = [t.function for t in all_tools if t.name not in deferred_names]
+    deferred_functions = [t.function for t in all_tools if t.name in deferred_names]
     toolsets = [DeferredLoadingToolset(FunctionToolset(deferred_functions)), *toolsets]
 
     agent_dynamic = Agent(

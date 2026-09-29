@@ -449,3 +449,39 @@ def build_image_provider_order(quality: str) -> list[dict]:
                 "provider": pid,
             })
     return ordered
+
+
+def build_jev_provider_order() -> list[dict]:
+    """Reachable kind=="jev" entries: TypeSafe's Jev "System One" model, which
+    answers typed questions (yes/no, choice, score) instead of writing text —
+    see agent.tool_preload. Never part of the chat chain (see _is_chat_model).
+
+    Each dict has {name, model, url, api_key, display, provider}. `name`
+    ("hcai_jev", or "hcai_jev_1" for a second one) is its agent.fallback_cache
+    key; `url` is the provider's api_url plus the entry's `api_path`.
+    """
+    pmap = _provider_map()
+    ordered: list[dict] = []
+    per_provider: dict[str, int] = {}
+    for model_entry in _get_models():
+        if model_entry.get("kind") != "jev":
+            continue
+        pid = model_entry["provider"]
+        pconf = pmap.get(pid)
+        if not pconf or not pconf.get("api_url"):
+            continue
+        env_var = pconf.get("api_key_env_var_name")
+        api_key = os.environ.get(env_var) if env_var else None
+        if not api_key:
+            continue
+        index = per_provider.get(pid, 0)
+        per_provider[pid] = index + 1
+        ordered.append({
+            "name": f"{pid}_jev" if index == 0 else f"{pid}_jev_{index}",
+            "model": model_entry["model"],
+            "url": pconf["api_url"].rstrip("/") + model_entry.get("api_path", "/jev/systemone"),
+            "api_key": api_key,
+            "display": get_provider_display(model_entry, pmap),
+            "provider": pid,
+        })
+    return ordered

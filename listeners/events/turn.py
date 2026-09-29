@@ -204,6 +204,10 @@ def run_agent_turn(
             surface=surface,
             debug_timer=debug_timer,
         )
+        # Jev decides which deferred tools this turn needs, in the background
+        # while the rest of setup runs; run_agent collects it (agent.tool_preload).
+        from agent.tool_preload import start_preload
+        deps.tool_preload = start_preload(text, history)
         conv_surface = _surface(deps)
 
         from agent.plan_block import (

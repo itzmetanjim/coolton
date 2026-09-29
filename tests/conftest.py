@@ -45,6 +45,17 @@ def _isolated_fallback_cache(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_jev(request, monkeypatch):
+    """Every turn starts a Jev tool-preload request, and the background
+    provider refresh probes Jev — with an HCAI key in the environment those
+    would hit the real API from unrelated tests. No Jev is configured unless a
+    test (tests/test_tool_preload.py) sets one up itself."""
+    if request.module.__name__.endswith("test_tool_preload"):
+        return
+    monkeypatch.setattr(provider_config, "build_jev_provider_order", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def _isolated_feedback_store(tmp_path, monkeypatch):
     """Feedback button/modal handlers store ratings as a side effect — keep
     them out of the real feedback.json."""

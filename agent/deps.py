@@ -47,6 +47,10 @@ class AgentDeps:
     model_context_window: int = 0
     # Slack tool calls made this turn (agent.slack_budget caps them).
     slack_calls: int = 0
+    # agent.tool_preload: the in-flight Jev request (started at turn start),
+    # and the deferred tool groups it decided to load for this turn.
+    tool_preload: object | None = None
+    preloaded_tool_groups: set = field(default_factory=set)
     # Snapshot of the in-progress message history, captured right before a
     # `!stop` halts the run (see plan_block.before_tool). Lets run_agent keep
     # everything up to the halt (the user's message, any completed tool
