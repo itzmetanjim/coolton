@@ -17,6 +17,7 @@ debug timing, the Slack call budget) goes through `shown_call`, so a
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import replace
 from typing import Any
@@ -116,13 +117,15 @@ async def search_tools(ctx: RunContext, queries: list[str]) -> dict:
     }
 
 
-async def call_tool(ctx: RunContext, name: str, arguments: dict[str, Any] | None = None) -> Any:
+async def call_tool(ctx: RunContext, name: str, arguments: dict[str, Any]) -> Any:
     """Call a tool you found with `search_tools` (tools in your normal tool list are
-    called directly, not through this).
+    called directly, not through this). Put ALL of the tool's own arguments inside
+    `arguments`, e.g. call_tool(name="render_mermaid_tool", arguments={"diagram_code": "..."}).
 
     Args:
         name: The tool's exact name, as search_tools returned it.
-        arguments: The tool's arguments, matching the parameters search_tools returned.
+        arguments: The tool's arguments as an object, matching the parameters search_tools
+            returned. Use {} for a tool that takes none.
     """
     for toolset, found in await _all_hidden(ctx):
         tool = found.get(name)
@@ -131,6 +134,10 @@ async def call_tool(ctx: RunContext, name: str, arguments: dict[str, Any] | None
         try:
             args = tool.args_validator.validate_python(arguments or {})
         except ValidationError as e:
-            raise ModelRetry(f"Invalid arguments for {name}: {e}") from e
+            schema = json.dumps(tool.tool_def.parameters_json_schema)
+            raise ModelRetry(
+                f"Invalid arguments for {name}: {e}\n\nCall it as call_tool(name={name!r}, "
+                f"arguments={{...}}), with every argument inside `arguments`. Its parameters: {schema}"
+            ) from e
         return await toolset.wrapped.call_tool(name, args, replace(ctx, tool_name=name), tool)
     raise ModelRetry(f"No tool named {name!r}. Use search_tools to find the right name.")
