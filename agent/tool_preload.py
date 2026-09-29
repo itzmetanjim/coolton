@@ -121,13 +121,40 @@ def _decide(entry: dict, state: dict) -> set[str]:
     }
 
 
+def _reply_text(part) -> str:
+    kind = getattr(part, "part_kind", "")
+    if kind == "text":
+        return part.content or ""
+    # A text_only_response call is a whole reply sent as a tool call (agent.agent.OUTPUT_TYPE).
+    if kind == "tool-call" and part.tool_name == "text_only_response":
+        try:
+            return str(part.args_as_dict().get("response") or "")
+        except Exception:
+            return ""
+    return ""
+
+
 def _last_reply_text(history) -> str:
     for message in reversed(history or []):
         if getattr(message, "kind", "") == "response":
-            text = "".join(getattr(p, "content", "") for p in message.parts if getattr(p, "part_kind", "") == "text")
+            text = "".join(_reply_text(p) for p in message.parts)
             if text.strip():
                 return text
     return ""
+
+
+def preload_note(groups: set[str]) -> str:
+    """Turn-context line telling the model what's already loaded, so it calls
+    those tools directly instead of searching for them first."""
+    names = sorted(tools_for(groups))
+    if SLACK_MCP_GROUP in groups:
+        names.append("the Slack MCP tools (canvases, lists, drafts, scheduled messages, profiles, channel members)")
+    if LIBRARY_DOCS_GROUP in groups:
+        names.append("Context7 (`resolve-library-id`, `query-docs`)")
+    if not names:
+        return ""
+    listed = ", ".join(n if n.startswith(("the ", "Context7")) else f"`{n}`" for n in names)
+    return f"[Already loaded for this turn — call directly, no search_tools needed: {listed}]\n\n"
 
 
 def start_preload(text: str, history=None) -> PreloadRequest | None:

@@ -113,6 +113,18 @@ def test_the_previous_reply_is_sent_as_context(monkeypatch):
     assert calls[0][0] == {"message": "yes", "coolton_previous_reply": "want me to send it now?"}
 
 
+def test_a_text_only_response_reply_is_sent_as_context(monkeypatch):
+    """A reply sent via the text_only_response output tool has no text part —
+    without it Jev sees a bare "render it" with nothing to go on."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+    calls = _jev_configured(monkeypatch, answers={})
+    history = [ModelResponse(parts=[ToolCallPart(
+        "text_only_response", {"emoji_name": "mermaid", "response": "here's a mermaid flowchart: ..."})])]
+    tp.collect_preloads(tp.start_preload("render it duh", history))
+    assert calls[0][0]["coolton_previous_reply"] == "here's a mermaid flowchart: ..."
+
+
 def test_preloaded_groups_are_sent_to_the_model_up_front(monkeypatch):
     """End to end through run_agent: the diagrams group Jev picked goes out
     with the core tools; other deferred tools stay behind search_tools."""
@@ -137,6 +149,8 @@ def test_preloaded_groups_are_sent_to_the_model_up_front(monkeypatch):
     deps.tool_preload = tp.PreloadRequest(done, time.monotonic(), "hcai_jev")
     agent_mod.run_agent("draw a flowchart", deps)
     assert deps.preloaded_tool_groups == {"diagrams"}
+    # The model is told it's already loaded, so it doesn't search_tools for it anyway.
+    assert "no search_tools needed: `render_mermaid_tool`" in captured["kwargs"]["user_prompt"]
 
     sent = {}
 

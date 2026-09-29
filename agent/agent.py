@@ -2904,7 +2904,7 @@ def run_agent(text, deps, message_history=None, images=None):
         dynamic_context += f"## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n\n"
 
     deps.user_token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
-    from agent.tool_preload import collect_preloads, tools_for
+    from agent.tool_preload import collect_preloads, preload_note, tools_for
     preload_started = time.perf_counter()
     deps.preloaded_tool_groups = collect_preloads(getattr(deps, "tool_preload", None))
     if getattr(deps, "debug_timer", None) is not None and getattr(deps, "tool_preload", None) is not None:
@@ -2945,7 +2945,8 @@ def run_agent(text, deps, message_history=None, images=None):
         from agent.debug_timing import build_timing_hooks
         capabilities.append(build_timing_hooks(deps.debug_timer))
 
-    turn_context = dynamic_context + platform.build_turn_context(deps, first_model, is_vision)
+    turn_context = (dynamic_context + platform.build_turn_context(deps, first_model, is_vision)
+                    + preload_note(deps.preloaded_tool_groups))
     text_with_turn_context = turn_context + text
 
     user_prompt: str | list = text_with_turn_context
