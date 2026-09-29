@@ -125,9 +125,9 @@ def test_a_text_only_response_reply_is_sent_as_context(monkeypatch):
     assert calls[0][0]["coolton_previous_reply"] == "here's a mermaid flowchart: ..."
 
 
-def test_preloaded_groups_are_sent_to_the_model_up_front(monkeypatch):
-    """End to end through run_agent: the diagrams group Jev picked goes out
-    with the core tools; other deferred tools stay behind search_tools."""
+def _run_turn(monkeypatch, preloaded, history=None):
+    """run_agent with a real pydantic-ai run against a mock OpenAI-compatible
+    endpoint (like HCAI); returns (the first wire request, the run's messages)."""
     import json
 
     import httpx
@@ -143,19 +143,17 @@ def test_preloaded_groups_are_sent_to_the_model_up_front(monkeypatch):
     monkeypatch.setattr(agent_mod, "_run_with_provider_chain", lambda a, kw, deps, run_label=None: (
         captured.update(agent=a, kwargs=kw), (SimpleNamespace(output="ok", all_messages=lambda: []), "x"))[1])
 
-    done = Future()
-    done.set_result({"diagrams"})
     deps = AgentDeps(client=Mock(), user_id="U1", channel_id="C1", thread_ts="1.1", message_ts="1.0", platform=FakePlatform())
-    deps.tool_preload = tp.PreloadRequest(done, time.monotonic(), "hcai_jev")
-    agent_mod.run_agent("draw a flowchart", deps)
-    assert deps.preloaded_tool_groups == {"diagrams"}
-    # The model is told it's already loaded, so it doesn't search_tools for it anyway.
-    assert "no search_tools needed: `render_mermaid_tool`" in captured["kwargs"]["user_prompt"]
+    if preloaded:
+        done = Future()
+        done.set_result(preloaded)
+        deps.tool_preload = tp.PreloadRequest(done, time.monotonic(), "hcai_jev")
+    agent_mod.run_agent("draw a flowchart", deps, message_history=history)
 
-    sent = {}
+    sent = []
 
     def handler(request):
-        sent["tools"] = {t["function"]["name"] for t in json.loads(request.content).get("tools", [])}
+        sent.append(json.loads(request.content))
         return httpx.Response(200, json={"id": "x", "object": "chat.completion", "created": 0, "model": "m",
             "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
@@ -163,29 +161,44 @@ def test_preloaded_groups_are_sent_to_the_model_up_front(monkeypatch):
     model = OpenAIChatModel("m", provider=OpenAIProvider(base_url="https://x.invalid/v1", api_key="k",
                                                          http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))))
     kwargs = {k: v for k, v in captured["kwargs"].items() if k not in ("model", "capabilities", "model_settings")}
-    captured["agent"].run_sync(model=model, **kwargs)
-
-    assert "render_mermaid_tool" in sent["tools"]
-    assert "agentmail_send_email" not in sent["tools"]
-    assert "search_tools" in sent["tools"]
+    result = captured["agent"].run_sync(model=model, **kwargs)
+    return sent[0], result.all_messages()
 
 
-def test_slack_platform_loads_mcp_toolsets_up_front_only_when_preloaded(monkeypatch):
-    from pydantic_ai.toolsets import DeferredLoadingToolset
+def test_preloaded_tools_arrive_exactly_as_if_coolton_searched_for_them(monkeypatch):
+    """Jev's picks go in as a search_tools exchange after the user's message —
+    the same thing coolton's own search adds — so the system prompt and the
+    request up to this turn stay identical to an un-preloaded turn."""
+    plain, _ = _run_turn(monkeypatch, preloaded=None)
+    request, messages = _run_turn(monkeypatch, preloaded={"diagrams"})
 
-    from agent.platforms import slack as slack_platform
+    tools = [t["function"]["name"] for t in request["tools"]]
+    assert "render_mermaid_tool" in tools and "agentmail_send_email" not in tools
+    assert request["messages"][0] == plain["messages"][0]  # system prompt, unchanged
+    roles = [m["role"] for m in request["messages"]]
+    assert roles == ["system", "user", "assistant", "tool"]
+    assert request["messages"][1] == plain["messages"][1]  # the user's message, unchanged
+    assert request["messages"][2]["tool_calls"][0]["function"]["name"] == "search_tools"
+    assert "render_mermaid_tool" in request["messages"][3]["content"]
+    # Stored like a real search, so the next turn keeps the tool loaded.
+    follow_up, _ = _run_turn(monkeypatch, preloaded=None, history=messages)
+    assert "render_mermaid_tool" in [t["function"]["name"] for t in follow_up["tools"]]
 
-    monkeypatch.setattr(slack_platform, "MCPToolset", lambda transport, **kw: SimpleNamespace(**kw))
-    monkeypatch.setattr("agent.mcp_server_store.get_user_servers", lambda uid: [])
 
-    def toolsets(groups):
-        deps = SimpleNamespace(user_id="U1", user_token="xoxp", preloaded_tool_groups=groups)
-        return slack_platform.SlackPlatform().toolsets(deps)
+def test_preloading_into_an_existing_thread_keeps_its_history(monkeypatch):
+    from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
 
-    slack_mcp, context7 = toolsets(set())
-    assert isinstance(slack_mcp, DeferredLoadingToolset) and isinstance(context7, DeferredLoadingToolset)
-    slack_mcp, context7 = toolsets({"slack_mcp", "library_docs"})
-    assert not isinstance(slack_mcp, DeferredLoadingToolset) and not isinstance(context7, DeferredLoadingToolset)
+    history = [ModelRequest(parts=[SystemPromptPart("SYSTEM"), UserPromptPart("hi")]), ModelResponse(parts=[TextPart("hey")])]
+    request, _ = _run_turn(monkeypatch, preloaded={"diagrams"}, history=history)
+    assert [m["role"] for m in request["messages"]] == ["system", "user", "assistant", "user", "assistant", "tool"]
+    assert sum(m["role"] == "system" for m in request["messages"]) == 1
+
+
+def test_mcp_groups_reveal_their_mcp_tools():
+    exchange = agent_mod._preload_search_exchange({"library_docs"})
+    names = [m["name"] for m in exchange[1].parts[0].content["discovered_tools"]]
+    assert names == ["query-docs", "resolve-library-id"]
+    assert agent_mod._preload_search_exchange(set()) is None
 
 
 def test_jev_is_never_a_chat_model(isolated_config, monkeypatch):

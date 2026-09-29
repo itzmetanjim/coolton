@@ -12,7 +12,6 @@ from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 from pydantic_ai.toolsets import DeferredLoadingToolset, WrapperToolset
 
 from agent.platform import PlatformAdapter
-from agent.tool_preload import LIBRARY_DOCS_GROUP, SLACK_MCP_GROUP
 
 logger = logging.getLogger(__name__)
 
@@ -84,19 +83,13 @@ class ResilientToolset(WrapperToolset[Any]):
             return {}
 
 
-def _context7_toolset(preload: bool = False):
+def _context7_toolset():
     """Context7 (up-to-date library/framework docs), built in for everyone.
-    Works without a key (rate-limited); CONTEXT7_API_KEY raises the limit.
-    Deferred unless Jev preloaded it for this turn (agent.tool_preload)."""
+    Works without a key (rate-limited); CONTEXT7_API_KEY raises the limit."""
     key = os.environ.get("CONTEXT7_API_KEY", "")
     headers = {"CONTEXT7_API_KEY": key} if key else {}
     transport = StreamableHttpTransport(CONTEXT7_MCP_URL, headers=headers)
-    toolset = ResilientToolset(MCPToolset(transport, id="context7"), label="Context7 MCP")
-    return toolset if preload else DeferredLoadingToolset(toolset)
-
-
-def _preloaded(deps: Any, group: str) -> bool:
-    return group in (getattr(deps, "preloaded_tool_groups", None) or set())
+    return DeferredLoadingToolset(ResilientToolset(MCPToolset(transport, id="context7"), label="Context7 MCP"))
 
 
 class SlackPlatform(PlatformAdapter):
@@ -187,8 +180,7 @@ class SlackPlatform(PlatformAdapter):
                 # Same read and attribution rules as coolton's own Slack tools
                 # (see agent/slack_mcp_guard.py).
                 from agent.slack_mcp_guard import GuardedSlackMCPToolset
-                guarded = GuardedSlackMCPToolset(MCPToolset(transport))
-                toolsets.append(guarded if _preloaded(deps, SLACK_MCP_GROUP) else DeferredLoadingToolset(guarded))
+                toolsets.append(DeferredLoadingToolset(GuardedSlackMCPToolset(MCPToolset(transport))))
             except Exception as e:
                 logger.exception("Failed to create MCP server")
                 from agent.admin_alerts import notify_admin
@@ -198,7 +190,7 @@ class SlackPlatform(PlatformAdapter):
                     dedupe_key="mcp_construct_error", min_interval_seconds=1800,
                 )
 
-        toolsets.append(_context7_toolset(preload=_preloaded(deps, LIBRARY_DOCS_GROUP)))
+        toolsets.append(_context7_toolset())
         toolsets.extend(self._user_mcp_toolsets(getattr(deps, "user_id", None)))
         return toolsets
 

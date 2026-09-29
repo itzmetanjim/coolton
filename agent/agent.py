@@ -10,7 +10,10 @@ import threading
 import requests
 from pydantic_ai import RunContext
 from pydantic_ai import Agent, ToolOutput
-from pydantic_ai.messages import BinaryContent, ToolReturn
+from pydantic_ai.messages import (
+    BinaryContent, ModelRequest, ModelResponse, SystemPromptPart, ToolReturn, ToolSearchCallPart,
+    ToolSearchReturnPart, UserPromptPart,
+)
 from pydantic_ai.capabilities import Hooks, PrepareTools, ProcessHistory
 from pydantic_ai.toolsets import DeferredLoadingToolset, FunctionToolset
 from dataclasses import replace
@@ -2904,23 +2907,20 @@ def run_agent(text, deps, message_history=None, images=None):
         dynamic_context += f"## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n\n"
 
     deps.user_token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
-    from agent.tool_preload import collect_preloads, preload_note, tools_for
+    from agent.tool_preload import collect_preloads
     preload_started = time.perf_counter()
     deps.preloaded_tool_groups = collect_preloads(getattr(deps, "tool_preload", None))
     if getattr(deps, "debug_timer", None) is not None and getattr(deps, "tool_preload", None) is not None:
         loaded = ", ".join(sorted(deps.preloaded_tool_groups)) or "nothing"
         deps.debug_timer.record("jev", "waiting on Jev tool preload", preload_started, time.perf_counter(), f"loaded {loaded}")
-    preloaded_tools = tools_for(deps.preloaded_tool_groups)
 
     toolsets = platform.toolsets(deps)
 
     all_tools = list(agent._function_toolset.tools.values())
     if not is_vision:
         all_tools = [t for t in all_tools if t.name != "see_image_from_sandbox"]
-    # Jev-preloaded groups (agent.tool_preload) are loaded like core tools this turn.
-    deferred_names = DEFERRED_TOOLS - preloaded_tools
-    core_functions = [t.function for t in all_tools if t.name not in deferred_names]
-    deferred_functions = [t.function for t in all_tools if t.name in deferred_names]
+    core_functions = [t.function for t in all_tools if t.name not in DEFERRED_TOOLS]
+    deferred_functions = [t.function for t in all_tools if t.name in DEFERRED_TOOLS]
     toolsets = [DeferredLoadingToolset(FunctionToolset(deferred_functions)), *toolsets]
 
     agent_dynamic = Agent(
@@ -2945,8 +2945,7 @@ def run_agent(text, deps, message_history=None, images=None):
         from agent.debug_timing import build_timing_hooks
         capabilities.append(build_timing_hooks(deps.debug_timer))
 
-    turn_context = (dynamic_context + platform.build_turn_context(deps, first_model, is_vision)
-                    + preload_note(deps.preloaded_tool_groups))
+    turn_context = dynamic_context + platform.build_turn_context(deps, first_model, is_vision)
     text_with_turn_context = turn_context + text
 
     user_prompt: str | list = text_with_turn_context
@@ -2963,10 +2962,21 @@ def run_agent(text, deps, message_history=None, images=None):
             ],
         ]
 
+    # Jev's picks go in as a search_tools exchange right after the user's
+    # message — exactly what coolton's own search would add — so the tool list
+    # (and the cached prefix) is the same as on every other turn.
+    run_history, run_prompt = message_history, user_prompt
+    exchange = _preload_search_exchange(deps.preloaded_tool_groups)
+    if exchange:
+        # pydantic-ai only adds the system prompt itself when the history is empty.
+        system = [SystemPromptPart(full_prompt)] if not message_history else []
+        run_history = [*(message_history or []), ModelRequest(parts=[*system, UserPromptPart(user_prompt)]), *exchange]
+        run_prompt = None
+
     run_kwargs = dict(
-        user_prompt=user_prompt,
+        user_prompt=run_prompt,
         deps=deps,
-        message_history=message_history,
+        message_history=run_history,
         toolsets=toolsets,
         capabilities=capabilities,
         # anthropic_*/openai_* settings are ignored by every provider that
@@ -3064,6 +3074,26 @@ DEFERRED_TOOLS = frozenset({
     "invite_coolton_user_to_channel", "remove_reaction_tool", "leave_channel_tool",
     "slack_api_call_as_bot_tool",
 })
+
+
+def _preload_search_exchange(groups: set[str]) -> list | None:
+    """A search_tools call + result revealing the tools Jev preloaded
+    (agent.tool_preload), shaped exactly like the model's own search — or None
+    if nothing was preloaded."""
+    from agent.tool_preload import mcp_tools_for, tools_for
+
+    function_tools = agent._function_toolset.tools
+    matches = [
+        {"name": name, "description": function_tools[name].description}
+        for name in sorted(tools_for(groups)) if name in function_tools
+    ] + [{"name": name, "description": None} for name in sorted(mcp_tools_for(groups))]
+    if not matches:
+        return None
+    call = ToolSearchCallPart(args={"queries": sorted(groups)})
+    return [
+        ModelResponse(parts=[call]),
+        ModelRequest(parts=[ToolSearchReturnPart(tool_call_id=call.tool_call_id, content={"discovered_tools": matches})]),
+    ]
 
 
 def _current_year_note() -> str:

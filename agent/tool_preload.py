@@ -8,6 +8,11 @@ from the user's message in well under a second, and the groups it says yes
 to are loaded from the start. search_tools still works for anything Jev
 missed.
 
+"Loaded" means exactly what coolton's own search_tools call does: run_agent
+adds a search_tools call and its result for those tools to the turn
+(agent.agent._preload_search_exchange). The tool list itself never changes, so
+the request prefix stays byte-identical and the shared prompt cache still hits.
+
 Never allowed to slow a turn down or break it:
 - the request starts in the background when the turn starts (start_preload),
   overlapping the rest of turn setup, and is given a hard JEV_TIMEOUT_SECONDS
@@ -35,7 +40,7 @@ PRELOAD_THRESHOLD = 0.5
 _STATE_CHARS = 4000
 
 # Group -> (the yes/no question Jev answers, the deferred function tools it loads).
-# The two MCP groups load a whole MCP toolset instead (see agent.platforms.slack).
+# The two MCP groups load MCP tools instead (MCP_GROUP_TOOLS).
 TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
     "email": ("Does this involve email: reading, checking or sending emails, or an email inbox?", frozenset({
         "agentmail_create_inbox", "agentmail_list_inboxes", "agentmail_list_messages",
@@ -70,6 +75,18 @@ TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
 SLACK_MCP_GROUP = "slack_mcp"
 LIBRARY_DOCS_GROUP = "library_docs"
 
+# Deferred MCP tools each MCP group loads (names as the servers publish them).
+# A name a server doesn't have this turn (e.g. Context7 down) is just ignored.
+MCP_GROUP_TOOLS: dict[str, frozenset[str]] = {
+    SLACK_MCP_GROUP: frozenset({
+        "slack_create_canvas", "slack_read_canvas", "slack_update_canvas",
+        "slack_create_list", "slack_read_list", "slack_update_list",
+        "slack_add_list_record", "slack_update_list_record",
+        "slack_send_message_draft", "slack_schedule_message",
+        "slack_read_user_profile", "slack_list_channel_members"}),
+    LIBRARY_DOCS_GROUP: frozenset({"resolve-library-id", "query-docs"}),
+}
+
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="jev-preload")
 
 
@@ -81,7 +98,12 @@ class PreloadRequest:
 
 
 def tools_for(groups: set[str]) -> frozenset[str]:
+    """The deferred function tools (agent.agent.DEFERRED_TOOLS) these groups load."""
     return frozenset().union(*(TOOL_GROUPS[g][1] for g in groups if g in TOOL_GROUPS))
+
+
+def mcp_tools_for(groups: set[str]) -> frozenset[str]:
+    return frozenset().union(*(MCP_GROUP_TOOLS.get(g, frozenset()) for g in groups))
 
 
 def _usable_jev() -> dict | None:
@@ -141,20 +163,6 @@ def _last_reply_text(history) -> str:
             if text.strip():
                 return text
     return ""
-
-
-def preload_note(groups: set[str]) -> str:
-    """Turn-context line telling the model what's already loaded, so it calls
-    those tools directly instead of searching for them first."""
-    names = sorted(tools_for(groups))
-    if SLACK_MCP_GROUP in groups:
-        names.append("the Slack MCP tools (canvases, lists, drafts, scheduled messages, profiles, channel members)")
-    if LIBRARY_DOCS_GROUP in groups:
-        names.append("Context7 (`resolve-library-id`, `query-docs`)")
-    if not names:
-        return ""
-    listed = ", ".join(n if n.startswith(("the ", "Context7")) else f"`{n}`" for n in names)
-    return f"[Already loaded for this turn — call directly, no search_tools needed: {listed}]\n\n"
 
 
 def start_preload(text: str, history=None) -> PreloadRequest | None:
