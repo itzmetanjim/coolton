@@ -51,6 +51,8 @@ class AgentDeps:
     # and the deferred tool groups it decided to load for this turn.
     tool_preload: object | None = None
     preloaded_tool_groups: set = field(default_factory=set)
+    # Toolsets reached through search_tools/call_tool (agent.deferred_tools), set by run_agent.
+    hidden_toolsets: list = field(default_factory=list)
     # Snapshot of the in-progress message history, captured right before a
     # `!stop` halts the run (see plan_block.before_tool). Lets run_agent keep
     # everything up to the halt (the user's message, any completed tool

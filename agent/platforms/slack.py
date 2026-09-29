@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
-from pydantic_ai.toolsets import DeferredLoadingToolset, WrapperToolset
+from pydantic_ai.toolsets import WrapperToolset
 
+from agent.deferred_tools import HiddenToolset
 from agent.platform import PlatformAdapter
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ def _context7_toolset():
     key = os.environ.get("CONTEXT7_API_KEY", "")
     headers = {"CONTEXT7_API_KEY": key} if key else {}
     transport = StreamableHttpTransport(CONTEXT7_MCP_URL, headers=headers)
-    return DeferredLoadingToolset(ResilientToolset(MCPToolset(transport, id="context7"), label="Context7 MCP"))
+    return HiddenToolset(ResilientToolset(MCPToolset(transport, id="context7"), label="Context7 MCP"))
 
 
 class SlackPlatform(PlatformAdapter):
@@ -180,7 +181,7 @@ class SlackPlatform(PlatformAdapter):
                 # Same read and attribution rules as coolton's own Slack tools
                 # (see agent/slack_mcp_guard.py).
                 from agent.slack_mcp_guard import GuardedSlackMCPToolset
-                toolsets.append(DeferredLoadingToolset(GuardedSlackMCPToolset(MCPToolset(transport))))
+                toolsets.append(HiddenToolset(GuardedSlackMCPToolset(MCPToolset(transport))))
             except Exception as e:
                 logger.exception("Failed to create MCP server")
                 from agent.admin_alerts import notify_admin
@@ -215,7 +216,7 @@ class SlackPlatform(PlatformAdapter):
             try:
                 headers = {"Authorization": f"Bearer {server['token']}"} if server.get("token") else {}
                 transport = StreamableHttpTransport(server["url"], headers=headers)
-                result.append(DeferredLoadingToolset(MCPToolset(transport, id=f"user_mcp_{server['id']}")))
+                result.append(HiddenToolset(MCPToolset(transport, id=f"user_mcp_{server['id']}")))
             except Exception:
                 logger.exception("Failed to build user MCP toolset %s (%s) for %s", server["id"], server["name"], user_id)
         return result

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 
+from agent.deferred_tools import is_preload_call, shown_call
 from agent.plan_block import (
     _display_for_tool,
     _looks_like_tool_call_leakage,
@@ -103,8 +104,11 @@ def build_web_hooks(conversation_id: str):
     @hooks.on.before_tool_execute
     async def before_tool(ctx, *, call, tool_def, args):
         deps = ctx.deps
-        display = _display_for_tool(call.tool_name)
-        log.append_event(conversation_id, {"type": "turn_status", "text": f"calling tool: {display}"})
+        # A call_tool call is shown as the tool it runs (agent.deferred_tools).
+        shown, shown_args = shown_call(call, args)
+        display = _display_for_tool(shown.tool_name)
+        if not is_preload_call(call):
+            log.append_event(conversation_id, {"type": "turn_status", "text": f"calling tool: {display}"})
 
         # Checkpoint how far this attempt has gotten — same resume mechanism the
         # Slack side uses (see AgentDeps.last_attempt_messages).
@@ -113,11 +117,14 @@ def build_web_hooks(conversation_id: str):
         if stop_requested_for(deps.channel_id, deps.thread_ts, deps.run_started_at):
             deps.halted_messages = safe_messages
             raise HaltRun("!stop requested")
+        # Jev's preload search isn't a step the model took, so it isn't shown as one.
+        if is_preload_call(call):
+            return args
 
         log.append_event(conversation_id, {
             "type": "step", "kind": "tool", "step_id": call.tool_call_id,
-            "tool_name": call.tool_name, "display": display,
-            "status": "in_progress", "args": _redact_json(args),
+            "tool_name": shown.tool_name, "display": display,
+            "status": "in_progress", "args": _redact_json(shown_args),
         })
         return args
 
@@ -132,15 +139,19 @@ def build_web_hooks(conversation_id: str):
             result = f"{result}\n\n{notes}"
             clear_steering_messages(deps.channel_id, deps.thread_ts)
 
+        if is_preload_call(call):
+            return result
+        shown = shown_call(call, args)[0]
         log.append_event(conversation_id, {
             "type": "step", "kind": "tool", "step_id": call.tool_call_id,
-            "tool_name": call.tool_name, "display": _display_for_tool(call.tool_name),
+            "tool_name": shown.tool_name, "display": _display_for_tool(shown.tool_name),
             "status": "complete", "result": _redact_json(_safe_str(result)),
         })
         return result
 
     @hooks.on.tool_execute_error
     async def on_tool_error(ctx, *, call, tool_def, args, error):
+        call = shown_call(call, args)[0]
         log.append_event(conversation_id, {
             "type": "step", "kind": "tool", "step_id": call.tool_call_id,
             "tool_name": call.tool_name, "display": _display_for_tool(call.tool_name),

@@ -11,11 +11,10 @@ import requests
 from pydantic_ai import RunContext
 from pydantic_ai import Agent, ToolOutput
 from pydantic_ai.messages import (
-    BinaryContent, ModelRequest, ModelResponse, SystemPromptPart, ToolReturn, ToolSearchCallPart,
-    ToolSearchReturnPart, UserPromptPart,
+    BinaryContent, ModelRequest, ModelResponse, SystemPromptPart, ToolCallPart, ToolReturn, UserPromptPart,
 )
 from pydantic_ai.capabilities import Hooks, PrepareTools, ProcessHistory
-from pydantic_ai.toolsets import DeferredLoadingToolset, FunctionToolset
+from pydantic_ai.toolsets import FunctionToolset
 from dataclasses import replace
 from agent.deps import AgentDeps
 from agent.surface import get_surface as _surface
@@ -241,9 +240,10 @@ def _redact_output(ctx, *, output_context, output):
 
 
 async def _enforce_slack_budget(ctx, *, call, tool_def, args, handler):
+    from agent.deferred_tools import shown_call
     from agent.slack_budget import spend
 
-    over = spend(ctx.deps, call.tool_name)
+    over = spend(ctx.deps, shown_call(call, args)[0].tool_name)
     if over:
         return over
     return await handler(args)
@@ -262,6 +262,12 @@ agent = Agent(
     tools=[add_emoji_reaction],
     capabilities=[_hooks],
 )
+
+# How the model reaches DEFERRED_TOOLS and the MCP servers (see agent.deferred_tools).
+from agent.deferred_tools import CALL_TOOL, HiddenToolset, call_tool, search_tools  # noqa: E402
+
+agent.tool(search_tools)
+agent.tool(retries=2)(call_tool)
 
 @agent.tool
 def invite_coolton_user_to_channel(ctx: RunContext[AgentDeps]) -> str:
@@ -452,6 +458,9 @@ CODE_MODE_EXCLUDED_TOOLS = {
     "add_emoji_reaction",
     "delegate_to_subagent",
     "create_code_channel_tool",
+    # Need a live agent run; code mode already calls hidden tools directly by name.
+    "search_tools",
+    "call_tool",
 }
 
 
@@ -2919,9 +2928,11 @@ def run_agent(text, deps, message_history=None, images=None):
     all_tools = list(agent._function_toolset.tools.values())
     if not is_vision:
         all_tools = [t for t in all_tools if t.name != "see_image_from_sandbox"]
-    core_functions = [t.function for t in all_tools if t.name not in DEFERRED_TOOLS]
+    # call_tool keeps its own retry budget (a wrong name or bad arguments gets retried).
+    core_functions = [t if t.name == CALL_TOOL else t.function for t in all_tools if t.name not in DEFERRED_TOOLS]
     deferred_functions = [t.function for t in all_tools if t.name in DEFERRED_TOOLS]
-    toolsets = [DeferredLoadingToolset(FunctionToolset(deferred_functions)), *toolsets]
+    toolsets = [HiddenToolset(FunctionToolset(deferred_functions)), *toolsets]
+    deps.hidden_toolsets = [t for t in toolsets if isinstance(t, HiddenToolset)]
 
     agent_dynamic = Agent(
         deps_type=AgentDeps,
@@ -2962,15 +2973,15 @@ def run_agent(text, deps, message_history=None, images=None):
             ],
         ]
 
-    # Jev's picks go in as a search_tools exchange right after the user's
-    # message — exactly what coolton's own search would add — so the tool list
-    # (and the cached prefix) is the same as on every other turn.
+    # Jev's picks go in as a search_tools call right after the user's message,
+    # which the run executes first — exactly what coolton's own search would
+    # do, so the tool list (and the cached prefix) never changes.
     run_history, run_prompt = message_history, user_prompt
-    exchange = _preload_search_exchange(deps.preloaded_tool_groups)
-    if exchange:
+    preload = _preload_search_call(deps.preloaded_tool_groups)
+    if preload:
         # pydantic-ai only adds the system prompt itself when the history is empty.
         system = [SystemPromptPart(full_prompt)] if not message_history else []
-        run_history = [*(message_history or []), ModelRequest(parts=[*system, UserPromptPart(user_prompt)]), *exchange]
+        run_history = [*(message_history or []), ModelRequest(parts=[*system, UserPromptPart(user_prompt)]), *preload]
         run_prompt = None
 
     run_kwargs = dict(
@@ -3051,10 +3062,10 @@ def run_agent(text, deps, message_history=None, images=None):
                 pass
 
 
-# Tools hidden from the model until it finds them with `search_tools` (which
-# pydantic-ai's ToolSearch adds automatically whenever deferred tools exist).
-# Every tool definition is sent on every request, so the rarely-used ones here
-# were most of a ~46k-token base prompt; the model loads them on demand instead.
+# Tools kept out of the model's tool list: it finds them with `search_tools`
+# and runs them with `call_tool` (agent.deferred_tools). Every tool definition
+# is sent on every request, so the rarely-used ones here were most of a
+# ~46k-token base prompt.
 # Keep anything most turns need OUT of this set.
 DEFERRED_TOOLS = frozenset({
     "agentmail_create_inbox", "agentmail_list_inboxes", "agentmail_list_messages",
@@ -3076,24 +3087,20 @@ DEFERRED_TOOLS = frozenset({
 })
 
 
-def _preload_search_exchange(groups: set[str]) -> list | None:
-    """A search_tools call + result revealing the tools Jev preloaded
-    (agent.tool_preload), shaped exactly like the model's own search — or None
-    if nothing was preloaded."""
+def _preload_search_call(groups: set[str]) -> list | None:
+    """A pending search_tools call for the tools Jev preloaded (agent.tool_preload),
+    or None if nothing was. The run executes it before the first model request —
+    exactly as if the model had searched — so MCP tools get their real schemas."""
+    from uuid import uuid4
+
+    from agent.deferred_tools import PRELOAD_CALL_ID_PREFIX, SEARCH_TOOL
     from agent.tool_preload import mcp_tools_for, tools_for
 
-    function_tools = agent._function_toolset.tools
-    matches = [
-        {"name": name, "description": function_tools[name].description}
-        for name in sorted(tools_for(groups)) if name in function_tools
-    ] + [{"name": name, "description": None} for name in sorted(mcp_tools_for(groups))]
-    if not matches:
+    names = sorted(tools_for(groups)) + sorted(mcp_tools_for(groups))
+    if not names:
         return None
-    call = ToolSearchCallPart(args={"queries": sorted(groups)})
-    return [
-        ModelResponse(parts=[call]),
-        ModelRequest(parts=[ToolSearchReturnPart(tool_call_id=call.tool_call_id, content={"discovered_tools": matches})]),
-    ]
+    call = ToolCallPart(SEARCH_TOOL, {"queries": names}, tool_call_id=f"{PRELOAD_CALL_ID_PREFIX}{uuid4().hex[:12]}")
+    return [ModelResponse(parts=[call])]
 
 
 def _current_year_note() -> str:

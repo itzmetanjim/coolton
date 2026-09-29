@@ -171,6 +171,8 @@ def build_timing_hooks(timer: TurnTimer):
         try:
             return await handler(args)
         finally:
-            timer.record("tool", call.tool_name, start, time.perf_counter())
+            from agent.deferred_tools import shown_call
+
+            timer.record("tool", shown_call(call, args)[0].tool_name, start, time.perf_counter())
 
     return hooks

@@ -127,23 +127,28 @@ def test_a_text_only_response_reply_is_sent_as_context(monkeypatch):
 
 def _run_turn(monkeypatch, preloaded, history=None):
     """run_agent with a real pydantic-ai run against a mock OpenAI-compatible
-    endpoint (like HCAI); returns (the first wire request, the run's messages)."""
+    endpoint (like HCAI), with the Slack plan block on; returns (the first wire
+    request, the run's messages, deps)."""
     import json
 
     import httpx
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
+    import agent.plan_block as plan_block
     from agent.deps import AgentDeps
     from tests.test_deferred_tools import FakePlatform
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.setattr("listeners.actions.instructions_actions.get_user_instructions", lambda uid: "")
+    monkeypatch.setattr(plan_block, "update_plan_message", lambda deps: None)
+    monkeypatch.setattr(plan_block.thread_status, "set_status", lambda *a, **k: None)
     captured = {}
     monkeypatch.setattr(agent_mod, "_run_with_provider_chain", lambda a, kw, deps, run_label=None: (
         captured.update(agent=a, kwargs=kw), (SimpleNamespace(output="ok", all_messages=lambda: []), "x"))[1])
 
     deps = AgentDeps(client=Mock(), user_id="U1", channel_id="C1", thread_ts="1.1", message_ts="1.0", platform=FakePlatform())
+    deps.plan_ts = "9.9"
     if preloaded:
         done = Future()
         done.set_result(preloaded)
@@ -160,45 +165,44 @@ def _run_turn(monkeypatch, preloaded, history=None):
 
     model = OpenAIChatModel("m", provider=OpenAIProvider(base_url="https://x.invalid/v1", api_key="k",
                                                          http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))))
-    kwargs = {k: v for k, v in captured["kwargs"].items() if k not in ("model", "capabilities", "model_settings")}
+    kwargs = {k: v for k, v in captured["kwargs"].items() if k not in ("model", "model_settings")}
     result = captured["agent"].run_sync(model=model, **kwargs)
-    return sent[0], result.all_messages()
+    return sent[0], result.all_messages(), deps
 
 
-def test_preloaded_tools_arrive_exactly_as_if_coolton_searched_for_them(monkeypatch):
-    """Jev's picks go in as a search_tools exchange after the user's message —
-    the same thing coolton's own search adds — so the system prompt and the
-    request up to this turn stay identical to an un-preloaded turn."""
-    plain, _ = _run_turn(monkeypatch, preloaded=None)
-    request, messages = _run_turn(monkeypatch, preloaded={"diagrams"})
+def test_a_preload_is_coolton_s_own_search_run_for_it(monkeypatch):
+    """Jev's picks become a search_tools call run before the first model request:
+    the tool list and everything up to the user's message are byte-identical to
+    an un-preloaded turn (so the shared prompt cache still hits), the model gets
+    the tools' schemas for call_tool, and the plan block doesn't show it as a step."""
+    import json
 
-    tools = [t["function"]["name"] for t in request["tools"]]
-    assert "render_mermaid_tool" in tools and "agentmail_send_email" not in tools
-    assert request["messages"][0] == plain["messages"][0]  # system prompt, unchanged
-    roles = [m["role"] for m in request["messages"]]
-    assert roles == ["system", "user", "assistant", "tool"]
-    assert request["messages"][1] == plain["messages"][1]  # the user's message, unchanged
-    assert request["messages"][2]["tool_calls"][0]["function"]["name"] == "search_tools"
-    assert "render_mermaid_tool" in request["messages"][3]["content"]
-    # Stored like a real search, so the next turn keeps the tool loaded.
-    follow_up, _ = _run_turn(monkeypatch, preloaded=None, history=messages)
-    assert "render_mermaid_tool" in [t["function"]["name"] for t in follow_up["tools"]]
+    plain, _, _ = _run_turn(monkeypatch, preloaded=None)
+    request, _, deps = _run_turn(monkeypatch, preloaded={"diagrams"})
+
+    assert request["tools"] == plain["tools"]
+    assert request["messages"][:len(plain["messages"])] == plain["messages"]
+    search, result = request["messages"][len(plain["messages"]):]
+    assert search["tool_calls"][0]["function"]["name"] == "search_tools"
+    [found] = json.loads(result["content"])["discovered_tools"]
+    assert found["name"] == "render_mermaid_tool" and "diagram_code" in found["parameters"]["properties"]
+    assert deps.plan_tasks == {}
 
 
 def test_preloading_into_an_existing_thread_keeps_its_history(monkeypatch):
     from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
 
     history = [ModelRequest(parts=[SystemPromptPart("SYSTEM"), UserPromptPart("hi")]), ModelResponse(parts=[TextPart("hey")])]
-    request, _ = _run_turn(monkeypatch, preloaded={"diagrams"}, history=history)
-    assert [m["role"] for m in request["messages"]] == ["system", "user", "assistant", "user", "assistant", "tool"]
-    assert sum(m["role"] == "system" for m in request["messages"]) == 1
+    request, _, _ = _run_turn(monkeypatch, preloaded={"diagrams"}, history=history)
+    roles = [m["role"] for m in request["messages"] if m["role"] != "system"]
+    assert roles == ["user", "assistant", "user", "assistant", "tool"]
+    assert [m["content"] for m in request["messages"]].count("SYSTEM") == 1
 
 
-def test_mcp_groups_reveal_their_mcp_tools():
-    exchange = agent_mod._preload_search_exchange({"library_docs"})
-    names = [m["name"] for m in exchange[1].parts[0].content["discovered_tools"]]
-    assert names == ["query-docs", "resolve-library-id"]
-    assert agent_mod._preload_search_exchange(set()) is None
+def test_mcp_groups_search_for_their_mcp_tools():
+    [response] = agent_mod._preload_search_call({"library_docs"})
+    assert response.parts[0].args == {"queries": ["query-docs", "resolve-library-id"]}
+    assert agent_mod._preload_search_call(set()) is None
 
 
 def test_jev_is_never_a_chat_model(isolated_config, monkeypatch):

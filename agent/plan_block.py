@@ -3,6 +3,7 @@ import re
 import time
 
 import agent.thread_status as thread_status
+from agent.deferred_tools import is_preload_call, shown_call
 from agent.redact import redact as _redact
 from agent.steering_store import clear_steering_messages, peek_steering_messages
 from agent.stop_store import HaltRun, stop_requested_for
@@ -505,13 +506,16 @@ def build_plan_hooks():
     @hooks.on.before_tool_execute
     async def before_tool(ctx, *, call, tool_def, args):
         deps = ctx.deps
+        # A call_tool call is shown as the tool it runs (agent.deferred_tools).
+        shown, shown_args = shown_call(call, args)
         logger.info(
             "TOOL INPUT  | %s | %s",
-            call.tool_name,
-            _truncate(_redact(_pretty_args(args), context=f"tool input {call.tool_name}"), 1000),
+            shown.tool_name,
+            _truncate(_redact(_pretty_args(shown_args), context=f"tool input {shown.tool_name}"), 1000),
         )
-        display = _display_for_tool(call.tool_name)
-        thread_status.set_status(deps.channel_id, deps.thread_ts, f"calling tool: {display}")
+        display = _display_for_tool(shown.tool_name)
+        if not is_preload_call(call):
+            thread_status.set_status(deps.channel_id, deps.thread_ts, f"calling tool: {display}")
         # Checkpoint how far this attempt has gotten (everything through the last
         # completed tool round-trip) — if this attempt's provider fails later and
         # falls back to a different one, agent.agent._run_with_provider_chain resumes
@@ -522,7 +526,8 @@ def build_plan_hooks():
         if stop_requested_for(deps.channel_id, deps.thread_ts, deps.run_started_at):
             deps.halted_messages = safe_messages
             raise HaltRun("!stop requested")
-        if not deps.plan_ts:
+        # Jev's preload search isn't a step the model took, so it isn't shown as one.
+        if not deps.plan_ts or is_preload_call(call):
             return args
         task_id = f"task_{call.tool_call_id}"
         if _DEFAULT_THINKING_ID in deps.plan_tasks:
@@ -531,7 +536,7 @@ def build_plan_hooks():
             "task_id": task_id,
             "title": display,
             "status": "in_progress",
-            "input": _truncate(_redact(_pretty_args(args), context=f"tool input {call.tool_name}"), 500),
+            "input": _truncate(_redact(_pretty_args(shown_args), context=f"tool input {shown.tool_name}"), 500),
         }
         update_plan_message(deps)
         return args
@@ -539,10 +544,11 @@ def build_plan_hooks():
     @hooks.on.after_tool_execute
     async def after_tool(ctx, *, call, tool_def, args, result):
         deps = ctx.deps
+        shown = shown_call(call, args)[0]
         logger.info(
             "TOOL OUTPUT | %s | %s",
-            call.tool_name,
-            _truncate(_redact(_pretty_args(result), context=f"tool output {call.tool_name}"), 1000),
+            shown.tool_name,
+            _truncate(_redact(_pretty_args(result), context=f"tool output {shown.tool_name}"), 1000),
         )
 
         # A message sent into this thread while the run was already in flight
@@ -567,7 +573,7 @@ def build_plan_hooks():
         if task is not None:
             task["status"] = "complete"
             task["output"] = _combined_io(
-                task.get("input", ""), _redact(_safe_str(result), context=f"tool output {call.tool_name}")
+                task.get("input", ""), _redact(_safe_str(result), context=f"tool output {shown.tool_name}")
             )
             update_plan_message(deps)
         return result
@@ -575,6 +581,7 @@ def build_plan_hooks():
     @hooks.on.tool_execute_error
     async def on_tool_error(ctx, *, call, tool_def, args, error):
         deps = ctx.deps
+        call = shown_call(call, args)[0]
         logger.error(
             "TOOL ERROR  | %s | %s",
             call.tool_name,
