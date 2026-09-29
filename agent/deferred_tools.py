@@ -51,7 +51,9 @@ def shown_call(call, args):
     """(call, args) as they should be shown and counted: a call_tool call
     becomes a call of the tool it runs, with that tool's arguments."""
     if call.tool_name == CALL_TOOL and isinstance(args, dict) and isinstance(args.get("name"), str):
-        return replace(call, tool_name=args["name"]), args.get("arguments") or {}
+        inner = args.get("arguments")
+        parsed = _parse_arguments(inner)
+        return replace(call, tool_name=args["name"]), parsed if parsed is not None else inner
     return call, args
 
 
@@ -113,31 +115,45 @@ async def search_tools(ctx: RunContext, queries: list[str]) -> dict:
         return {"discovered_tools": [], "message": "No matching tools. Try other words, or a tool's exact name."}
     return {
         "discovered_tools": [_describe(tools[name]) for name in picked],
-        "how_to_call": "These are not in your tool list. Call them with call_tool(name=..., arguments={...}).",
+        "how_to_call": "These are not in your tool list. Call them with call_tool(name=..., arguments='{...}'), the arguments as one JSON object string.",
     }
 
 
-async def call_tool(ctx: RunContext, name: str, arguments: dict[str, Any]) -> Any:
+def _parse_arguments(arguments) -> dict | None:
+    """call_tool's `arguments` JSON string as a dict, or None if it isn't one."""
+    if isinstance(arguments, dict):
+        return arguments
+    try:
+        parsed = json.loads(arguments or "{}")
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+async def call_tool(ctx: RunContext, name: str, arguments: str) -> Any:
     """Call a tool you found with `search_tools` (tools in your normal tool list are
-    called directly, not through this). Put ALL of the tool's own arguments inside
-    `arguments`, e.g. call_tool(name="render_mermaid_tool", arguments={"diagram_code": "..."}).
+    called directly, not through this). Pass ALL of the tool's own arguments as one JSON
+    object string in `arguments`, e.g.
+    call_tool(name="render_mermaid_tool", arguments='{"diagram_code": "graph TD; A-->B"}').
 
     Args:
         name: The tool's exact name, as search_tools returned it.
-        arguments: The tool's arguments as an object, matching the parameters search_tools
-            returned. Use {} for a tool that takes none.
+        arguments: The tool's arguments as a JSON object string, matching the parameters
+            search_tools returned. Use "{}" for a tool that takes none.
     """
     for toolset, found in await _all_hidden(ctx):
         tool = found.get(name)
         if tool is None:
             continue
+        schema = json.dumps(tool.tool_def.parameters_json_schema)
+        how = (f"Call it as call_tool(name={name!r}, arguments='{{...}}'), with every argument in "
+               f"one JSON object string. Its parameters: {schema}")
+        parsed = _parse_arguments(arguments)
+        if parsed is None:
+            raise ModelRetry(f"`arguments` for {name} must be a JSON object string. {how}")
         try:
-            args = tool.args_validator.validate_python(arguments or {})
+            args = tool.args_validator.validate_python(parsed)
         except ValidationError as e:
-            schema = json.dumps(tool.tool_def.parameters_json_schema)
-            raise ModelRetry(
-                f"Invalid arguments for {name}: {e}\n\nCall it as call_tool(name={name!r}, "
-                f"arguments={{...}}), with every argument inside `arguments`. Its parameters: {schema}"
-            ) from e
+            raise ModelRetry(f"Invalid arguments for {name}: {e}\n\n{how}") from e
         return await toolset.wrapped.call_tool(name, args, replace(ctx, tool_name=name), tool)
     raise ModelRetry(f"No tool named {name!r}. Use search_tools to find the right name.")

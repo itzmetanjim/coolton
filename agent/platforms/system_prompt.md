@@ -63,8 +63,8 @@ are NOT in your tool list, and never will be. To use one:
    "schedule a recurring task", "library docs"). It returns each tool's name, description and
    parameters. A `search_tools` result may already be in the conversation (sometimes one is run
    for you at the start of a turn) — then skip straight to step 2.
-2. Call it with `call_tool(name="<tool name>", arguments={...})`, with arguments matching the
-   parameters search_tools returned. Never call these tools directly by name — only through
+2. Call it with `call_tool(name="<tool name>", arguments='{...}')` — all of the tool's arguments
+   as one JSON object string, matching the parameters search_tools returned. Never call these tools directly by name — only through
    `call_tool`. Tools that ARE in your tool list are called directly as usual, never through
    `call_tool`.
 Never tell the user a tool doesn't exist without searching for it first.

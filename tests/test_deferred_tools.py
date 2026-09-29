@@ -90,7 +90,7 @@ def test_searching_and_calling_a_deferred_tool_never_changes_the_tool_list(monke
 
     script = [
         _chat(tool_calls=[("search_tools", {"queries": ["mermaid diagram"]})]),
-        _chat(tool_calls=[("call_tool", {"name": "render_mermaid_tool", "arguments": {"diagram_code": "graph TD; A-->B"}})]),
+        _chat(tool_calls=[("call_tool", {"name": "render_mermaid_tool", "arguments": '{"diagram_code": "graph TD; A-->B"}'})]),
         _chat(content="done"),
     ]
     sent = []
@@ -132,11 +132,13 @@ def test_call_tool_validates_arguments_and_names():
         return f"scheduled {when} x{repeat}"
 
     ctx = _hidden_ctx(schedule_task)
-    assert asyncio.run(call_tool(ctx, "schedule_task", {"when": "9am", "repeat": "3"})) == "scheduled 9am x3"
+    assert asyncio.run(call_tool(ctx, "schedule_task", '{"when": "9am", "repeat": "3"}')) == "scheduled 9am x3"
     with pytest.raises(ModelRetry, match="Invalid arguments for schedule_task"):
-        asyncio.run(call_tool(ctx, "schedule_task", {"repeat": 2}))
+        asyncio.run(call_tool(ctx, "schedule_task", '{"repeat": 2}'))
+    with pytest.raises(ModelRetry, match="JSON object string"):
+        asyncio.run(call_tool(ctx, "schedule_task", "when=9am"))
     with pytest.raises(ModelRetry, match="search_tools"):
-        asyncio.run(call_tool(ctx, "schedule_tsak", {"when": "9am"}))
+        asyncio.run(call_tool(ctx, "schedule_tsak", '{"when": "9am"}'))
 
 
 def test_search_tools_finds_by_exact_name_or_keywords_and_hides_them_from_the_list():
