@@ -13,11 +13,11 @@ def fake_token(monkeypatch):
 
 def test_upload_bytes_returns_url(monkeypatch):
     resp = Mock()
-    resp.json.return_value = {"url": "https://tanjim.org:2390/f/abc.html"}
+    resp.json.return_value = {"url": "https://2390.proxy.tanjim.org/f/abc.html"}
     monkeypatch.setattr("agent.web64_client.requests.post", lambda *a, **k: resp)
 
     url = upload_bytes(b"<h1>hi</h1>", "embed.html", mime="text/html")
-    assert url == "https://tanjim.org:2390/f/abc.html"
+    assert url == "https://2390.proxy.tanjim.org/f/abc.html"
 
 
 def test_upload_bytes_sends_auth_and_mime(monkeypatch):
@@ -26,12 +26,12 @@ def test_upload_bytes_sends_auth_and_mime(monkeypatch):
     def fake_post(url, **kwargs):
         captured.update(url=url, headers=kwargs["headers"], params=kwargs["params"], data=kwargs["data"])
         resp = Mock()
-        resp.json.return_value = {"url": "https://tanjim.org:2390/f/x"}
+        resp.json.return_value = {"url": "https://2390.proxy.tanjim.org/f/x"}
         return resp
 
     monkeypatch.setattr("agent.web64_client.requests.post", fake_post)
     upload_bytes(b"content", "a.txt", mime="text/plain")
-    assert captured["url"] == "https://tanjim.org:2390/upload"
+    assert captured["url"] == "https://2390.proxy.tanjim.org/upload"
     assert captured["headers"]["Authorization"] == "Bearer tok-123"
     assert captured["headers"]["Content-Type"] == "text/plain"
     assert captured["params"] == {"filename": "a.txt"}
@@ -44,7 +44,7 @@ def test_upload_bytes_no_mime_header(monkeypatch):
     def fake_post(url, **kwargs):
         captured.update(kwargs)
         resp = Mock()
-        resp.json.return_value = {"url": "https://tanjim.org:2390/f/x"}
+        resp.json.return_value = {"url": "https://2390.proxy.tanjim.org/f/x"}
         return resp
 
     monkeypatch.setattr("agent.web64_client.requests.post", fake_post)

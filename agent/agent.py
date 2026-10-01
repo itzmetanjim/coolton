@@ -674,10 +674,9 @@ def upload_file_from_sandbox(
 ) -> str:
     """Upload a file from the sandbox and post its hosted link in the current channel/thread.
 
-    Files are hosted on the coolton file server (tanjim.org:2390), so there is
-    no size limit. Slack's own file upload API silently drops shares in this
-    workspace, so the file is served from the coolton server instead and the
-    link is posted with chat.postMessage.
+    Files are hosted on Bucky (bucky.hackclub.com), Hack Club's public file host.
+    Slack's own file upload API silently drops shares in this workspace, so the
+    file is hosted there instead and the link is posted with chat.postMessage.
     """
     channel_id = ctx.deps.channel_id
     thread_ts = ctx.deps.thread_ts
@@ -691,9 +690,9 @@ def upload_file_from_sandbox(
             return f"Error: File not found at {filepath}"
         filename = os.path.basename(filepath)
 
-        from agent.web64_client import upload_bytes
+        from agent.bucky_client import upload_to_bucky
 
-        url = upload_bytes(file_content, filename)
+        url = upload_to_bucky(file_content, filename)
         return _surface(ctx.deps).post_file_link(url, filename, title=title, comment=initial_comment)
     except Exception as e:
         return f"Error uploading file: {str(e)}"

@@ -2,7 +2,7 @@ import os
 
 import requests
 
-WEB64_UPLOAD_URL = os.environ.get("WEB_HELPER_UPLOAD_URL", "https://tanjim.org:2390/upload")
+WEB64_UPLOAD_URL = os.environ.get("WEB_HELPER_UPLOAD_URL", "https://2390.proxy.tanjim.org/upload")
 WEB64_TOKEN_FILE = os.environ.get("WEB_HELPER_TOKEN_FILE", os.environ.get("WEB64_TOKEN_FILE", "/home/tanjim/web64_token"))
 
 
