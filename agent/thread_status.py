@@ -1,48 +1,51 @@
-"""Live "what's coolton doing right now" status via Slack's assistant.threads.setStatus.
+"""Live "what's coolton doing right now" status, via Slack agent sessions.
 
-Shown in the AI-assistant thread pane's status pill — distinct from the plan/thinking
-block (agent.plan_block) and from mid-turn text narration. Kept fresh two ways, mirroring
-agent.sandbox_keepalive's per-thread timer pattern:
-  - agent.plan_block's before_tool_execute hook calls set_status() with the tool's
-    display name on every tool call, so the pill always shows the last tool called.
-  - a repeating timer resends whatever the current status is every _REFRESH_SECONDS, so
-    a long stretch of pure model "thinking" (no tool call yet, or a single slow tool)
-    doesn't leave a stale status on screen.
+A turn puts the thread's agent session in `processing` (agents.sessions.setStatus),
+which shows Slack's loading UI and, since coolton subscribes to agent_session_stopped,
+a stop button (see listeners.events.agent_session_stopped). setStatus takes no custom
+text, so the text lives in the session's title (agents.sessions.rename):
+  - start() creates/updates the session as `processing`, titled "working".
+  - set_status() renames it on every tool call (agent.plan_block) and every
+    set_activity (agent.surfaces.slack), e.g. "calling tool: Search web".
+  - stop() renames it to the request that started the turn, so the sessions list
+    reads as a list of requests rather than whatever tool ran last, and sets it
+    `active`. Slack no longer clears the loading UI when a message is posted, so a
+    turn that never reached stop() would stay "working" until Slack's one-hour timeout.
 
-start()/stop() bracket one turn (listeners.events.turn.run_agent_turn): start() sends the
-turn's initial status ("Working") and arms the refresh timer; stop() cancels it so a
-finished turn's timer never fires into whatever thread starts next. Never raises — a
-flaky status API must not block the actual turn.
+`processing` times out after an hour; a timer re-sends it every _REFRESH_SECONDS so a
+very long turn keeps its loading UI. Never raises: a flaky status API must not block
+the actual turn.
 """
 
 import logging
+import re
 import threading
 
 logger = logging.getLogger(__name__)
 
-# Slack hard-caps assistant.threads.setStatus's status text at 49 characters.
-_MAX_STATUS_LEN = 49
-_REFRESH_SECONDS = 30.0
+_MAX_TITLE_LEN = 200  # agents.sessions.rename accepts 1-200 characters
+_REFRESH_SECONDS = 30 * 60.0
+_START_TITLE = "working"
 
 _lock = threading.Lock()
 _state: dict[tuple[str, str], dict] = {}
 
 
-def _crop(status: str) -> str:
-    return status[:_MAX_STATUS_LEN]
+def _title(text: str) -> str:
+    text = re.sub(r"<@[A-Z0-9]+>", "", text or "")
+    text = " ".join(text.split())
+    return (text[:_MAX_TITLE_LEN - 1] + "…") if len(text) > _MAX_TITLE_LEN else (text or "coolton")
 
 
-def _send(client, channel_id: str, thread_ts: str, status: str) -> None:
+def _call(client, method: str, channel_id: str, thread_ts: str, **fields) -> None:
     if not thread_ts:
         # thread_ts="" is a code channel's channel-level conversation (see
-        # agent.code_channel_store) — there's no real Slack thread for
-        # assistant.threads.setStatus to attach to, so skip it rather than
-        # logging a warning on every single call for the life of the turn.
+        # agent.code_channel_store): there's no real Slack thread for a session.
         return
     try:
-        client.assistant_threads_setStatus(channel_id=channel_id, thread_ts=thread_ts, status=status)
+        client.api_call(method, json={"channel_id": channel_id, "thread_ts": thread_ts, **fields})
     except Exception as e:
-        logger.warning(f"assistant_threads_setStatus failed for {channel_id}/{thread_ts}: {e}")
+        logger.warning(f"{method} failed for {channel_id}/{thread_ts}: {e}")
 
 
 def _arm_refresh(key: tuple[str, str]) -> None:
@@ -59,46 +62,52 @@ def _tick(channel_id: str, thread_ts: str) -> None:
         entry = _state.get(key)
         if entry is None:
             return
-        client, status = entry["client"], entry["status"]
+        client = entry["client"]
         _arm_refresh(key)
-    _send(client, channel_id, thread_ts, status)
+    _call(client, "agents.sessions.setStatus", channel_id, thread_ts, status="processing")
 
 
-def start(client, channel_id: str, thread_ts: str, status: str = "Working") -> None:
-    """Begin a turn: send the initial status right away and arm the refresh timer."""
+def start(client, channel_id: str, thread_ts: str, request_text: str = "") -> None:
+    """Begin a turn: put the session in `processing` and arm the keep-alive timer.
+    `request_text` (the user's message) becomes the session's title when the turn ends."""
     key = (channel_id, thread_ts)
-    cropped = _crop(status)
     with _lock:
         old = _state.pop(key, None)
         if old and old.get("timer"):
             old["timer"].cancel()
-        _state[key] = {"client": client, "status": cropped, "timer": None}
+        _state[key] = {"client": client, "final_title": _title(request_text), "timer": None}
         _arm_refresh(key)
-    _send(client, channel_id, thread_ts, cropped)
+    # `title` only applies when this creates the session, so rename too for an existing one.
+    _call(client, "agents.sessions.setStatus", channel_id, thread_ts, status="processing", title=_START_TITLE)
+    _call(client, "agents.sessions.rename", channel_id, thread_ts, title=_START_TITLE)
 
 
 def set_status(channel_id: str, thread_ts: str, status: str) -> None:
-    """Update the status shown (e.g. on every tool call), sending it immediately and
-    resetting the refresh countdown. No-op if start() was never called for this thread
-    (e.g. this hook fires in a context that never armed live status updates)."""
-    key = (channel_id, thread_ts)
-    cropped = _crop(status)
+    """Show what coolton is doing right now (e.g. "calling tool: Search web") as the
+    session title. No-op if start() was never called for this thread."""
     with _lock:
-        entry = _state.get(key)
+        entry = _state.get((channel_id, thread_ts))
         if entry is None:
             return
-        if entry.get("timer"):
-            entry["timer"].cancel()
-        entry["status"] = cropped
         client = entry["client"]
-        _arm_refresh(key)
-    _send(client, channel_id, thread_ts, cropped)
+    _call(client, "agents.sessions.rename", channel_id, thread_ts, title=_title(status))
 
 
 def stop(channel_id: str, thread_ts: str) -> None:
-    """End of turn: cancel the refresh timer and drop state so it never outlives the turn."""
-    key = (channel_id, thread_ts)
+    """End of turn: title the session after the request, set it `active`, and drop
+    state so the keep-alive timer never outlives the turn."""
     with _lock:
-        entry = _state.pop(key, None)
+        entry = _state.pop((channel_id, thread_ts), None)
         if entry and entry.get("timer"):
             entry["timer"].cancel()
+    if entry is None:
+        return
+    client = entry["client"]
+    _call(client, "agents.sessions.rename", channel_id, thread_ts, title=entry["final_title"])
+    _call(client, "agents.sessions.setStatus", channel_id, thread_ts, status="active")
+
+
+def end_session_now(client, channel_id: str, thread_ts: str) -> None:
+    """Take the session out of `processing` right away (the stop button). The turn's
+    own stop() still runs when the halted run finishes."""
+    _call(client, "agents.sessions.setStatus", channel_id, thread_ts, status="active")

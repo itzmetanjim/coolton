@@ -1,5 +1,6 @@
 from slack_bolt import App
 
+from .agent_session_stopped import handle_agent_session_stopped
 from .app_home_opened import handle_app_home_opened
 from .app_mentioned import handle_app_mentioned
 from .assistant_thread_started import handle_assistant_thread_started
@@ -8,6 +9,7 @@ from .policy_membership import handle_member_joined_channel, handle_member_left_
 
 
 def register(app: App):
+    app.event("agent_session_stopped")(handle_agent_session_stopped)
     app.event("app_home_opened")(handle_app_home_opened)
     app.event("app_mention")(handle_app_mentioned)
     app.event("assistant_thread_started")(handle_assistant_thread_started)

@@ -87,7 +87,7 @@ def test_banned_user_short_circuits_before_any_work(mocks, monkeypatch):
     _run_turn(mocks, text="hello")
 
     turn.run_agent.assert_not_called()
-    mocks.client.assistant_threads_setStatus.assert_not_called()
+    mocks.client.api_call.assert_not_called()
     mocks.say.assert_called_once()
     assert "banned" in mocks.say.call_args.kwargs["text"]
 
@@ -108,9 +108,10 @@ def test_happy_path(mocks):
     import agent.plan_block as pb
     _run_turn(mocks)
 
-    mocks.client.assistant_threads_setStatus.assert_called_once()
-    status_call = mocks.client.assistant_threads_setStatus.call_args.kwargs
-    assert status_call["status"] == "Working"
+    # The thread's agent session is `processing` for the turn and `active` after it.
+    statuses = [c.kwargs["json"]["status"] for c in mocks.client.api_call.call_args_list
+                if c.args[0] == "agents.sessions.setStatus"]
+    assert statuses == ["processing", "active"]
 
     pb.send_plan_message.assert_called_once()
     pb.finalize_plan_message.assert_called_once()
@@ -225,11 +226,11 @@ def test_error_path_reports_and_sets_plan_error(mocks):
 
 
 def test_status_api_failure_does_not_block_the_turn(mocks):
-    """assistant_threads_setStatus is a cosmetic live-status pill (agent.thread_status) —
-    a flaky/erroring status API must not prevent the actual turn from running."""
+    """The agent session status (agent.thread_status) is cosmetic: a flaky or erroring
+    status API must not prevent the actual turn from running."""
     import agent.plan_block as pb
 
-    mocks.client.assistant_threads_setStatus.side_effect = Exception("status api down")
+    mocks.client.api_call.side_effect = Exception("status api down")
     _run_turn(mocks)
 
     mocks.say.assert_not_called()
@@ -348,7 +349,7 @@ def test_invalid_tag_directive_short_circuits_before_any_work(mocks, a_known_tag
     _run_turn(mocks, text="hi [!WITH:bogus] there")
 
     turn.run_agent.assert_not_called()
-    mocks.client.assistant_threads_setStatus.assert_not_called()
+    mocks.client.api_call.assert_not_called()
     mocks.say.assert_called_once()
     error_text = mocks.say.call_args.kwargs["text"]
     assert "bogus" in error_text

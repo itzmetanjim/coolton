@@ -180,10 +180,10 @@ def run_agent_turn(
             return
 
         if is_slack:
-            # Live "what's coolton doing" status pill: starts at "Working", then tracks
-            # the last tool called (agent.plan_block's before_tool_execute hook) and
-            # refreshes every 30s in between — see agent.thread_status.
-            thread_status.start(client, channel_id, thread_ts)
+            # Live status via the thread's Slack agent session: `processing` with the
+            # current step as its title, then titled after this request and set
+            # `active` when the turn ends. See agent.thread_status.
+            thread_status.start(client, channel_id, thread_ts, request_text=text)
 
             # Warn the thread if HCAI (coolton's primary provider) is about to
             # fall back to a much worse model — see agent.hcai_status. Runs on

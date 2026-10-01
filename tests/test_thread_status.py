@@ -1,3 +1,4 @@
+"""agent.thread_status: a turn's live status through Slack agent sessions."""
 from unittest.mock import Mock
 
 import pytest
@@ -6,16 +7,9 @@ from agent import thread_status as ts
 
 
 class _FakeTimer:
-    """Records what would have been scheduled instead of actually waiting 30s — start()/
-    set_status()/stop() should behave correctly (reset, cancel-old-before-new) without
-    real sleeps, and fire() lets a test simulate the periodic refresh firing."""
-
     def __init__(self, interval, function, args=()):
-        self.interval = interval
-        self.function = function
-        self.args = args
-        self.started = False
-        self.canceled = False
+        self.interval, self.function, self.args = interval, function, args
+        self.started = self.canceled = False
 
     def start(self):
         self.started = True
@@ -35,124 +29,78 @@ def _fake_timer(monkeypatch):
     ts._state.clear()
 
 
-def test_start_sends_the_initial_status_and_arms_a_refresh_timer():
-    client = Mock()
-    ts.start(client, "C1", "1.1")
+def calls(client):
+    return [(c.args[0], c.kwargs["json"]) for c in client.api_call.call_args_list]
 
-    client.assistant_threads_setStatus.assert_called_once_with(
-        channel_id="C1", thread_ts="1.1", status="Working"
-    )
+
+def test_a_turn_shows_progress_in_the_session_title_then_ends_active_titled_after_the_request():
+    client = Mock()
+    session = {"channel_id": "C1", "thread_ts": "1.1"}
+    ts.start(client, "C1", "1.1", request_text="<@U0BOT>  can you check the   deploy logs?")
+    ts.set_status("C1", "1.1", "calling tool: Run linux command")
     timer = ts._state[("C1", "1.1")]["timer"]
-    assert isinstance(timer, _FakeTimer)
-    assert timer.interval == ts._REFRESH_SECONDS
-    assert timer.started is True
+    ts.stop("C1", "1.1")
+
+    assert calls(client) == [
+        ("agents.sessions.setStatus", {**session, "status": "processing", "title": "working"}),
+        ("agents.sessions.rename", {**session, "title": "working"}),
+        ("agents.sessions.rename", {**session, "title": "calling tool: Run linux command"}),
+        ("agents.sessions.rename", {**session, "title": "can you check the deploy logs?"}),
+        ("agents.sessions.setStatus", {**session, "status": "active"}),
+    ]
+    assert timer.canceled and ("C1", "1.1") not in ts._state
 
 
-def test_start_accepts_a_custom_initial_status():
-    client = Mock()
-    ts.start(client, "C1", "1.1", status="Getting started")
-
-    client.assistant_threads_setStatus.assert_called_once_with(
-        channel_id="C1", thread_ts="1.1", status="Getting started"
-    )
-
-
-def test_status_is_cropped_to_49_chars():
-    client = Mock()
-    long_status = "x" * 80
-    ts.start(client, "C1", "1.1", status=long_status)
-
-    sent = client.assistant_threads_setStatus.call_args.kwargs["status"]
-    assert sent == "x" * 49
-
-
-def test_set_status_sends_immediately_and_cancels_the_old_timer():
+def test_a_long_turn_keeps_processing_alive_past_slacks_one_hour_timeout():
     client = Mock()
     ts.start(client, "C1", "1.1")
-    first_timer = ts._state[("C1", "1.1")]["timer"]
-
-    ts.set_status("C1", "1.1", "calling tool: Reacting to message")
-
-    assert first_timer.canceled is True
-    assert client.assistant_threads_setStatus.call_args.kwargs["status"] == "calling tool: Reacting to message"
-    new_timer = ts._state[("C1", "1.1")]["timer"]
-    assert new_timer is not first_timer
-    assert new_timer.started is True
-
-
-def test_set_status_crops_a_long_tool_name_to_49_chars():
-    client = Mock()
-    ts.start(client, "C1", "1.1")
-
-    ts.set_status("C1", "1.1", "calling tool: " + "y" * 60)
-
-    sent = client.assistant_threads_setStatus.call_args.kwargs["status"]
-    assert len(sent) == 49
-
-
-def test_set_status_is_a_noop_when_start_was_never_called():
-    # No exception, no call — nothing to update for a thread with no live status armed.
-    ts.set_status("NEVER-STARTED", "1.1", "calling tool: X")
-
-
-def test_refresh_timer_resends_the_current_status_and_rearms():
-    client = Mock()
-    ts.start(client, "C1", "1.1")
-    ts.set_status("C1", "1.1", "calling tool: Searching the web")
-    client.assistant_threads_setStatus.reset_mock()
-
     timer = ts._state[("C1", "1.1")]["timer"]
+    assert timer.interval < 60 * 60
+    client.api_call.reset_mock()
+
     timer.fire()
 
-    client.assistant_threads_setStatus.assert_called_once_with(
-        channel_id="C1", thread_ts="1.1", status="calling tool: Searching the web"
-    )
-    new_timer = ts._state[("C1", "1.1")]["timer"]
-    assert new_timer is not timer
-    assert new_timer.started is True
+    assert calls(client) == [("agents.sessions.setStatus", {"channel_id": "C1", "thread_ts": "1.1", "status": "processing"})]
+    assert ts._state[("C1", "1.1")]["timer"] is not timer
 
 
-def test_stop_cancels_the_timer_and_clears_state():
+def test_titles_are_cropped_to_slacks_200_character_limit():
     client = Mock()
-    ts.start(client, "C1", "1.1")
-    timer = ts._state[("C1", "1.1")]["timer"]
-
+    ts.start(client, "C1", "1.1", request_text="x" * 300)
     ts.stop("C1", "1.1")
-
-    assert timer.canceled is True
-    assert ("C1", "1.1") not in ts._state
+    assert len(calls(client)[-2][1]["title"]) == 200
 
 
-def test_stop_is_a_noop_when_nothing_was_started():
-    ts.stop("NEVER-STARTED", "1.1")
-
-
-def test_set_status_after_stop_is_a_noop():
+def test_nothing_is_sent_outside_a_turn_or_for_a_code_channel_conversation():
     client = Mock()
-    ts.start(client, "C1", "1.1")
+    ts.set_status("C1", "1.1", "calling tool: X")  # never started
     ts.stop("C1", "1.1")
-    client.assistant_threads_setStatus.reset_mock()
+    ts.start(client, "C1", "", request_text="hi")  # channel-level code channel: no thread
+    ts.set_status("C1", "", "calling tool: X")
+    ts.stop("C1", "")
+    assert client.api_call.call_count == 0
 
+
+def test_a_failing_status_api_never_breaks_the_turn():
+    client = Mock()
+    client.api_call.side_effect = Exception("status api down")
+    ts.start(client, "C1", "1.1")
     ts.set_status("C1", "1.1", "calling tool: X")
+    ts.stop("C1", "1.1")
 
-    client.assistant_threads_setStatus.assert_not_called()
 
+@pytest.mark.parametrize("running", [True, False])
+def test_the_stop_button_halts_the_run_and_takes_the_session_out_of_processing(monkeypatch, running):
+    from listeners.events import agent_session_stopped as handler
 
-def test_start_again_cancels_a_previous_unstopped_timer():
-    """A new turn's start() must not leave the previous turn's timer running (belt and
-    suspenders alongside listeners.events.turn's own stop() in its finally block)."""
+    stopped = []
+    monkeypatch.setattr(handler, "is_run_active", lambda c, t: running)
+    monkeypatch.setattr(handler, "request_stop", lambda c, t: stopped.append((c, t)))
     client = Mock()
-    ts.start(client, "C1", "1.1")
-    first_timer = ts._state[("C1", "1.1")]["timer"]
 
-    ts.start(client, "C1", "1.1")
+    handler.handle_agent_session_stopped(
+        client, {"type": "agent_session_stopped", "channel": "C1", "thread_ts": "1.1", "user": "U1"}, Mock())
 
-    assert first_timer.canceled is True
-
-
-def test_send_failure_is_logged_and_swallowed_not_raised():
-    client = Mock()
-    client.assistant_threads_setStatus.side_effect = Exception("status api down")
-
-    ts.start(client, "C1", "1.1")  # must not raise
-    ts.set_status("C1", "1.1", "calling tool: X")  # must not raise either
+    assert stopped == ([("C1", "1.1")] if running else [])
+    assert client.chat_postMessage.called == running
+    assert calls(client) == [("agents.sessions.setStatus", {"channel_id": "C1", "thread_ts": "1.1", "status": "active"})]

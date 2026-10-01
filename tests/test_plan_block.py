@@ -547,7 +547,7 @@ def test_build_plan_hooks_updates_live_thread_status_on_tool_call():
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100", channel_id="TS1", thread_ts="1.1")
     thread_status.start(deps.client, "TS1", "1.1")
-    deps.client.assistant_threads_setStatus.reset_mock()
+    deps.client.api_call.reset_mock()
     ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="add_emoji_reaction", tool_call_id="abc123")
 
@@ -556,22 +556,22 @@ def test_build_plan_hooks_updates_live_thread_status_on_tool_call():
 
     try:
         asyncio.run(run())
-        deps.client.assistant_threads_setStatus.assert_called_once_with(
-            channel_id="TS1", thread_ts="1.1", status="calling tool: Reacting to message"
+        deps.client.api_call.assert_called_once_with(
+            "agents.sessions.rename", json={"channel_id": "TS1", "thread_ts": "1.1", "title": "calling tool: Reacting to message"}
         )
     finally:
         thread_status.stop("TS1", "1.1")
 
 
 def test_build_plan_hooks_updates_live_thread_status_even_without_a_plan_message():
-    """The live status pill is independent of the plan/thinking block — it should still
+    """The live status is independent of the plan/thinking block: it should still
     update even when plan_ts is unset (e.g. send_plan_message failed)."""
     import agent.thread_status as thread_status
 
     hooks = build_plan_hooks()
     deps = _deps(channel_id="TS2", thread_ts="1.1")  # plan_ts None
     thread_status.start(deps.client, "TS2", "1.1")
-    deps.client.assistant_threads_setStatus.reset_mock()
+    deps.client.api_call.reset_mock()
     ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="search_web_tool", tool_call_id="abc123")
 
@@ -580,8 +580,8 @@ def test_build_plan_hooks_updates_live_thread_status_even_without_a_plan_message
 
     try:
         asyncio.run(run())
-        deps.client.assistant_threads_setStatus.assert_called_once_with(
-            channel_id="TS2", thread_ts="1.1", status="calling tool: Searching the web"
+        deps.client.api_call.assert_called_once_with(
+            "agents.sessions.rename", json={"channel_id": "TS2", "thread_ts": "1.1", "title": "calling tool: Searching the web"}
         )
     finally:
         thread_status.stop("TS2", "1.1")
