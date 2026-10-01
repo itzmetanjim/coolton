@@ -235,7 +235,9 @@ def _redact_tool_result(ctx, *, call, tool_def, args, result):
 
 def _redact_output(ctx, *, output_context, output):
     if isinstance(output, str):
-        return _redact(output, context="final response")
+        from agent.writing_style import strip_em_dashes
+
+        return strip_em_dashes(_redact(output, context="final response"))
     return output
 
 
@@ -320,14 +322,14 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str, timeout: int = _
         timeout: Max seconds to let the command run before giving up (default 60,
             same as a quick shell command needs). Raise this BEFORE running anything
             you expect to be slow (agent-browser opening a page and waiting for it
-            to load, npm installs, builds, long scripts) — don't wait to find out
+            to load, npm installs, builds, long scripts), don't wait to find out
             from a "context deadline exceeded" error. Pass 0 to disable the timeout
             entirely and let the command run as long as it needs; only do this when
             you're confident it will actually finish on its own. Any other value is
             clamped to 10-1800 seconds.
 
     About to run `agent-browser open --headed <url>` for a nontrivial session? Call
-    `agent_browser_stream_tool` first (before this command, not after) — otherwise the
+    `agent_browser_stream_tool` first (before this command, not after), otherwise the
     browser opens invisibly on a desktop nobody's watching. This tool has no way to
     remind you again once the command is already running.
     """
@@ -379,21 +381,21 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str, timeout: int = _
 def run_background_command_tool(ctx: RunContext[AgentDeps], command: str, cwd: str = "") -> str:
     """Start a command in the sandbox running DETACHED IN THE BACKGROUND and
     return immediately with a job id, instead of blocking the turn until it
-    finishes — use this for a dev server, a watcher, or any long-running
+    finishes, use this for a dev server, a watcher, or any long-running
     process you need to keep alive while you do other things (check its
     output later with check_background_command_tool, stop it with
     kill_background_command_tool). For anything that just needs to finish and
-    give you its output, use run_linux_command instead — don't background
+    give you its output, use run_linux_command instead, don't background
     something you're only going to immediately wait on.
 
-    You'll be notified automatically when it finishes — mid-turn as a steering
+    You'll be notified automatically when it finishes, mid-turn as a steering
     note if you're still working, or as a fresh message if you've already
-    finished responding — so there's no need to keep calling
+    finished responding, so there's no need to keep calling
     check_background_command_tool just to wait on it.
 
     Args:
         command: The shell command to run in the background.
-        cwd: Directory to run it from (optional — defaults to the sandbox's
+        cwd: Directory to run it from (optional, defaults to the sandbox's
             default working directory).
     """
     from agent.tools.sandbox_background import run_background_command
@@ -641,7 +643,7 @@ def get_slack_file_tool(ctx: RunContext[AgentDeps], file: str, filename: str = "
     shared in the current conversation or a public channel (or uploaded by the person
     asking) can be downloaded. When downloading
     images, pass a filename with the correct extension (.png, .jpg, .jpeg, .webp).
-    NEVER guess the file id — pull the real F... id from the message's attachments or permalink.
+    NEVER guess the file id, pull the real F... id from the message's attachments or permalink.
 
     Args:
         file: Slack file id (e.g. F0123ABCD), or a Slack file permalink containing the id.
@@ -854,12 +856,12 @@ def computer_use(
 ) -> ToolReturn[str]:
     """Use a real XFCE desktop (mouse, keyboard, screenshots) inside your sandbox.
 
-    Needs a vision-capable model — see a screenshot after every action to know where
+    Needs a vision-capable model, see a screenshot after every action to know where
     things are and what happened. If the current turn isn't running on one, this
     returns an error telling the user to re-send with `[!WITH:vision]`.
 
     Call `computer_stream_tool` once, BEFORE your first action here, so the user has
-    a live view instead of just a final report — easy to forget mid-task since this
+    a live view instead of just a final report, easy to forget mid-task since this
     tool itself never prompts for it. Skipping it isn't fatal (screenshots still post
     to the thread as you go), but do it by default for anything that isn't a single
     trivial click.
@@ -867,13 +869,13 @@ def computer_use(
     A "screenshot" action also posts that image to the thread itself (throttled to at
     most once every few seconds), so the user sees progress inline without needing to
     open the live stream. This works the same way during a --headed agent-browser
-    session (same shared desktop) — call `action="screenshot"` periodically as a
+    session (same shared desktop), call `action="screenshot"` periodically as a
     check-in even if you don't strictly need it to decide your next move, so the user
     gets to see it happen instead of just a final report.
 
     Actions:
     - "screenshot": see the current screen (no other args). ALWAYS start here and take
-      one after every action that might change the screen — coordinates only make sense
+      one after every action that might change the screen, coordinates only make sense
       relative to what you just saw.
     - "click" / "right_click" / "middle_click" / "double_click": x, y (pixel coords from
       the last screenshot). Omit x/y to click at the current cursor position.
@@ -881,9 +883,9 @@ def computer_use(
     - "scroll": direction ("up"/"down"), amount (number of notches).
     - "drag": x, y, x2, y2 (drag from one point to another).
     - "type": text (typed at the current text cursor/focus).
-    - "key": keys — a single key name ("enter", "escape", "tab") or a "+"-joined combo
+    - "key": keys, a single key name ("enter", "escape", "tab") or a "+"-joined combo
       ("ctrl+c", "cmd+shift+t").
-    - "wait": amount (milliseconds) — for a page/app to finish loading or animating.
+    - "wait": amount (milliseconds), for a page/app to finish loading or animating.
     - "open_url": target (a URL, opened in the default browser).
     - "launch_app": target (an app's .desktop id, e.g. "firefox-esr", "org.gnome.gedit").
 
@@ -962,13 +964,13 @@ def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
 
 @agent.tool
 def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
-    """Start (or re-share) a live, view-only VNC stream and post it to the thread — the
+    """Start (or re-share) a live, view-only VNC stream and post it to the thread, the
     SAME desktop stream computer_stream_tool shows.
 
     Call this once before your first `agent-browser open --headed ...` in a nontrivial
     session so the user can watch a real browser window happen live, not just a final
     report. Then run agent-browser with `DISPLAY=:0 agent-browser open --headed <url>`
-    (both flags required — without --headed it stays invisible even with the stream up).
+    (both flags required, without --headed it stays invisible even with the stream up).
     Safe to call again later to re-post the link.
     """
     if not os.environ.get("E2B_API_KEY"):
@@ -997,7 +999,7 @@ def set_sandbox_keepalive_tool(ctx: RunContext[AgentDeps], seconds: int) -> str:
     auto-pausing, while a VNC stream is running.
 
     computer_stream_tool / agent_browser_stream_tool already set this to 120s when they
-    start a stream, and every sandbox action resets the countdown — you normally don't
+    start a stream, and every sandbox action resets the countdown, you normally don't
     need to touch this. Use it if 120s isn't enough (e.g. you expect a long gap with no
     commands in between, like waiting on the user to look at something) by raising it,
     or set it to 0 to go back to pausing immediately after each command. Clamped to
@@ -1031,14 +1033,14 @@ def generate_image_tool(
     download_attachments_to_sandbox). Editing always uses HCAI's image models.
 
     Tries, in order: the user's BYOK image endpoint if they have one set
-    (quality has no effect on this — it's their own model, not a choice
+    (quality has no effect on this, it's their own model, not a choice
     between ours); otherwise HCAI, using the model `quality` picks, falling
     back automatically to the OTHER quality's HCAI model if that one's
     request fails (e.g. HCAI itself is down); otherwise the global
     OPENAI_API_KEY as a last resort.
 
     Saves the generated image(s) into a sandbox (starting one for this thread if it doesn't
-    have one yet) and returns their sandbox paths — never the raw image bytes, which would
+    have one yet) and returns their sandbox paths, never the raw image bytes, which would
     otherwise dump megabytes of base64 into your own context. Use upload_file_from_sandbox
     to send them to Slack.
 
@@ -1049,8 +1051,8 @@ def generate_image_tool(
         aspect_ratio: Optional aspect ratio like "16:9", "1:1", "9:16", "4:3".
             Overrides size when it maps to a known size; otherwise passed through
             to providers that support an `aspect_ratio` field.
-        quality: "high" (HCAI google/gemini-3-pro-image-preview — slower,
-            better) or "low" (HCAI google/gemini-2.5-flash-image —
+        quality: "high" (HCAI google/gemini-3-pro-image-preview, slower,
+            better) or "low" (HCAI google/gemini-2.5-flash-image,
             faster, default). Only chooses between HCAI's two models; ignored
             entirely when a BYOK image endpoint is used instead.
         reference_images: Sandbox paths of images to edit/combine (optional).
@@ -1359,7 +1361,7 @@ def remove_reaction_tool(ctx: RunContext[AgentDeps], emoji_name: str, timestamp:
 
 @agent.tool
 def upload_emoji_tool(ctx: RunContext[AgentDeps], name: str, path: str = "", alias_for: str = "") -> str:
-    """Add a custom Slack emoji. Pass `path` (a sandbox image file — starts a sandbox for this
+    """Add a custom Slack emoji. Pass `path` (a sandbox image file, starts a sandbox for this
     thread if it doesn't have one yet) to upload a new emoji, or `alias_for` (an existing emoji
     name) to create an alias instead. Exactly one of the two is required. Only available if
     EMOJI_PROXY_TOKEN is configured; says so plainly if it isn't.
@@ -1377,7 +1379,7 @@ def upload_emoji_tool(ctx: RunContext[AgentDeps], name: str, path: str = "", ali
 def submit_feedback_tool(ctx: RunContext[AgentDeps], kind: str, body: str) -> str:
     """Record feedback about coolton itself so it reaches the maintainer. Use this when someone
     reports that you're broken or wrong, praises something you did, or asks for a change or new
-    capability — as a conversational alternative to the thumbs up/down buttons under a specific
+    capability, as a conversational alternative to the thumbs up/down buttons under a specific
     reply. Write `body` in your own words as a self-contained report: what they were doing, what
     happened, and what they expected. Do not use this for anything other than feedback about
     coolton, and do not use it as a substitute for actually answering the person.
@@ -1428,7 +1430,7 @@ def read_conversation_history_tool(
 def read_sandbox_file_tool(
     ctx: RunContext[AgentDeps], path: str, offset: int = 1, limit: int = 2000,
 ) -> str:
-    """Read a file from the sandbox filesystem — prefer this over `cat`/`head`/
+    """Read a file from the sandbox filesystem, prefer this over `cat`/`head`/
     `tail` via run_linux_command. Output is line-numbered (like `cat -n`), so
     you can reference exact lines back to the user or as context for
     edit_sandbox_file_tool.
@@ -1447,7 +1449,7 @@ def read_sandbox_file_tool(
 def write_sandbox_file_tool(ctx: RunContext[AgentDeps], path: str, content: str) -> str:
     """Write content to a file in the sandbox filesystem, OVERWRITING it
     entirely if it already exists. Creates parent dirs. Use this for a new
-    file, or when you're replacing a file's content wholesale — for a
+    file, or when you're replacing a file's content wholesale, for a
     targeted change to an existing file, use edit_sandbox_file_tool instead,
     it's cheaper and can't accidentally drop unrelated content.
 
@@ -1463,17 +1465,17 @@ def write_sandbox_file_tool(ctx: RunContext[AgentDeps], path: str, content: str)
 def edit_sandbox_file_tool(
     ctx: RunContext[AgentDeps], path: str, old_string: str, new_string: str, replace_all: bool = False,
 ) -> str:
-    """Replace an exact string in an existing sandbox file — prefer this over
+    """Replace an exact string in an existing sandbox file, prefer this over
     `sed`/sandbox rewrites via run_linux_command for any targeted code change.
 
     old_string must match the file's existing content EXACTLY (whitespace and
     indentation included) and must be unique in the file unless
-    replace_all=True — read the file with read_sandbox_file_tool first if
+    replace_all=True, read the file with read_sandbox_file_tool first if
     you're not certain of its exact contents, and include enough surrounding
     lines in old_string to pin down the one occurrence you mean.
 
     Args:
-        path: Path to the file to edit (must already exist — use
+        path: Path to the file to edit (must already exist, use
             write_sandbox_file_tool to create a new one).
         old_string: The exact text to find and replace.
         new_string: The text to replace it with.
@@ -1496,7 +1498,7 @@ def search_sandbox_files_tool(
     context_lines: int = 0,
     head_limit: int = 100,
 ) -> str:
-    """Search file CONTENTS in the sandbox with a regex — prefer this over
+    """Search file CONTENTS in the sandbox with a regex, prefer this over
     `grep`/`rg` via run_linux_command for finding where something is defined
     or used. For finding files BY NAME instead, use list_sandbox_files_tool.
 
@@ -1511,7 +1513,7 @@ def search_sandbox_files_tool(
         context_lines: Lines of context to show before/after each match
             (content mode only, default 0).
         head_limit: Cap on the number of output lines returned (default 100)
-            so a broad search can't flood your context — narrow `pattern`/
+            so a broad search can't flood your context, narrow `pattern`/
             `glob`/`path` instead of raising this if you hit the cap.
     """
     from agent.tools.sandbox_files import search_sandbox_files
@@ -1525,7 +1527,7 @@ def search_sandbox_files_tool(
 def list_sandbox_files_tool(
     ctx: RunContext[AgentDeps], pattern: str = "*", path: str = "/home/user", limit: int = 200,
 ) -> str:
-    """Find files in the sandbox BY NAME/PATTERN — prefer this over `find`/`ls`
+    """Find files in the sandbox BY NAME/PATTERN, prefer this over `find`/`ls`
     via run_linux_command. Supports "**" for recursive matching (e.g.
     "**/*.py" finds every .py file under `path`, at any depth). Results are
     sorted by modification time, most recently modified first. To search file
@@ -1732,7 +1734,7 @@ def send_html_embed_tool(
     There is no size limit.
 
     IMPORTANT: the embed's default background varies (it can be black, white, or
-    the viewer's theme), so NEVER rely on default colors — always set an explicit
+    the viewer's theme), so NEVER rely on default colors, always set an explicit
     background-color AND text color in the CSS (e.g. a styled <body> or <div>
     wrapper), otherwise text can be invisible (e.g. black text on a black
     background).
@@ -1823,8 +1825,8 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str)
 
     Use for Slack Web API methods not covered by other tools. Only an allowlisted set of
     methods works (reads, posting, reactions, pins, joining/leaving channels, user/team
-    lookups) — anything else is refused with the full list. Reading a channel other than
-    the current one only works for public channels. Most methods need at least one param —
+    lookups), anything else is refused with the full list. Reading a channel other than
+    the current one only works for public channels. Most methods need at least one param,
     don't guess with an empty object, check what the method actually requires first.
 
     Example: slack_api_call(method="conversations.join", api_parameters='{"channel": "C0123456"}')
@@ -1832,7 +1834,7 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str)
     Args:
         method: Slack API method (e.g., 'chat.postMessage', 'conversations.info').
         api_parameters: JSON-encoded object of parameters for the method, as a plain
-            STRING (e.g. '{"channel": "C0123456"}') — not a nested object.
+            STRING (e.g. '{"channel": "C0123456"}'), not a nested object.
     """
     user_token = os.environ.get("SLACK_USER_TOKEN")
     if not user_token:
@@ -1862,7 +1864,7 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_para
 
     Uses SLACK_BOT_TOKEN. Use for bot-level actions like posting messages as the bot,
     updating bot messages, managing bot's own reactions, etc. Same method allowlist and
-    read rules as slack_api_call. Most methods need at least one param — don't guess with
+    read rules as slack_api_call. Most methods need at least one param, don't guess with
     an empty object, check what the method actually requires first.
 
     Example: slack_api_call_as_bot_tool(method="conversations.join", api_parameters='{"channel": "C0123456"}')
@@ -1870,7 +1872,7 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_para
     Args:
         method: Slack API method (e.g., 'chat.postMessage', 'chat.update', 'reactions.add').
         api_parameters: JSON-encoded object of parameters for the method, as a plain
-            STRING (e.g. '{"channel": "C0123456"}') — not a nested object.
+            STRING (e.g. '{"channel": "C0123456"}'), not a nested object.
     """
     parsed_parameters, error = _prepare_slack_api_call(ctx, method, api_parameters)
     if error:
@@ -1885,7 +1887,7 @@ def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: str) -> str:
 
     Uses the xoxe config token. The manifest must include display_information.name.
     After creating, tell the user to visit the oauth_authorize_url to install the
-    app — the bot token is captured and registered AUTOMATICALLY once they do (no
+    app, the bot token is captured and registered AUTOMATICALLY once they do (no
     one needs to dig it out of the Slack UI and hand it back). Poll
     check_bot_install_status_tool with the returned app_id until it reports
     "installed", then move on to wrangler_bot_deploy_tool. The app belongs to
@@ -1894,7 +1896,7 @@ def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: str) -> str:
 
     Args:
         manifest: JSON-encoded Slack app manifest object, as a plain STRING (with
-            display_information, features, etc.) — not a nested object.
+            display_information, features, etc.), not a nested object.
     """
     parsed_manifest, parse_error = _parse_json_object_param("manifest", manifest)
     if parse_error:
@@ -1908,7 +1910,7 @@ def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: str) -> str:
 def check_bot_install_status_tool(ctx: RunContext[AgentDeps], uuid: str) -> str:
     """Check whether a human has finished installing a bot created with create_slack_bot_tool.
 
-    The install is captured automatically (see create_slack_bot_tool) — call this
+    The install is captured automatically (see create_slack_bot_tool), call this
     periodically after sharing the oauth_authorize_url instead of asking the user
     to paste a token back. Once it reports "installed", the bot token is already
     registered and you can go straight to wrangler_bot_deploy_tool.
@@ -1926,14 +1928,14 @@ def register_bot_tokens_tool(ctx: RunContext[AgentDeps], uuid: str, bot_token: s
     """Manually store bot tokens for a created Slack app. Only xoxb- bot tokens (and, if
     given, xapp- app tokens) are accepted.
 
-    This is a FALLBACK — installs normally complete automatically (see
+    This is a FALLBACK, installs normally complete automatically (see
     create_slack_bot_tool / check_bot_install_status_tool). Only use this if the
     user says the automatic capture didn't work, or hands you a token unprompted.
 
     Args:
         uuid: The app_id returned by create_slack_bot.
         bot_token: The xoxb- bot token from the installed app. Required.
-        app_token: The xapp- app-level token. Only needed for Socket Mode apps — it's
+        app_token: The xapp- app-level token. Only needed for Socket Mode apps, it's
             generated manually on the app's Basic Information page, not via OAuth
             install, so most HTTP-mode Workers (deployed via wrangler_bot_deploy_tool)
             never have one. Omit it entirely for those.
@@ -1966,7 +1968,7 @@ def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manife
     """Update an already-created Slack app's manifest (apps.manifest.update).
 
     Use this once the Worker is deployed and its real URL is known, to point
-    slash_commands[].url / settings.event_subscriptions.request_url at it — Slack only
+    slash_commands[].url / settings.event_subscriptions.request_url at it, Slack only
     accepts an event-subscription request URL once it's live and answers the
     verification challenge, so it can't be set correctly until after deploy. The
     manifest passed here REPLACES the app's entire configuration: include every field
@@ -1975,7 +1977,7 @@ def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manife
     Args:
         uuid: The app_id from create_slack_bot.
         manifest: JSON-encoded, FULL updated Slack app manifest object, as a plain
-            STRING — not a nested object.
+            STRING, not a nested object.
     """
     parsed_manifest, parse_error = _parse_json_object_param("manifest", manifest)
     if parse_error:
@@ -2012,33 +2014,33 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
     its own single coolton conversation.
 
     NEVER call this unless the user has EXPLICITLY asked to start/create a code
-    channel — this feature is buggy and cursed, do not reach for it on your own
+    channel, this feature is buggy and cursed, do not reach for it on your own
     initiative no matter how well it seems to fit the task.
 
-    `name` is a DISPLAY name, not a slug — write it like a sentence/title, e.g.
+    `name` is a DISPLAY name, not a slug, write it like a sentence/title, e.g.
     "Code audit and bug detection in Coolton", never
     "code-audit-and-bug-detection-in-coolton". Spaces, uppercase letters, and
     unicode are all fine, and duplicate names (another channel with the exact
-    same display name) are fine too — don't invent uniqueness suffixes. If the
+    same display name) are fine too, don't invent uniqueness suffixes. If the
     name is truly unusable the underlying script reports that itself
     (forwarded to you verbatim); don't pre-validate it yourself.
 
     On success, coolton joins the new channel a few seconds later and picks up
     `task` there on its own, with the context of this conversation carried
-    over — every message sent directly in that channel (not in a thread inside
+    over, every message sent directly in that channel (not in a thread inside
     it) is then treated as addressed to coolton and answered at channel level,
     as if the whole channel were one ongoing thread with coolton. A thread
-    started inside the channel behaves like a normal Slack thread instead —
+    started inside the channel behaves like a normal Slack thread instead,
     separate conversation, mention required. Because activation happens after
     this turn ends, just tell the user you're moving the work over; don't keep
     working on `task` in the current thread once you've called this.
 
-    Only usable on Slack — not available on the web UI.
+    Only usable on Slack, not available on the web UI.
 
     Args:
-        name: The code channel's display name (see above — a real sentence,
+        name: The code channel's display name (see above, a real sentence,
             not a slug).
-        task: What you'll be doing there — used to seed the handoff. Optional.
+        task: What you'll be doing there, used to seed the handoff. Optional.
     """
     surface = _surface(ctx.deps)
     if getattr(surface, "name", "slack") != "slack":
@@ -2055,11 +2057,11 @@ def send_message(ctx: RunContext[AgentDeps], text: str) -> str:
     """Send a message to the current Slack thread mid-turn. Use this to post progress updates,
     intermediate results, or messages that don't wait for the final response.
 
-    This is for STATUS UPDATES — see the system prompt's STATUS UPDATES section for the exact
+    This is for STATUS UPDATES, see the system prompt's STATUS UPDATES section for the exact
     format. Reminder since this is easy to forget mid-task: `text` MUST start with one marker
     character (→ ↺ ? ● ◐ ○ ⚠), a space, then the rest of the line in _italics_ (single
     underscores), e.g. `→ _checking the deploy logs for the last restart_`. Never send a plain,
-    unmarked, non-italic line through this tool — that's for the final answer only, which
+    unmarked, non-italic line through this tool, that's for the final answer only, which
     doesn't use this tool at all.
 
     Args:
@@ -2113,7 +2115,8 @@ async def text_only_response(ctx: RunContext[AgentDeps], emoji_name: str, respon
 
     Args:
         emoji_name: Slack emoji name without colons to react with (same rules as add_emoji_reaction).
-        response: Your complete final reply, exactly as you'd otherwise write it (Markdown supported).
+        response: Your complete final reply, exactly as you'd otherwise write it (Markdown supported),
+            in your usual style: lowercase, casual, no em dashes (see WRITING STYLE).
     """
     try:
         await add_emoji_reaction(ctx, emoji_name)
@@ -2133,7 +2136,7 @@ def get_datetime(ctx: RunContext[AgentDeps]) -> str:
     """Get the current date and time in UTC.
 
     Use whenever the answer depends on today's date or the current time ("what's the
-    date", "how long until X", "is this recent", checking a timestamp or deadline) —
+    date", "how long until X", "is this recent", checking a timestamp or deadline),
     never assume it from your training data.
     """
     import datetime
@@ -2150,11 +2153,11 @@ def skip(ctx: RunContext[AgentDeps], preserve: bool = False) -> str:
     responded via send_message, or when you have nothing to add.
 
     Args:
-        preserve: False (default) — this message was never really addressed
+        preserve: False (default), this message was never really addressed
             to you (e.g. someone else's conversation). Call skip as your VERY
             FIRST tool in this case, before add_emoji_reaction or anything
             else: the whole turn is discarded, as if it had never happened.
-            True — the message WAS addressed to you and you took real action
+            True, the message WAS addressed to you and you took real action
             this turn (started a background job, sent a status update via
             send_message, ...), you just have nothing more to say right now.
             That work stays in history for future turns, and the
@@ -2170,12 +2173,12 @@ def skip(ctx: RunContext[AgentDeps], preserve: bool = False) -> str:
 @agent.tool
 def wait_tool(ctx: RunContext[AgentDeps], seconds: int, reason: str) -> str:
     """Pause this conversation and automatically resume it later, without blocking. Use this for a
-    one-time delay, spaced-out polling, or giving a background job/external event time to progress —
+    one-time delay, spaced-out polling, or giving a background job/external event time to progress,
     NOT for anything recurring (use create_scheduled_task_tool) or a delay longer than 21600s/6h (use
     schedule_reminder_tool instead, though that only sends a static DM with no further reasoning).
 
     Before calling this, send a short message (via send_message) telling the user what you're waiting
-    for — the typing indicator clears the moment your turn ends, so that message is the only lasting
+    for, the typing indicator clears the moment your turn ends, so that message is the only lasting
     sign you're still on it. Call this LAST: it always ends your turn immediately, the same as `skip`,
     and you'll be woken up automatically in this same conversation once the wait is over.
 
@@ -2404,7 +2407,7 @@ def huddlefm_request_control_tool(
 ) -> str:
     """Request DJ control of a HuddleFM listening session, by DMing HuddleFM
     (coolton is allowlisted for this). Call this ONCE per session before using
-    huddlefm_command_tool — see the system prompt's HUDDLEFM DJ section for the
+    huddlefm_command_tool, see the system prompt's HUDDLEFM DJ section for the
     permission ids and full command reference.
 
     There is no immediate success reply: the session host gets an approval
@@ -2415,9 +2418,9 @@ def huddlefm_request_control_tool(
 
     Args:
         channel: The huddle's source channel, controls channel, or companion
-            channel — required, and it must be one of those three.
+            channel, required, and it must be one of those three.
         permissions: Comma-separated permission ids, e.g. "add,skip,pause,volume".
-        events: Comma-separated event subscription names (optional — usually
+        events: Comma-separated event subscription names (optional, usually
             leave empty; coolton polls with `status` instead of subscribing).
     """
     from agent.tools.huddlefm import request_control
@@ -2436,7 +2439,7 @@ def huddlefm_command_tool(
             previous, toggle, pause, resume, seek, volume, settings, end,
             release_control. See the system prompt's HUDDLEFM DJ section for
             which permission each needs and its extra fields.
-        channel: The session's channel — only required if you hold grants on
+        channel: The session's channel, only required if you hold grants on
             more than one HuddleFM session at once.
         fields: JSON object string of the command's extra fields, e.g.
             '{"query": "phonk"}' for search, '{"reference": "..."}' for add,
@@ -2777,8 +2780,8 @@ def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: 
     a proper SKILL.md (frontmatter + instructions) so the skill is discoverable
     via list_skills / load_skill. Unless the coolton maintainer asked for it, the
     new skill goes to the maintainer for review first and only goes live once
-    approved. The result says which happened — relay that, don't guess. Do NOT use shell/CLI commands
-    in the sandbox to create skills — they have no effect on the agent.
+    approved. The result says which happened, relay that, don't guess. Do NOT use shell/CLI commands
+    in the sandbox to create skills, they have no effect on the agent.
 
     Args:
         name: Skill name (will be slugified, e.g. "My Cool Skill" -> "my-cool-skill").
@@ -2823,8 +2826,8 @@ def rename_skill(ctx: RunContext[AgentDeps], old_name: str, new_name: str) -> st
     Use this when the user wants to rename a skill. Operates on skills found in
     the repo's `skills/` or `.agents/skills/` directories. Unless the coolton
     maintainer asked for it, the rename waits for maintainer review (the result says
-    which happened — relay that, don't guess). Do NOT use
-    sandbox shell commands — they have no effect on the agent.
+    which happened, relay that, don't guess). Do NOT use
+    sandbox shell commands, they have no effect on the agent.
 
     Args:
         old_name: Current skill name/folder.
@@ -2850,9 +2853,9 @@ def delete_skill(ctx: RunContext[AgentDeps], name: str) -> str:
 
     Use this when the user wants to remove/uninstall a skill. This is permanent.
     Operates on skills in the repo's `skills/` or `.agents/skills/` directories.
-    Unless the coolton maintainer asked for it (the result says which happened — relay
+    Unless the coolton maintainer asked for it (the result says which happened, relay
     that, don't guess), the deletion waits for maintainer
-    review. Do NOT use sandbox shell commands — they have no effect on the agent.
+    review. Do NOT use sandbox shell commands, they have no effect on the agent.
 
     Args:
         name: Skill name/folder to delete.

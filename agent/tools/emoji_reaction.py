@@ -32,7 +32,7 @@ async def add_emoji_reaction(
     """Add an emoji reaction to the user's current message to acknowledge the topic.
 
     Use any standard Slack emoji that matches the topic or tone of the message.
-    Be creative and specific — if someone mentions a dog, use `dog`; if they sound
+    Be creative and specific, if someone mentions a dog, use `dog`; if they sound
     frustrated, use `sweat_smile`. The examples below are common picks, not the full set:
     - Gratitude/praise: pray, bow, blush, sparkles, star-struck, heart
     - Frustration/confusion: thinking_face, face_with_monocle, sweat_smile, upside_down_face
@@ -44,8 +44,8 @@ async def add_emoji_reaction(
     - Network/connectivity: satellite, signal_strength
     - Agreement/acknowledgment: thumbsup, ok_hand, saluting_face, +1
 
-    Call this AT MOST ONCE per turn. Whatever it returns — "Reacted with ...",
-    "Already reacted with ...", or "Skipped ..." — that's a completed call either
+    Call this AT MOST ONCE per turn. Whatever it returns, "Reacted with ...",
+    "Already reacted with ...", or "Skipped ...", that's a completed call either
     way; do not call it again to retry, try a different emoji, or "fix" the result.
     Move straight on to the actual task.
 
