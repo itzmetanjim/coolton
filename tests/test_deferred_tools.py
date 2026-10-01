@@ -83,7 +83,6 @@ def test_searching_and_calling_a_deferred_tool_never_changes_the_tool_list(monke
     from agent.deps import AgentDeps
     import agent.plan_block as plan_block
     monkeypatch.setattr(plan_block, "update_plan_message", lambda deps: None)
-    monkeypatch.setattr(plan_block.thread_status, "set_status", lambda *a, **k: None)
     deps = AgentDeps(client=Mock(), user_id="U1", channel_id="C1", thread_ts="1.1", message_ts="1.0", platform=FakePlatform())
     deps.plan_ts = "9.9"  # turns on the Slack plan block ("thinking" display)
     agent_mod.run_agent("draw a flowchart", deps)

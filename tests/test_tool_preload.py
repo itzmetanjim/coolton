@@ -142,7 +142,6 @@ def _run_turn(monkeypatch, preloaded, history=None):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.setattr("listeners.actions.instructions_actions.get_user_instructions", lambda uid: "")
     monkeypatch.setattr(plan_block, "update_plan_message", lambda deps: None)
-    monkeypatch.setattr(plan_block.thread_status, "set_status", lambda *a, **k: None)
     captured = {}
     monkeypatch.setattr(agent_mod, "_run_with_provider_chain", lambda a, kw, deps, run_label=None: (
         captured.update(agent=a, kwargs=kw), (SimpleNamespace(output="ok", all_messages=lambda: []), "x"))[1])

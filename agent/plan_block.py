@@ -2,7 +2,6 @@ import logging
 import re
 import time
 
-import agent.thread_status as thread_status
 from agent.deferred_tools import is_preload_call, shown_call
 from agent.redact import redact as _redact
 from agent.steering_store import clear_steering_messages, peek_steering_messages
@@ -514,8 +513,6 @@ def build_plan_hooks():
             _truncate(_redact(_pretty_args(shown_args), context=f"tool input {shown.tool_name}"), 1000),
         )
         display = _display_for_tool(shown.tool_name)
-        if not is_preload_call(call):
-            thread_status.set_status(deps.channel_id, deps.thread_ts, f"calling tool: {display}")
         # Checkpoint how far this attempt has gotten (everything through the last
         # completed tool round-trip) — if this attempt's provider fails later and
         # falls back to a different one, agent.agent._run_with_provider_chain resumes

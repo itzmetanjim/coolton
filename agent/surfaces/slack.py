@@ -104,8 +104,9 @@ class SlackSurface:
         return remove_emoji_reaction(self.channel_id, timestamp or self.message_ts, emoji_name)
 
     def set_activity(self, text: str) -> None:
-        import agent.thread_status as thread_status
-        thread_status.set_status(self.channel_id, self.thread_ts, text)
+        # Slack agent sessions take no custom status text (see agent.thread_status);
+        # progress shows in the plan message's tasks instead.
+        pass
 
     def download_attachments(self, sandbox: Any, limit: int = 20) -> str:
         from agent.agent import download_slack_attachments

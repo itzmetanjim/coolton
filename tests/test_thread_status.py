@@ -33,19 +33,17 @@ def calls(client):
     return [(c.args[0], c.kwargs["json"]) for c in client.api_call.call_args_list]
 
 
-def test_a_turn_shows_progress_in_the_session_title_then_ends_active_titled_after_the_request():
+def test_a_turn_is_a_processing_session_titled_after_the_request_then_active():
     client = Mock()
     session = {"channel_id": "C1", "thread_ts": "1.1"}
     ts.start(client, "C1", "1.1", request_text="<@U0BOT>  can you check the   deploy logs?")
-    ts.set_status("C1", "1.1", "calling tool: Run linux command")
     timer = ts._state[("C1", "1.1")]["timer"]
     ts.stop("C1", "1.1")
 
+    title = "can you check the deploy logs?"
     assert calls(client) == [
-        ("agents.sessions.setStatus", {**session, "status": "processing", "title": "working"}),
-        ("agents.sessions.rename", {**session, "title": "working"}),
-        ("agents.sessions.rename", {**session, "title": "calling tool: Run linux command"}),
-        ("agents.sessions.rename", {**session, "title": "can you check the deploy logs?"}),
+        ("agents.sessions.setStatus", {**session, "status": "processing", "title": title}),
+        ("agents.sessions.rename", {**session, "title": title}),
         ("agents.sessions.setStatus", {**session, "status": "active"}),
     ]
     assert timer.canceled and ("C1", "1.1") not in ts._state
@@ -67,16 +65,13 @@ def test_a_long_turn_keeps_processing_alive_past_slacks_one_hour_timeout():
 def test_titles_are_cropped_to_slacks_200_character_limit():
     client = Mock()
     ts.start(client, "C1", "1.1", request_text="x" * 300)
-    ts.stop("C1", "1.1")
-    assert len(calls(client)[-2][1]["title"]) == 200
+    assert len(calls(client)[0][1]["title"]) == 200
 
 
 def test_nothing_is_sent_outside_a_turn_or_for_a_code_channel_conversation():
     client = Mock()
-    ts.set_status("C1", "1.1", "calling tool: X")  # never started
-    ts.stop("C1", "1.1")
+    ts.stop("C1", "1.1")  # never started
     ts.start(client, "C1", "", request_text="hi")  # channel-level code channel: no thread
-    ts.set_status("C1", "", "calling tool: X")
     ts.stop("C1", "")
     assert client.api_call.call_count == 0
 
@@ -85,7 +80,6 @@ def test_a_failing_status_api_never_breaks_the_turn():
     client = Mock()
     client.api_call.side_effect = Exception("status api down")
     ts.start(client, "C1", "1.1")
-    ts.set_status("C1", "1.1", "calling tool: X")
     ts.stop("C1", "1.1")
 
 
