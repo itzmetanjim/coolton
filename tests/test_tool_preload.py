@@ -199,6 +199,27 @@ def test_preloading_into_an_existing_thread_keeps_its_history(monkeypatch):
     assert [m["content"] for m in request["messages"]].count("SYSTEM") == 1
 
 
+def test_tools_already_defined_in_the_thread_are_not_loaded_again():
+    """Reloading the Slack MCP tools every turn once added ~11k tokens of
+    duplicate definitions per turn to one thread's history."""
+    from pydantic_ai.messages import ModelRequest, ToolReturnPart
+
+    def search_result(*tools):
+        return ModelRequest(parts=[ToolReturnPart("search_tools", {"discovered_tools": list(tools)}, tool_call_id="c1")])
+
+    history = [
+        search_result({"name": "slack_create_canvas", "description": "", "parameters": {}}),
+        # From before call_tool: no parameters, so the model doesn't actually have it.
+        search_result({"name": "slack_read_canvas", "description": ""}),
+    ]
+    [response] = agent_mod._preload_search_call({"slack_canvases"}, history)
+    assert response.parts[0].args == {"queries": ["slack_read_canvas", "slack_update_canvas"]}
+
+    history.append(search_result(*({"name": n, "description": "", "parameters": {}}
+                                   for n in ("slack_read_canvas", "slack_update_canvas"))))
+    assert agent_mod._preload_search_call({"slack_canvases"}, history) is None
+
+
 def test_mcp_groups_search_for_their_mcp_tools():
     [response] = agent_mod._preload_search_call({"library_docs"})
     assert response.parts[0].args == {"queries": ["query-docs", "resolve-library-id"]}

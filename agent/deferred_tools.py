@@ -90,6 +90,22 @@ def _describe(tool) -> dict:
     }
 
 
+def found_in(history) -> set[str]:
+    """Tools whose full definitions an earlier search_tools result in this
+    conversation already holds, so they needn't be loaded again. Results from
+    before call_tool (no `parameters`) don't count: those tools were revealed
+    through the tool list, which no longer happens."""
+    names: set[str] = set()
+    for message in history or []:
+        for part in getattr(message, "parts", []):
+            if getattr(part, "part_kind", "") != "tool-return" or getattr(part, "tool_name", "") != SEARCH_TOOL:
+                continue
+            content = part.content if isinstance(part.content, dict) else {}
+            names.update(t["name"] for t in content.get("discovered_tools", [])
+                         if isinstance(t, dict) and "parameters" in t and t.get("name"))
+    return names
+
+
 async def search_tools(ctx: RunContext, queries: list[str]) -> dict:
     """Find tools that aren't in your tool list (email, HuddleFM, Slack bot building,
     scheduled tasks, data analysis, embeds, Mermaid diagrams, skill management, the Slack

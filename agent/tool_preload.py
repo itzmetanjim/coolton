@@ -40,7 +40,7 @@ PRELOAD_THRESHOLD = 0.5
 _STATE_CHARS = 4000
 
 # Group -> (the yes/no question Jev answers, the deferred function tools it loads).
-# The two MCP groups load MCP tools instead (MCP_GROUP_TOOLS).
+# The Slack MCP and library-docs groups load MCP tools instead (MCP_GROUP_TOOLS).
 TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
     "email": ("Does this involve email: reading, checking or sending emails, or an email inbox?", frozenset({
         "agentmail_create_inbox", "agentmail_list_inboxes", "agentmail_list_messages",
@@ -69,21 +69,26 @@ TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
         "set_sandbox_keepalive_tool", "computer_stream_tool", "agent_browser_stream_tool"})),
     "slack_admin": ("Does this ask to invite coolton's helper account to a channel, remove a reaction, leave a channel, or call the Slack API as the bot?", frozenset({
         "invite_coolton_user_to_channel", "remove_reaction_tool", "leave_channel_tool", "slack_api_call_as_bot_tool"})),
-    "slack_mcp": ("Does this involve Slack canvases, Slack lists, message drafts, scheduling a Slack message for later, someone's Slack profile, or a channel's member list?", frozenset()),
+    # The Slack MCP tools are split small: their definitions are large (~11k tokens for all
+    # twelve, ~5.6k for the canvas ones alone), and the questions ask for a request, not a
+    # mention, so chatter about canvases doesn't load anything.
+    "slack_canvases": ("Does the user ask coolton to create, read or edit a Slack canvas (not just mention canvases)?", frozenset()),
+    "slack_lists": ("Does the user ask coolton to create, read or edit a Slack list (Slack's spreadsheet-like lists, not a bullet list)?", frozenset()),
+    "slack_drafts_scheduling": ("Does the user ask coolton to draft a Slack message for them, or schedule one to be sent later?", frozenset()),
+    "slack_people": ("Does the user ask coolton to look up someone's Slack profile (title, timezone, pronouns) or who is in a channel?", frozenset()),
     "library_docs": ("Is this a question about how to use a programming library, framework, SDK or API?", frozenset()),
 }
-SLACK_MCP_GROUP = "slack_mcp"
 LIBRARY_DOCS_GROUP = "library_docs"
 
 # Deferred MCP tools each MCP group loads (names as the servers publish them).
 # A name a server doesn't have this turn (e.g. Context7 down) is just ignored.
 MCP_GROUP_TOOLS: dict[str, frozenset[str]] = {
-    SLACK_MCP_GROUP: frozenset({
-        "slack_create_canvas", "slack_read_canvas", "slack_update_canvas",
+    "slack_canvases": frozenset({"slack_create_canvas", "slack_read_canvas", "slack_update_canvas"}),
+    "slack_lists": frozenset({
         "slack_create_list", "slack_read_list", "slack_update_list",
-        "slack_add_list_record", "slack_update_list_record",
-        "slack_send_message_draft", "slack_schedule_message",
-        "slack_read_user_profile", "slack_list_channel_members"}),
+        "slack_add_list_record", "slack_update_list_record"}),
+    "slack_drafts_scheduling": frozenset({"slack_send_message_draft", "slack_schedule_message"}),
+    "slack_people": frozenset({"slack_read_user_profile", "slack_list_channel_members"}),
     LIBRARY_DOCS_GROUP: frozenset({"resolve-library-id", "query-docs"}),
 }
 

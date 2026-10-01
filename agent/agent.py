@@ -2979,7 +2979,7 @@ def run_agent(text, deps, message_history=None, images=None):
     # which the run executes first — exactly what coolton's own search would
     # do, so the tool list (and the cached prefix) never changes.
     run_history, run_prompt = message_history, user_prompt
-    preload = _preload_search_call(deps.preloaded_tool_groups)
+    preload = _preload_search_call(deps.preloaded_tool_groups, message_history)
     if preload:
         # pydantic-ai only adds the system prompt itself when the history is empty.
         system = [SystemPromptPart(full_prompt)] if not message_history else []
@@ -3089,16 +3089,19 @@ DEFERRED_TOOLS = frozenset({
 })
 
 
-def _preload_search_call(groups: set[str]) -> list | None:
+def _preload_search_call(groups: set[str], history=None) -> list | None:
     """A pending search_tools call for the tools Jev preloaded (agent.tool_preload),
-    or None if nothing was. The run executes it before the first model request —
-    exactly as if the model had searched — so MCP tools get their real schemas."""
+    or None if there's nothing new to load. The run executes it before the first
+    model request (exactly as if the model had searched), so MCP tools get their
+    real schemas. Tools an earlier search in this thread already returned are
+    skipped: their definitions are still in the history."""
     from uuid import uuid4
 
-    from agent.deferred_tools import PRELOAD_CALL_ID_PREFIX, SEARCH_TOOL
+    from agent.deferred_tools import PRELOAD_CALL_ID_PREFIX, SEARCH_TOOL, found_in
     from agent.tool_preload import mcp_tools_for, tools_for
 
-    names = sorted(tools_for(groups)) + sorted(mcp_tools_for(groups))
+    already = found_in(history)
+    names = [n for n in sorted(tools_for(groups)) + sorted(mcp_tools_for(groups)) if n not in already]
     if not names:
         return None
     call = ToolCallPart(SEARCH_TOOL, {"queries": names}, tool_call_id=f"{PRELOAD_CALL_ID_PREFIX}{uuid4().hex[:12]}")
