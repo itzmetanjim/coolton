@@ -37,16 +37,38 @@ CHANNEL_READ_METHODS = {
     "reactions.get",
     "pins.list",
     "bookmarks.list",
+    # these list across every channel coolton can see unless given one, so a
+    # readable `channel` is required
+    "files.list",
+    "chat.scheduledMessages.list",
 }
+
+# Methods that read a file (canvases and lists are files to the API): the file
+# must pass file_read_error, like get_slack_file. Method -> its file id parameter.
+FILE_READ_METHODS = {
+    "files.info": "file",
+    "canvases.sections.lookup": "canvas_id",
+    "slackLists.items.list": "list_id",
+    "slackLists.items.info": "list_id",
+}
+
+# Methods whose `types` must be public channels only, or they'd reveal private ones.
+PUBLIC_CHANNELS_ONLY_METHODS = {"conversations.list", "users.conversations"}
 
 # No delete methods: coolton doesn't delete Slack messages (see the system
 # prompt's rules), and a deletion can't carry an attribution footer anyway.
-ALLOWED_API_METHODS = CHANNEL_READ_METHODS | {
+ALLOWED_API_METHODS = CHANNEL_READ_METHODS | set(FILE_READ_METHODS) | PUBLIC_CHANNELS_ONLY_METHODS | {
     # reads that don't expose channel content
     "auth.test",
+    "auth.teams.list",
+    "blocks.validate",
+    "dnd.teamInfo",
+    "team.preferences.list",
+    "team.profile.get",
+    "users.discoverableContacts.lookup",
+    "workflows.featured.list",  # every channel in channel_ids must be readable
     "bots.info",
     "chat.getPermalink",
-    "conversations.list",
     "dnd.info",
     "emoji.list",
     "team.info",
@@ -71,6 +93,12 @@ ALLOWED_API_METHODS = CHANNEL_READ_METHODS | {
     "pins.remove",
     "reactions.add",
     "reactions.remove",
+    # only change coolton's own account
+    "conversations.mark",
+    "dnd.endDnd",
+    "dnd.endSnooze",
+    "dnd.setSnooze",
+    "users.setPresence",
 }
 
 _USER_ID_RE = re.compile(r"^[UW][A-Z0-9]+$")
@@ -97,7 +125,7 @@ def channel_read_error(channel_id: str, current_channel_id: str) -> str | None:
     return assert_readable_channel(channel_id, current_channel_id or "-")
 
 
-def check_api_call(method: str, params: dict, current_channel_id: str) -> str | None:
+def check_api_call(method: str, params: dict, current_channel_id: str, requester_id: str = "") -> str | None:
     """None if slack_api_call(_as_bot_tool) may make this call, else an
     "Error: ..." string to hand back to the model."""
     if method not in ALLOWED_API_METHODS:
@@ -112,10 +140,27 @@ def check_api_call(method: str, params: dict, current_channel_id: str) -> str | 
         denied = channel_read_error(channel, current_channel_id)
         if denied:
             return f"Error: {method} refused — {denied}"
-    if method == "conversations.list":
+    if method == "workflows.featured.list":
+        channel_ids = params.get("channel_ids") or []
+        if isinstance(channel_ids, str):
+            channel_ids = [c.strip() for c in channel_ids.split(",") if c.strip()]
+        if not channel_ids:
+            return "Error: workflows.featured.list needs channel_ids."
+        for channel_id in channel_ids:
+            denied = channel_read_error(channel_id, current_channel_id)
+            if denied:
+                return f"Error: {method} refused for {channel_id} — {denied}"
+    if method in FILE_READ_METHODS:
+        file_id = params.get(FILE_READ_METHODS[method])
+        if not isinstance(file_id, str) or not file_id:
+            return f"Error: {method} needs {FILE_READ_METHODS[method]}."
+        denied = file_read_error(file_id, current_channel_id, requester_id)
+        if denied:
+            return f"Error: {method} refused — {denied}"
+    if method in PUBLIC_CHANNELS_ONLY_METHODS:
         types = {t.strip() for t in str(params.get("types") or "public_channel").split(",") if t.strip()}
         if types != {"public_channel"}:
-            return "Error: conversations.list may only list public channels (types=public_channel)."
+            return f"Error: {method} may only list public channels (types=public_channel)."
     return None
 
 

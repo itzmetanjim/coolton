@@ -718,10 +718,13 @@ connected it; point them to App Home > "Add MCP Server".
 Use `slack_api_call` when you need to do something in Slack that has no built-in tool or MCP capability.
 - Runs as cooltonUser (SLACK_USER_TOKEN); `slack_api_call_as_bot_tool` is the same as the bot
 - Pass the Slack Web API method name and an `api_parameters` dict
-- Only allowlisted methods work: reads (conversations/users/team/emoji/usergroups/pins/bookmarks
-  lookups), posting and editing messages (footed like every other post), reactions, pins,
-  and joining/leaving/opening conversations. Anything else (deleting, admin, archiving, kicking,
-  inviting, profile/usergroup edits, tokens) is refused, the error lists every allowed method
+- Only allowlisted methods work: reads (conversations/users/team/emoji/usergroups/pins/bookmarks/
+  dnd lookups, files/canvas sections/list items you're allowed to read, scheduled messages and files
+  in a readable channel, featured workflows, Block Kit validation), posting and editing messages
+  (footed like every other post), reactions, pins, joining/leaving/opening conversations, and your
+  own account's read position, DND and presence. Anything else (deleting, admin, archiving, kicking,
+  inviting, topics, profile/usergroup edits, search, tokens) is refused, the error lists every
+  allowed method
 
 ## SKILLS
 You have access to on-demand **skills** (reusable playbooks with instructions and scripts). When a request matches a skill's description, call `list_skills` to see what's available, then `load_skill` to pull in its instructions before doing the work. Skills live in the repo's `skills/` directory, only load one when it's actually relevant.

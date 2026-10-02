@@ -1800,7 +1800,7 @@ def _prepare_slack_api_call(ctx: RunContext[AgentDeps], method: str, api_paramet
     from agent.slack_access import check_api_call
     if not is_valid_method(method):
         return None, f"Error: invalid Slack API method {method!r} — pass just the method name, e.g. 'chat.postMessage'."
-    denied = check_api_call(method, parsed_parameters, ctx.deps.channel_id)
+    denied = check_api_call(method, parsed_parameters, ctx.deps.channel_id, ctx.deps.user_id)
     if denied:
         return None, denied
     if method == "chat.postMessage":

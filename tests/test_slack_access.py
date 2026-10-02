@@ -38,6 +38,7 @@ def public_only(monkeypatch):
     "auth.revoke", "admin.users.remove", "conversations.kick", "conversations.archive",
     "conversations.rename", "conversations.invite", "usergroups.update", "users.profile.set",
     "files.upload", "chat.startStream", "canvases.create", "search.messages", "apps.manifest.create",
+    "api.test", "files.sharedPublicURL", "reactions.list", "reminders.list", "agents.sessions.rename",
 ])
 def test_methods_off_the_allowlist_are_refused(method):
     assert "not on coolton's Slack API allowlist" in check_api_call(method, {}, "C1")
@@ -62,6 +63,41 @@ def test_reading_a_public_or_the_current_channel_is_allowed(public_only):
 
 def test_bookmarks_list_uses_channel_id_and_is_checked(public_only):
     assert "refused" in check_api_call("bookmarks.list", {"channel_id": "C_PRIVATE"}, "C1")
+
+
+@pytest.mark.parametrize("method", [
+    "auth.teams.list", "blocks.validate", "dnd.teamInfo", "team.preferences.list", "team.profile.get",
+    "users.discoverableContacts.lookup", "conversations.mark", "dnd.setSnooze", "users.setPresence",
+])
+def test_harmless_reads_and_coolton_account_changes_are_allowed(method):
+    assert check_api_call(method, {}, "C1") is None
+
+
+def test_listing_methods_need_a_readable_channel(public_only):
+    """Without a channel these list files / scheduled messages across every channel coolton can see."""
+    for method in ("files.list", "chat.scheduledMessages.list"):
+        assert "refused" in check_api_call(method, {}, "C1")
+        assert "refused" in check_api_call(method, {"channel": "C_PRIVATE"}, "C1")
+        assert check_api_call(method, {"channel": "C1"}, "C1") is None
+    assert "refused" in check_api_call("workflows.featured.list", {"channel_ids": ["P_PUB", "C_PRIVATE"]}, "C1")
+    assert check_api_call("workflows.featured.list", {"channel_ids": "P_PUB,C1"}, "C1") is None
+
+
+def test_users_conversations_lists_public_channels_only():
+    assert "public channels" in check_api_call("users.conversations", {"user": "U1", "types": "private_channel"}, "C1")
+    assert check_api_call("users.conversations", {"user": "U1"}, "C1") is None
+
+
+@pytest.mark.parametrize("method,param", [
+    ("files.info", "file"), ("canvases.sections.lookup", "canvas_id"),
+    ("slackLists.items.list", "list_id"), ("slackLists.items.info", "list_id"),
+])
+def test_file_methods_follow_the_file_read_rule(monkeypatch, method, param):
+    infos = {"F_PUBLIC": {"shares": {"public": {"P_PUB": []}}}, "F_THEIR_DM": {"user": "U_OTHER", "ims": ["D9"]}}
+    monkeypatch.setattr(slack_access, "fetch_file_info", lambda file_id, token: (infos[file_id], None))
+    assert check_api_call(method, {param: "F_PUBLIC"}, "C1", ASKER) is None
+    assert "refused" in check_api_call(method, {param: "F_THEIR_DM"}, "C1", ASKER)
+    assert "needs" in check_api_call(method, {}, "C1", ASKER)
 
 
 def test_channel_reads_need_a_channel():
