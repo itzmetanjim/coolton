@@ -77,24 +77,6 @@ def _get_user_display_info(user_id: str) -> tuple[str, str]:
     return ("", "")
 
 
-def _inject_poster(params: dict, user_id: str) -> dict:
-    """Inject username and icon_url into chat.postMessage params so the message
-    appears as the user who prompted coolton, not as the bot.
-
-    Always strips any pre-existing username/icon_url/icon_emoji first (fail
-    closed): if the display-info lookup fails, params must end up with no
-    override rather than passing through whatever value was already there
-    (e.g. model-supplied, impersonating someone else)."""
-    params.pop("username", None)
-    params.pop("icon_url", None)
-    params.pop("icon_emoji", None)
-    if user_id:
-        name, pfp = _get_user_display_info(user_id)
-        if name:
-            params["username"] = name
-        if pfp:
-            params["icon_url"] = pfp
-    return params
 
 def enforce_rate_limit():
     global _last_request_time
@@ -1328,11 +1310,7 @@ def post_message_tool(ctx: RunContext[AgentDeps], channel_id: str, text: str, th
     from agent.attribution import attribute_text, attribution_user_id
     from agent.tools.slack_info import post_message_to_target
     credited = attribution_user_id(ctx.deps)
-    name, pfp = _get_user_display_info(credited) if credited else ("", "")
-    return post_message_to_target(
-        channel_id=channel_id, text=attribute_text(text, credited), thread_ts=thread_ts,
-        username=name, icon_url=pfp,
-    )
+    return post_message_to_target(channel_id=channel_id, text=attribute_text(text, credited), thread_ts=thread_ts)
 
 
 @agent.tool
@@ -1809,13 +1787,11 @@ def _prepare_slack_api_call(ctx: RunContext[AgentDeps], method: str, api_paramet
             return None, "Error: chat.postMessage requires a 'text' param — use the chat_postMessage tool instead."
     credited = attribution_user_id(ctx.deps)
     if method.lower() in MESSAGE_METHODS:
-        # No username/icon override on any message call except the requester's own
-        # identity on a new post (the only method that takes one here).
+        # Messages always post as coolton itself: no name or picture override, including
+        # one the model passes in (which could pose as someone else).
         parsed_parameters = {
             k: v for k, v in parsed_parameters.items() if k not in ("username", "icon_url", "icon_emoji")
         }
-        if method == "chat.postMessage":
-            parsed_parameters = _inject_poster(parsed_parameters, credited)
     return attribute_api_params(method, parsed_parameters, credited), None
 
 
@@ -2096,7 +2072,6 @@ def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread
         kwargs = {"channel": channel, "markdown_text": attribute_text(_redact(text, context="chat_postMessage"), credited)}
         if thread_ts:
             kwargs["thread_ts"] = thread_ts
-        kwargs = _inject_poster(kwargs, credited)
         resp = ctx.deps.client.chat_postMessage(**kwargs)
         if not resp.get("ok"):
             return f"Failed to send message: {resp}"

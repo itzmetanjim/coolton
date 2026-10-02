@@ -51,7 +51,6 @@ def test_attachments_only_message_gets_the_footer_as_text():
 
 
 def test_chat_post_message_tool_foots_the_message(monkeypatch):
-    monkeypatch.setattr(agent_mod, "_inject_poster", lambda params, user_id: params)
     client = Mock()
     client.chat_postMessage.return_value = {"ok": True}
     agent_mod.chat_postMessage(_ctx(client), channel="C0OTHER", text="all good!")
@@ -59,7 +58,6 @@ def test_chat_post_message_tool_foots_the_message(monkeypatch):
 
 
 def test_post_message_tool_foots_the_message(monkeypatch):
-    monkeypatch.setattr(agent_mod, "_get_user_display_info", lambda user_id: ("", ""))
     with patch("agent.tools.slack_info.post_message_to_target", return_value="ok") as post:
         agent_mod.post_message_tool(_ctx(), channel_id="C1", text="hello")
     assert post.call_args.kwargs["text"] == f"hello\n\n{FOOTER}"
@@ -67,13 +65,33 @@ def test_post_message_tool_foots_the_message(monkeypatch):
 
 def test_slack_api_call_foots_post_message_as_cooltonuser(monkeypatch):
     monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
-    monkeypatch.setattr(agent_mod, "_inject_poster", lambda params, user_id: params)
     with patch("agent.agent.requests.post") as post:
         post.return_value.json.return_value = {"ok": True}
         agent_mod.slack_api_call(
             _ctx(), method="chat.postMessage", api_parameters='{"channel": "C0OTHER", "text": "all good!"}'
         )
     assert post.call_args.kwargs["data"]["text"] == f"all good!\n\n{FOOTER}"
+
+
+def test_messages_post_as_coolton_itself_never_with_a_name_or_picture_override(monkeypatch):
+    """Not the requester's name and picture, and not one the model passes in either."""
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    with patch("agent.agent.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        agent_mod.slack_api_call(_ctx(), method="chat.postMessage", api_parameters=json.dumps(
+            {"channel": "C1", "text": "hi", "username": "Someone Else", "icon_url": "https://x/y.png"}))
+    assert not {"username", "icon_url", "icon_emoji"} & set(post.call_args.kwargs["data"])
+
+    client = Mock()
+    client.chat_postMessage.return_value = {"ok": True}
+    agent_mod.chat_postMessage(_ctx(client), channel="C1", text="hi")
+    assert not {"username", "icon_url"} & set(client.chat_postMessage.call_args.kwargs)
+
+    with patch("agent.tools.slack_info.requests.post") as post:
+        post.return_value.json.return_value = {"ok": True}
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        agent_mod.post_message_tool(_ctx(), channel_id="C1", text="hi")
+    assert not {"username", "icon_url"} & set(post.call_args.kwargs["json"])
 
 
 def test_slack_api_call_as_bot_foots_an_edit_including_its_blocks(monkeypatch):

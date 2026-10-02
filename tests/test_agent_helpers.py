@@ -567,60 +567,6 @@ def _run_ctx(client):
     return RunContext(model=None, usage=None, prompt="", deps=deps)
 
 
-# ---------------------------------------------------------------------------
-# _inject_poster — must fail CLOSED: a failed/absent identity lookup must
-# strip any pre-existing username/icon_url rather than pass a spoofed value
-# through untouched.
-# ---------------------------------------------------------------------------
-
-
-def test_inject_poster_strips_spoofed_identity_on_lookup_failure(monkeypatch):
-    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
-    monkeypatch.setattr(agent_mod, "_user_info_cache", {})
-    params = {"channel": "C1", "text": "hi", "username": "Evil Spoof", "icon_url": "http://evil/x.png"}
-    result = agent_mod._inject_poster(params, "U_TEST")
-    assert "username" not in result
-    assert "icon_url" not in result
-
-
-def test_inject_poster_strips_spoofed_identity_when_no_user_id(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    monkeypatch.setattr(agent_mod, "_user_info_cache", {})
-    params = {"channel": "C1", "text": "hi", "username": "Evil Spoof"}
-    result = agent_mod._inject_poster(params, "")
-    assert "username" not in result
-
-
-def test_inject_poster_sets_real_identity_on_success(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    monkeypatch.setattr(agent_mod, "_user_info_cache", {})
-
-    def fake_get(url, **kwargs):
-        return Mock(json=lambda: {
-            "ok": True,
-            "user": {"profile": {"display_name": "Real Name", "image_72": "http://real/pfp.png"}},
-        })
-
-    monkeypatch.setattr(agent_mod.requests, "get", fake_get)
-    params = {"channel": "C1", "text": "hi", "username": "Evil Spoof", "icon_url": "http://evil/x.png"}
-    result = agent_mod._inject_poster(params, "U_TEST")
-    assert result["username"] == "Real Name"
-    assert result["icon_url"] == "http://real/pfp.png"
-
-
-def test_inject_poster_strips_spoofed_identity_on_api_exception(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    monkeypatch.setattr(agent_mod, "_user_info_cache", {})
-
-    def raising_get(url, **kwargs):
-        raise RuntimeError("network error")
-
-    monkeypatch.setattr(agent_mod.requests, "get", raising_get)
-    params = {"channel": "C1", "text": "hi", "username": "Evil Spoof"}
-    result = agent_mod._inject_poster(params, "U_TEST")
-    assert "username" not in result
-
-
 def test_chat_post_message_sends_as_bot():
     client = Mock()
     client.chat_postMessage.return_value = {"ok": True}

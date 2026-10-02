@@ -245,9 +245,7 @@ def get_channel_info(channel_id: str) -> str:
         return f"Error fetching channel: {str(e)}"
 
 
-def post_message_to_target(
-    channel_id: str, text: str, *, thread_ts: str = "", username: str = "", icon_url: str = "",
-) -> str:
+def post_message_to_target(channel_id: str, text: str, *, thread_ts: str = "") -> str:
     """Post a message to a Slack channel/thread/DM as the coolton bot.
 
     There's no restriction on where: the caller (post_message_tool) has
@@ -258,8 +256,6 @@ def post_message_to_target(
         channel_id: Target channel ID (or a user ID for a DM).
         text: Message text (Markdown supported).
         thread_ts: Optional thread timestamp to post into.
-        username: Override display name (set to the prompting user's name).
-        icon_url: Override avatar URL (set to the prompting user's pfp).
     """
     if not text or not text.strip():
         return "Error: text is required"
@@ -270,10 +266,6 @@ def post_message_to_target(
     payload = {"channel": channel_id, "text": text}
     if thread_ts:
         payload["thread_ts"] = thread_ts
-    if username:
-        payload["username"] = username
-    if icon_url:
-        payload["icon_url"] = icon_url
     try:
         response = requests.post(
             f"{SLACK_API}/chat.postMessage",

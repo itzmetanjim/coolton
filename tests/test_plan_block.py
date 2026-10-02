@@ -412,7 +412,7 @@ def test_build_plan_hooks_folds_steering_message_into_next_tool_result():
 
 def test_build_plan_hooks_flags_steering_message_from_a_different_user():
     """The run executes under the ORIGINAL requester's identity (their user_id,
-    user_token — see _inject_poster, _get_owned_task, etc.), but a steering
+    user_token — see _get_owned_task, etc.), but a steering
     message can come from anyone in an engaged thread (see agent.steering_store).
     Folding it in as if it were the requester's own words would let a different
     thread participant drive the run under the requester's authority — the note
