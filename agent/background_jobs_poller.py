@@ -114,7 +114,8 @@ def _notify_finished(job: dict, output: str) -> None:
 
 def _wake(channel_id: str, thread_ts: str, user_id: str, job_id: str, command: str, output: str) -> None:
     logger.info("Waking %s/%s for background job %s (owner %s)", channel_id, thread_ts, job_id, user_id)
-    banner = f":gear: _automatic check-in (nobody sent this) — background job finished:_ `{command}`"
+    # What people see in the thread; the job's details go only into the prompt below.
+    banner = ":gear: _a background job finished, coolton is picking this back up_"
     prompt = (
         f"[SYSTEM: your background job `{job_id}` (`{command}`) finished while you "
         f"weren't running a turn. Last output:]\n\n{output}"

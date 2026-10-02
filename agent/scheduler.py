@@ -527,7 +527,9 @@ def _fire_wait(wait_id: str) -> None:
         f"[SYSTEM: your {int(wait.get('seconds', 0))}s wait is over (you were waiting for: "
         f"{wait['reason']}). Continue and respond in this same conversation.]"
     )
-    banner = f":alarm_clock: _wait over (nobody sent this) — {wait['reason']}_"
+    # What people see in the thread. The reason is coolton's own note to itself and goes
+    # only into the prompt above.
+    banner = ":alarm_clock: _done waiting, coolton is picking this back up_"
 
     from agent.active_runs import is_run_active
     if is_run_active(channel_id, thread_ts):
