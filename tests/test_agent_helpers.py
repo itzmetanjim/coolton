@@ -168,6 +168,12 @@ def test_a_secret_in_a_tools_arguments_never_reaches_the_tool(fresh_secret_cache
     assert canary not in str(received) and "***" in str(received)
     assert received[0]["timeout"] == 60
 
+    # echo exists to test exactly this from Slack: what it gets back is already redacted.
+    echoed = asyncio.run(agent_mod._enforce_slack_budget(
+        SimpleNamespace(deps=deps), call=ToolCallPart("echo", {"text": canary}), tool_def=None,
+        args={"text": canary}, handler=lambda args: asyncio.sleep(0, agent_mod.echo(**args))))
+    assert canary not in echoed
+
 
 def test_redact_leaves_other_text_alone(monkeypatch, fresh_secret_cache):
     monkeypatch.delenv("JAMS_API_KEY", raising=False)

@@ -1986,6 +1986,17 @@ def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manife
     return update_slack_bot_manifest(uuid, parsed_manifest, requester_id=attribution_user_id(ctx.deps))
 
 
+@agent.tool_plain
+def echo(text: str) -> str:
+    """Return `text` exactly as given. Only for testing coolton itself (for example that
+    secrets in tool input and output get redacted); don't use it otherwise.
+
+    Args:
+        text: The text to echo back.
+    """
+    return text
+
+
 @agent.tool
 def report_abuse_tool(
     ctx: RunContext[AgentDeps], category: Literal["nsfw", "spam", "vulnerability", "other"], reason: str,
