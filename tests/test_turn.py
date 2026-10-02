@@ -141,7 +141,7 @@ def test_hcai_status_checked_on_a_slack_turn(mocks):
 def test_skip_path_deletes_plan_and_does_not_stream(mocks):
     import agent.plan_block as pb
 
-    def fake_run_agent(text, deps, message_history=None, images=None):
+    def fake_run_agent(text, deps, message_history=None, images=None, resume_from=None):
         deps.should_skip = True
         return SimpleNamespace(output="", all_messages=lambda: [])
 
@@ -166,7 +166,7 @@ def test_skip_preserve_path_keeps_plan_and_history_but_still_sends_nothing(mocks
 
     halted = ["msg1", "msg2-tool-result"]
 
-    def fake_run_agent(text, deps, message_history=None, images=None):
+    def fake_run_agent(text, deps, message_history=None, images=None, resume_from=None):
         deps.should_skip = True
         deps.skip_preserve = True
         return SimpleNamespace(output="", all_messages=lambda: halted)
@@ -188,7 +188,7 @@ def test_skip_preserve_path_keeps_plan_and_history_but_still_sends_nothing(mocks
 def test_stop_path_keeps_plan_and_sets_error(mocks):
     import agent.plan_block as pb
 
-    def fake_run_agent(text, deps, message_history=None, images=None):
+    def fake_run_agent(text, deps, message_history=None, images=None, resume_from=None):
         deps.should_skip = True
         deps.halt_reason = "!stop requested"
         return SimpleNamespace(output="", all_messages=lambda: [])
@@ -448,7 +448,7 @@ def test_stopped_run_context_preserved_for_stranded_steering_message(mocks, monk
     halted_messages = ["partial-progress-from-the-stopped-run"]
     calls = {"n": 0}
 
-    def fake_run_agent(text, deps, message_history=None, images=None):
+    def fake_run_agent(text, deps, message_history=None, images=None, resume_from=None):
         calls["n"] += 1
         if calls["n"] == 1:
             deps.should_skip = True
@@ -487,7 +487,7 @@ def test_stranded_steering_recursion_stops_at_the_depth_limit(mocks, monkeypatch
     _MAX_STRANDED_RECURSION_DEPTH turns rather than recursing forever."""
     from agent.steering_store import clear_steering_messages, queue_steering_message
 
-    def fake_run_agent(text, deps, message_history=None, images=None):
+    def fake_run_agent(text, deps, message_history=None, images=None, resume_from=None):
         # Every single turn strands another message for the next one to pick up.
         queue_steering_message("C1", "1.1", "again", "U1", "999.999")
 
@@ -624,7 +624,7 @@ def test_resume_orphaned_runs_reruns_a_web_turn(monkeypatch):
 
     import web.runner as runner
     calls = []
-    monkeypatch.setattr(runner, "resume_turn", lambda *a: calls.append(a))
+    monkeypatch.setattr(runner, "resume_turn", lambda *a, **k: calls.append(a))
 
     result = turn.resume_orphaned_runs(Mock(), Mock())
 

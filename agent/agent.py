@@ -2882,7 +2882,7 @@ class _SkipResult:
         return self._history
 
 
-def run_agent(text, deps, message_history=None, images=None):
+def run_agent(text, deps, message_history=None, images=None, resume_from=None):
     _user_info_cache.clear()
     deps.run_started_at = time.time()
     # Fresh per-turn checkpoint (see AgentDeps.last_attempt_messages) — a real Slack
@@ -2962,6 +2962,7 @@ def run_agent(text, deps, message_history=None, images=None):
     capabilities.append(build_skills_capability())
     from agent.image_cap import cap_images
     capabilities.append(ProcessHistory(cap_images))
+    capabilities.append(_checkpoint_hooks(deps))
     if getattr(deps, "debug_timer", None) is not None:
         from agent.debug_timing import build_timing_hooks
         capabilities.append(build_timing_hooks(deps.debug_timer))
@@ -2987,12 +2988,16 @@ def run_agent(text, deps, message_history=None, images=None):
     # which the run executes first — exactly what coolton's own search would
     # do, so the tool list (and the cached prefix) never changes.
     run_history, run_prompt = message_history, user_prompt
-    preload = _preload_search_call(deps.preloaded_tool_groups, message_history)
+    preload = None if resume_from else _preload_search_call(deps.preloaded_tool_groups, message_history)
     if preload:
         # pydantic-ai only adds the system prompt itself when the history is empty.
         system = [SystemPromptPart(full_prompt)] if not message_history else []
         run_history = [*(message_history or []), ModelRequest(parts=[*system, UserPromptPart(user_prompt)]), *preload]
         run_prompt = None
+    if resume_from:
+        # Restarted mid-turn (listeners.events.turn.resume_orphaned_runs): continue from
+        # this turn's checkpoint instead of starting the request over.
+        run_history, run_prompt = _resume_history(resume_from, full_prompt), None
 
     run_kwargs = dict(
         user_prompt=run_prompt,
@@ -3114,6 +3119,42 @@ def _preload_search_call(groups: set[str], history=None) -> list | None:
         return None
     call = ToolCallPart(SEARCH_TOOL, {"queries": names}, tool_call_id=f"{PRELOAD_CALL_ID_PREFIX}{uuid4().hex[:12]}")
     return [ModelResponse(parts=[call])]
+
+
+def _checkpoint_hooks(deps):
+    """Save the turn's messages before every model request (agent.inflight_runs), so a
+    restart mid-turn resumes from the last completed tool round."""
+    from pydantic_ai.capabilities import Hooks
+
+    from agent.inflight_runs import save_checkpoint
+
+    hooks = Hooks()
+
+    @hooks.on.model_request
+    async def checkpoint(ctx, *, request_context, handler):
+        save_checkpoint(deps.channel_id, deps.thread_ts, list(request_context.messages))
+        return await handler(request_context)
+
+    return hooks
+
+
+RESTART_NOTE = (
+    "[coolton restarted in the middle of this turn. Everything above happened before the restart: "
+    "continue from where it left off, don't start over. A tool call that was still running at the "
+    "restart didn't finish, so check its result before redoing anything with side effects.]"
+)
+
+
+def _resume_history(checkpoint: list, system_prompt: str) -> list:
+    """An interrupted turn's checkpoint, ready to run again with no new user prompt: the
+    restart note added to its last request, and the current system prompt."""
+    messages = list(checkpoint)
+    note = UserPromptPart(RESTART_NOTE)
+    if messages and isinstance(messages[-1], ModelRequest):
+        messages[-1] = replace(messages[-1], parts=[*messages[-1].parts, note])
+    else:
+        messages.append(ModelRequest(parts=[note]))
+    return _with_system_prompt(messages, system_prompt)
 
 
 def _with_system_prompt(history, system_prompt: str):

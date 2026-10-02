@@ -104,7 +104,8 @@ def submit_message(conversation_id: str, user_id: str, text: str, attachments: l
     _executor.submit(_run_turn, conversation_id, user_id, text, user_event["seq"], attachments)
 
 
-def resume_turn(conversation_id: str, user_id: str, text: str, message_seq: int) -> None:
+def resume_turn(conversation_id: str, user_id: str, text: str, message_seq: int,
+                resume_messages: list | None = None) -> None:
     """Re-run a turn that was still in flight when the process died mid-turn
     (see agent.inflight_runs / listeners.events.turn.resume_orphaned_runs).
 
@@ -115,7 +116,7 @@ def resume_turn(conversation_id: str, user_id: str, text: str, message_seq: int)
     does: this only ever runs once, right at startup, before anything else
     could have started a run for this conversation.
     """
-    _executor.submit(_run_turn, conversation_id, user_id, text, message_seq, [])
+    _executor.submit(_run_turn, conversation_id, user_id, text, message_seq, [], resume_messages=resume_messages)
 
 
 def wake_conversation(
@@ -141,7 +142,7 @@ def wake_conversation(
 
 def _run_turn(
     conversation_id: str, user_id: str, text: str, message_seq: int, attachments: list[dict],
-    on_behalf_of: str = "",
+    on_behalf_of: str = "", resume_messages: list | None = None,
 ) -> None:
     from listeners.events.turn import run_agent_turn
     from web import conversation_log as log
@@ -177,6 +178,7 @@ def _run_turn(
             history=conversation_store.get_history(WEB_CHANNEL_ID, conversation_id),
             images=images,
             on_behalf_of=on_behalf_of,
+            resume_messages=resume_messages,
         )
     except Exception:
         # run_agent_turn already catches and reports its own errors (via

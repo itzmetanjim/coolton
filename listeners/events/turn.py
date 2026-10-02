@@ -123,6 +123,7 @@ def run_agent_turn(
     say: Say | None = None,
     surface: object | None = None,
     on_behalf_of: str = "",
+    resume_messages: list | None = None,
     _stranded_recursion_depth: int = 0,
 ) -> None:
     """Run one agent turn: status → plan message → run → stream → history → kevinton.
@@ -207,7 +208,7 @@ def run_agent_turn(
         # Jev decides which deferred tools this turn needs, in the background
         # while the rest of setup runs; run_agent collects it (agent.tool_preload).
         from agent.tool_preload import start_preload
-        deps.tool_preload = start_preload(text, history)
+        deps.tool_preload = None if resume_messages else start_preload(text, history)
         conv_surface = _surface(deps)
 
         from agent.plan_block import (
@@ -228,7 +229,7 @@ def run_agent_turn(
             debug_timer.record("phase", "setup (before the model started)", debug_timer.started_at, time.perf_counter())
         run_started = time.perf_counter()
         try:
-            result = run_agent(text, deps, message_history=history, images=images)
+            result = run_agent(text, deps, message_history=history, images=images, resume_from=resume_messages)
         finally:
             if debug_timer:
                 debug_timer.record("phase", "agent run", run_started, time.perf_counter())
@@ -390,7 +391,7 @@ def run_agent_turn(
             )
 
 
-_RESUME_NOTICE = "_coolton restarted mid-response — picking this back up..._"
+_RESUME_NOTICE = "_coolton restarted mid-response, picking up where it left off..._"
 
 
 def resume_orphaned_runs(client: WebClient, logger: Logger) -> set[str]:
@@ -411,7 +412,7 @@ def resume_orphaned_runs(client: WebClient, logger: Logger) -> set[str]:
     """
     import threading
 
-    from agent.inflight_runs import pop_all
+    from agent.inflight_runs import load_checkpoint, pop_all
 
     resumed_web_ids: set[str] = set()
     orphaned = pop_all()
@@ -422,11 +423,16 @@ def resume_orphaned_runs(client: WebClient, logger: Logger) -> set[str]:
         user_id = entry["user_id"]
         text = entry["text"]
         is_slack = entry["is_slack"]
-        logger.warning("Resuming a turn orphaned by a restart: %s/%s", channel_id, thread_ts)
+        # Where the turn had got to (agent.inflight_runs): continue from there rather than
+        # redoing the work. No checkpoint means it died before its first model request.
+        checkpoint = load_checkpoint(channel_id, thread_ts)
+        logger.warning("Resuming a turn orphaned by a restart: %s/%s (%s)", channel_id, thread_ts,
+                       f"from a {len(checkpoint)}-message checkpoint" if checkpoint else "from the start")
 
         if is_slack:
 
-            def _resume(channel_id=channel_id, thread_ts=thread_ts, message_ts=message_ts, user_id=user_id, text=text):
+            def _resume(channel_id=channel_id, thread_ts=thread_ts, message_ts=message_ts, user_id=user_id, text=text,
+                        checkpoint=checkpoint):
                 try:
                     client.chat_postMessage(channel=channel_id, thread_ts=thread_ts or None, text=_RESUME_NOTICE)
                 except Exception:
@@ -435,6 +441,7 @@ def resume_orphaned_runs(client: WebClient, logger: Logger) -> set[str]:
                     client=client, logger=logger, channel_id=channel_id, thread_ts=thread_ts,
                     message_ts=message_ts, user_id=user_id, user_token=None, text=text,
                     history=conversation_store.get_history(channel_id, thread_ts),
+                    resume_messages=checkpoint,
                 )
 
             threading.Thread(target=_resume, daemon=True, name="resume-orphaned-turn").start()
@@ -449,7 +456,8 @@ def resume_orphaned_runs(client: WebClient, logger: Logger) -> set[str]:
 
             resumed_web_ids.add(thread_ts)
 
-            def _resume_web(conversation_id=thread_ts, user_id=user_id, text=text, message_seq=message_seq):
+            def _resume_web(conversation_id=thread_ts, user_id=user_id, text=text, message_seq=message_seq,
+                            checkpoint=checkpoint):
                 from web import conversation_log as log
                 from web.runner import resume_turn
 
@@ -459,7 +467,7 @@ def resume_orphaned_runs(client: WebClient, logger: Logger) -> set[str]:
                     })
                 except Exception:
                     logger.exception("Resume: failed to log the restart notice for conversation %s", conversation_id)
-                resume_turn(conversation_id, user_id, text, message_seq)
+                resume_turn(conversation_id, user_id, text, message_seq, resume_messages=checkpoint)
 
             threading.Thread(target=_resume_web, daemon=True, name="resume-orphaned-turn").start()
 

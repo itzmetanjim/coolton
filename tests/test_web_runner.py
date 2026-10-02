@@ -41,7 +41,7 @@ def test_resume_turn_submits_run_turn_without_a_new_user_message_event(conversat
     from web import runner
 
     submitted = []
-    monkeypatch.setattr(runner._executor, "submit", lambda fn, *a: submitted.append((fn, a)))
+    monkeypatch.setattr(runner._executor, "submit", lambda fn, *a, **k: submitted.append((fn, a)))
     runner.resume_turn(conversation_id, "U1", "hello", 3)
 
     assert log.read_events(conversation_id) == []
