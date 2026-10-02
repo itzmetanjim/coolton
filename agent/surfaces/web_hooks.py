@@ -22,7 +22,7 @@ from agent.plan_block import (
 )
 from agent.redact import redact as _redact
 from agent.steering_store import clear_steering_messages, peek_steering_messages
-from agent.stop_store import HaltRun, stop_requested_for
+from agent.stop_store import HaltRun, ended_turn_on_purpose, stop_requested_for
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +152,12 @@ def build_web_hooks(conversation_id: str):
     @hooks.on.tool_execute_error
     async def on_tool_error(ctx, *, call, tool_def, args, error):
         call = shown_call(call, args)[0]
+        ended = ended_turn_on_purpose(error)  # wait_tool/skip ending the turn, not a failure
         log.append_event(conversation_id, {
             "type": "step", "kind": "tool", "step_id": call.tool_call_id,
             "tool_name": call.tool_name, "display": _display_for_tool(call.tool_name),
-            "status": "error",
-            "result": _redact(str(error), context=f"tool error {call.tool_name}"),
+            "status": "complete" if ended else "error",
+            "result": ended or _redact(str(error), context=f"tool error {call.tool_name}"),
         })
         raise error
 

@@ -5,7 +5,7 @@ import time
 from agent.deferred_tools import is_preload_call, shown_call
 from agent.redact import redact as _redact
 from agent.steering_store import clear_steering_messages, peek_steering_messages
-from agent.stop_store import HaltRun, stop_requested_for
+from agent.stop_store import HaltRun, ended_turn_on_purpose, stop_requested_for
 
 logger = logging.getLogger(__name__)
 
@@ -579,18 +579,23 @@ def build_plan_hooks():
     async def on_tool_error(ctx, *, call, tool_def, args, error):
         deps = ctx.deps
         call = shown_call(call, args)[0]
-        logger.error(
-            "TOOL ERROR  | %s | %s",
-            call.tool_name,
-            _truncate(_redact(str(error), context=f"tool error {call.tool_name}"), 1000),
-        )
+        # wait_tool and skip end the turn by raising HaltRun: that's the tool working.
+        ended = ended_turn_on_purpose(error)
+        if ended:
+            logger.info("TOOL END    | %s | %s", call.tool_name, ended)
+        else:
+            logger.error(
+                "TOOL ERROR  | %s | %s",
+                call.tool_name,
+                _truncate(_redact(str(error), context=f"tool error {call.tool_name}"), 1000),
+            )
         if deps.plan_ts:
             task_id = f"task_{call.tool_call_id}"
             task = deps.plan_tasks.get(task_id)
             if task is not None:
-                task["status"] = "error"
+                task["status"] = "complete" if ended else "error"
                 task["output"] = _combined_io(
-                    task.get("input", ""), _redact(str(error), context=f"tool error {call.tool_name}")
+                    task.get("input", ""), ended or _redact(str(error), context=f"tool error {call.tool_name}")
                 )
                 update_plan_message(deps)
         raise error

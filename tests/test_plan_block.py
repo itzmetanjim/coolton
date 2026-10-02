@@ -4,6 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from agent.stop_store import HaltRun
+
 from agent.plan_block import (
     _combined_io,
     _display_for_tool,
@@ -541,23 +543,29 @@ def test_build_plan_hooks_does_not_track_when_plan_ts_unset():
     assert deps.plan_tasks == {}
 
 
-def test_build_plan_hooks_tool_error_marks_error_and_reraises():
+@pytest.mark.parametrize("error,status", [
+    (RuntimeError("nope"), "error"),
+    # wait_tool/skip end the turn by raising HaltRun: the step worked, it isn't a failure.
+    (HaltRun("wait"), "complete"),
+    (HaltRun("!stop requested"), "error"),
+])
+def test_build_plan_hooks_tool_error_marks_the_step_and_reraises(error, status):
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100")
     ctx = SimpleNamespace(deps=deps, messages=[])
-    call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
+    call = SimpleNamespace(tool_name="wait_tool", tool_call_id="abc123")
 
     async def run():
         await _hook(hooks, "before_tool_execute")(
-            ctx, call=call, tool_def=None, args={"url": "x"}
+            ctx, call=call, tool_def=None, args={"seconds": 60}
         )
-        with pytest.raises(RuntimeError, match="nope"):
+        with pytest.raises(type(error)):
             await _hook(hooks, "on_tool_execute_error")(
-                ctx, call=call, tool_def=None, args={}, error=RuntimeError("nope")
+                ctx, call=call, tool_def=None, args={}, error=error
             )
 
     asyncio.run(run())
-    assert deps.plan_tasks["task_abc123"]["status"] == "error"
+    assert deps.plan_tasks["task_abc123"]["status"] == status
 
 
 def test_before_tool_hook_snapshots_messages_and_halts_on_stop(monkeypatch):

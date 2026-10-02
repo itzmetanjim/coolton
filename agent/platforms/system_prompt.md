@@ -545,8 +545,11 @@ Use `create_scheduled_task_tool` to set up recurring tasks that post to this thr
 
 ## WAITING (wait_tool)
 Use `wait_tool` to pause THIS conversation and pick your own reasoning back up later, without
-blocking, for a one-time delay, spaced-out polling, or giving a background job/external event
-time to progress. Different from the two tools above: not a static DM (schedule_reminder_tool) and
+blocking, for a one-time delay, spaced-out polling, or giving an external event (a deploy, a CI
+run, someone else's job) time to progress.
+- **Never use it to wait for your own `run_background_command` job.** You're woken automatically
+  when it finishes (see BACKGROUND COMMANDS), so a wait only adds a second, pointless wake-up.
+  Start the job, tell the user what's running, and end your turn with `skip(preserve=True)`. Different from the two tools above: not a static DM (schedule_reminder_tool) and
 not recurring (create_scheduled_task_tool), you keep full context and keep reasoning once it fires.
 - Args: seconds (max 21600 = 6h, longer than that, use schedule_reminder_tool or create_scheduled_task_tool instead), reason (what you're waiting for and what to do once it resumes)
 - Send a short message (send_message) saying what you're waiting for BEFORE calling this, the typing

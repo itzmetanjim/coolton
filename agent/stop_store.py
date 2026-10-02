@@ -47,3 +47,11 @@ def is_stop_command(text: str, bot_id: str = "") -> bool:
         if stripped.startswith(mention):
             stripped = stripped[len(mention):].strip()
     return stripped == "!stop"
+
+
+def ended_turn_on_purpose(error: BaseException) -> str | None:
+    """For a HaltRun a tool raised to end the turn by design (wait_tool, skip), the
+    text to show for that step; None for a real error or a !stop interruption."""
+    if not isinstance(error, HaltRun) or "!stop" in str(error):
+        return None
+    return {"wait": "paused; picks back up when the wait is over"}.get(str(error), "ended the turn")

@@ -2173,9 +2173,11 @@ def skip(ctx: RunContext[AgentDeps], preserve: bool = False) -> str:
 @agent.tool
 def wait_tool(ctx: RunContext[AgentDeps], seconds: int, reason: str) -> str:
     """Pause this conversation and automatically resume it later, without blocking. Use this for a
-    one-time delay, spaced-out polling, or giving a background job/external event time to progress,
-    NOT for anything recurring (use create_scheduled_task_tool) or a delay longer than 21600s/6h (use
-    schedule_reminder_tool instead, though that only sends a static DM with no further reasoning).
+    one-time delay, spaced-out polling, or giving an external event (a deploy, a CI run, someone
+    else's job) time to progress. NOT for a run_background_command job: you're woken automatically
+    when that finishes, so just end your turn. NOT for anything recurring (use
+    create_scheduled_task_tool) or a delay longer than 21600s/6h (use schedule_reminder_tool instead,
+    though that only sends a static DM with no further reasoning).
 
     Before calling this, send a short message (via send_message) telling the user what you're waiting
     for, the typing indicator clears the moment your turn ends, so that message is the only lasting
