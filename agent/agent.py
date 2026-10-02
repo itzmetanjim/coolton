@@ -224,12 +224,27 @@ def _redact_output(ctx, *, output_context, output):
     return output
 
 
+def _redact_args(value, context: str):
+    """`value` (a tool's arguments) with any secret value replaced, recursively."""
+    if isinstance(value, str):
+        return _redact(value, context=context)
+    if isinstance(value, dict):
+        return {k: _redact_args(v, context) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_args(v, context) for v in value]
+    return value
+
+
 async def _enforce_slack_budget(ctx, *, call, tool_def, args, handler):
     from agent.abuse_report import stopped_tool_call
     from agent.deferred_tools import shown_call
     from agent.slack_budget import spend
 
     tool_name = shown_call(call, args)[0].tool_name
+    # A secret in a tool's arguments is always a leak (coolton's own tools read tokens from
+    # the server's environment, never from arguments): the tool gets the redacted value,
+    # not just the logs and plan block.
+    args = _redact_args(args, f"tool input {tool_name}")
     # A request reported as abuse is stopped: nothing but declining is allowed after it.
     stopped = stopped_tool_call(ctx.deps, tool_name)
     if stopped:
