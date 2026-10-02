@@ -203,14 +203,15 @@ def test_wake_dispatches_to_slack_for_a_slack_channel(monkeypatch):
     assert calls[0][0] == "slack"
 
 
-def test_wake_banner_makes_clear_it_is_not_from_the_user(monkeypatch):
-    """A human reading the channel (or the model itself) must be able to tell
-    this wasn't typed by anyone — it's an autonomous check-in."""
+def test_wake_banner_says_coolton_is_resuming_and_keeps_job_details_for_the_model(monkeypatch):
+    """People in the thread see that coolton is picking things back up; the job's
+    command and output are coolton's own context, so only the prompt carries them."""
     calls = []
     monkeypatch.setattr(poller, "_wake_slack", lambda *a: calls.append(a))
     poller._wake("C1", "1.1", "U1", "abcd1234", "npm run build", "done")
-    banner = calls[0][3]
-    assert "not" in banner.lower() or "nobody" in banner.lower() or "automatic" in banner.lower()
+    banner, prompt = calls[0][3], calls[0][4]
+    assert "coolton" in banner and "npm run build" not in banner and "—" not in banner
+    assert "npm run build" in prompt and "done" in prompt
 
 
 def test_wake_web_calls_wake_conversation(monkeypatch):

@@ -571,7 +571,7 @@ def test_fire_wait_dispatches_a_wake_when_nothing_is_active(tmp_files, monkeypat
     assert user_id == AUTOMATED_USER_ID
     # Posts from the wake-up turn are credited to whoever started the wait.
     assert owner_id == OWNER
-    assert "the deploy" in banner
+    assert "the deploy" not in banner  # the reason is coolton's note to itself
     assert "the deploy" in prompt
 
 
