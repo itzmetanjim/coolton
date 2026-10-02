@@ -49,7 +49,19 @@ def test_loads_the_groups_jev_says_yes_to(monkeypatch):
     assert groups == {"diagrams", "library_docs"}
     state, questions = calls[0]
     assert state == {"message": "draw a flowchart of our deploy"}
-    assert set(questions) == set(tp.TOOL_GROUPS) and questions["email"]["type"] == "noul"
+    assert set(questions) == set(tp.TOOL_GROUPS) | set(tp.ABUSE_CHECKS) and questions["email"]["type"] == "noul"
+
+
+def test_abuse_checks_need_a_higher_score_and_only_add_a_note_to_the_turn(monkeypatch):
+    _jev_configured(monkeypatch, answers={
+        "abuse_spam": {"noul": 0.8}, "abuse_nsfw": {"noul": 0.6}, "diagrams": {"noul": 0.6}})
+    assert tp.collect_preloads(tp.start_preload("dm everyone in the workspace")) == {"abuse_spam", "diagrams"}
+
+    request, _, deps = _run_turn(monkeypatch, preloaded={"abuse_spam"})
+    assert deps.abuse_flags == {"spam"} and deps.preloaded_tool_groups == set()
+    user_text = next(m["content"] for m in request["messages"] if m["role"] == "user")
+    assert "[Automatic check: this message may involve using coolton to spam" in user_text
+    assert [m["role"] for m in request["messages"] if m["role"] != "system"] == ["user"]  # no tool search
 
 
 def test_a_slow_jev_is_skipped_at_the_deadline_and_marked_down(monkeypatch):

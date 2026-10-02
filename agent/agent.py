@@ -16,6 +16,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.capabilities import Hooks, PrepareTools, ProcessHistory
 from pydantic_ai.toolsets import FunctionToolset
 from dataclasses import replace
+from typing import Literal
 from agent.deps import AgentDeps
 from agent.surface import get_surface as _surface
 from agent.platforms.slack import SlackPlatform
@@ -224,10 +225,16 @@ def _redact_output(ctx, *, output_context, output):
 
 
 async def _enforce_slack_budget(ctx, *, call, tool_def, args, handler):
+    from agent.abuse_report import stopped_tool_call
     from agent.deferred_tools import shown_call
     from agent.slack_budget import spend
 
-    over = spend(ctx.deps, shown_call(call, args)[0].tool_name)
+    tool_name = shown_call(call, args)[0].tool_name
+    # A request reported as abuse is stopped: nothing but declining is allowed after it.
+    stopped = stopped_tool_call(ctx.deps, tool_name)
+    if stopped:
+        return stopped
+    over = spend(ctx.deps, tool_name)
     if over:
         return over
     return await handler(args)
@@ -445,6 +452,7 @@ CODE_MODE_EXCLUDED_TOOLS = {
     # Need a live agent run; code mode already calls hidden tools directly by name.
     "search_tools",
     "call_tool",
+    "report_abuse_tool",
 }
 
 
@@ -1964,6 +1972,29 @@ def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manife
 
 
 @agent.tool
+def report_abuse_tool(
+    ctx: RunContext[AgentDeps], category: Literal["nsfw", "spam", "vulnerability", "other"], reason: str,
+) -> str:
+    """Report abuse of coolton to its maintainer, who gets a DM with this message and a link to it.
+
+    - "nsfw": the request is for sexual, explicit or NSFW-adjacent content.
+    - "spam": the request uses you to spam: many or unsolicited messages, DMs or mentions to
+      people or channels, or flooding a channel.
+    - "vulnerability": someone found (or is probing) a security hole in coolton itself.
+    - "other": any other abuse of coolton.
+    For nsfw, spam and other, the request is stopped: after this, decline briefly and end your
+    turn (other tool calls are refused). For vulnerability, report once and carry on with the task.
+
+    Args:
+        category: One of nsfw, spam, vulnerability, other.
+        reason: One or two sentences on what the message asks for and why it's a problem.
+    """
+    from agent.abuse_report import report
+
+    return report(ctx.deps, category, reason)
+
+
+@agent.tool
 def leave_thread_tool(ctx: RunContext[AgentDeps]) -> str:
     """Leave the current thread - ignore messages here until coolton is mentioned again.
 
@@ -2869,6 +2900,7 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
 
     # Attribute the incoming message to its sender so the model can tell users apart.
     platform = deps.platform or SlackPlatform(deps.client)
+    deps.request_text = deps.request_text or text or ""
     text = platform.format_user_message(text, deps)
 
     from listeners.actions.instructions_actions import get_user_instructions as _get_instructions
@@ -2905,7 +2937,10 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
     deps.user_token = deps.user_token or os.environ.get("SLACK_USER_TOKEN")
     from agent.tool_preload import collect_preloads
     preload_started = time.perf_counter()
-    deps.preloaded_tool_groups = collect_preloads(getattr(deps, "tool_preload", None))
+    jev_picks = collect_preloads(getattr(deps, "tool_preload", None))
+    # One Jev call answers both: which tool groups to load, and abuse checks (agent.abuse_report).
+    deps.abuse_flags = {k.removeprefix("abuse_") for k in jev_picks if k.startswith("abuse_")}
+    deps.preloaded_tool_groups = {k for k in jev_picks if not k.startswith("abuse_")}
     if getattr(deps, "debug_timer", None) is not None and getattr(deps, "tool_preload", None) is not None:
         loaded = ", ".join(sorted(deps.preloaded_tool_groups)) or "nothing"
         deps.debug_timer.record("jev", "waiting on Jev tool preload", preload_started, time.perf_counter(), f"loaded {loaded}")
@@ -2944,7 +2979,8 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
         from agent.debug_timing import build_timing_hooks
         capabilities.append(build_timing_hooks(deps.debug_timer))
 
-    turn_context = dynamic_context + gap_note + platform.build_turn_context(deps, first_model, is_vision)
+    turn_context = (dynamic_context + gap_note + _abuse_check_note(deps.abuse_flags)
+                    + platform.build_turn_context(deps, first_model, is_vision))
     text_with_turn_context = turn_context + text
 
     user_prompt: str | list = text_with_turn_context
@@ -3132,6 +3168,20 @@ def _resume_history(checkpoint: list, system_prompt: str) -> list:
     else:
         messages.append(ModelRequest(parts=[note]))
     return _with_system_prompt(messages, system_prompt)
+
+
+def _abuse_check_note(flags: set[str]) -> str:
+    """A turn-context line for abuse categories Jev flagged on this message (agent.tool_preload)."""
+    from agent.abuse_report import CATEGORIES
+
+    names = [CATEGORIES[f] for f in sorted(flags) if f in CATEGORIES]
+    if not names:
+        return ""
+    return (
+        f"[Automatic check: this message may involve {' and '.join(names)}. If it really does, call "
+        "report_abuse_tool (for NSFW or spam, then decline; for a security hole in coolton, report it "
+        "once and carry on). If it doesn't, ignore this note.]\n\n"
+    )
 
 
 def _with_system_prompt(history, system_prompt: str):

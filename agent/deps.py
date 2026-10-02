@@ -53,6 +53,13 @@ class AgentDeps:
     # and the deferred tool groups it decided to load for this turn.
     tool_preload: object | None = None
     preloaded_tool_groups: set = field(default_factory=set)
+    # This turn's message as the user sent it (for abuse reports; agent.abuse_report).
+    request_text: str = ""
+    # Abuse categories Jev flagged on this message, ones reported this turn, and the
+    # category that stopped the request (agent.abuse_report).
+    abuse_flags: set = field(default_factory=set)
+    abuse_reported: set = field(default_factory=set)
+    abuse_stop: str = ""
     # Toolsets reached through search_tools/call_tool (agent.deferred_tools), set by run_agent.
     hidden_toolsets: list = field(default_factory=list)
     # Snapshot of the in-progress message history, captured right before a

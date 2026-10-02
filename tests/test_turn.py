@@ -705,3 +705,29 @@ def test_turn_footer_formats_long_turns_in_minutes(monkeypatch):
     monkeypatch.setattr("agent.background_jobs_store.has_pending_jobs", lambda ch, th: False)
     monkeypatch.setattr(turn.time, "perf_counter", lambda: 1000.0 + 133.4)
     assert turn._turn_footer("C1", "1.1", 1000.0) == "_done in 2m 13s_"
+
+
+@pytest.mark.parametrize("message_ts,plan_ts,expect_status", [
+    ("1.1", "100.200", True),    # new thread: after the plan message is posted
+    ("1.1", None, False),        # new thread, plan message failed: never on an empty thread
+    ("111.111", None, True),     # a reply: the thread already has messages
+])
+def test_session_status_waits_until_the_thread_has_a_reply(mocks, message_ts, plan_ts, expect_status):
+    """Slack's stop button on a thread that's only its root message is easy to hit by accident."""
+    import agent.plan_block as pb
+
+    pb.send_plan_message.return_value = plan_ts
+    order = []
+    pb.send_plan_message.side_effect = lambda deps: order.append("plan") or plan_ts
+    mocks.client.api_call.side_effect = lambda method, **kw: order.append(method)
+
+    turn.run_agent_turn(
+        client=mocks.client, say_stream=mocks.say_stream, say=mocks.say, logger=mocks.logger,
+        channel_id="C1", thread_ts="1.1", message_ts=message_ts, user_id="U1", user_token="xoxp-user",
+        text="hello", history=None,
+    )
+
+    statuses = [m for m in order if m == "agents.sessions.setStatus"]
+    assert bool(statuses) == expect_status
+    if expect_status:
+        assert order.index("plan") < order.index("agents.sessions.setStatus")

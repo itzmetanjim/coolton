@@ -181,11 +181,6 @@ def run_agent_turn(
             return
 
         if is_slack:
-            # Live status via the thread's Slack agent session: `processing` with the
-            # current step as its title, then titled after this request and set
-            # `active` when the turn ends. See agent.thread_status.
-            thread_status.start(client, channel_id, thread_ts, request_text=text)
-
             # Warn the thread if HCAI (coolton's primary provider) is about to
             # fall back to a much worse model — see agent.hcai_status. Runs on
             # its own background thread so a slow status endpoint never delays
@@ -224,6 +219,13 @@ def run_agent_turn(
         # deps.surface), so there's no plan_ts to manage here.
         plan_ts = send_plan_message(deps) if is_slack else None
         deps.plan_ts = plan_ts
+        # The thread's Slack agent session goes `processing` (loading UI + stop button)
+        # only once the thread has a reply in it: on a thread that's just its root
+        # message, Slack's stop button is too easy to hit by accident. This message
+        # being a reply means the thread already has one; otherwise it's the plan
+        # message just posted, and with no plan message there's no status this turn.
+        if is_slack and (plan_ts or message_ts != thread_ts):
+            thread_status.start(client, channel_id, thread_ts, request_text=text)
 
         if debug_timer:
             debug_timer.record("phase", "setup (before the model started)", debug_timer.started_at, time.perf_counter())
