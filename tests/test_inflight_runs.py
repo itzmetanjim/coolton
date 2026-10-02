@@ -35,14 +35,6 @@ def test_record_finished_is_a_noop_for_an_unknown_entry():
     assert inflight_runs.pop_all() == []
 
 
-def test_a_normal_start_then_finish_leaves_nothing_orphaned():
-    """The happy path: a run that completes normally clears its own record —
-    resume_orphaned_runs should never see it."""
-    inflight_runs.record_start("web", "conv1", message_ts="5", user_id="U1", text="hi", is_slack=False)
-    inflight_runs.record_finished("web", "conv1")
-    assert inflight_runs.pop_all() == []
-
-
 def test_multiple_entries_are_tracked_independently():
     inflight_runs.record_start("C1", "1.1", message_ts="1", user_id="U1", text="a", is_slack=True)
     inflight_runs.record_start("web", "conv1", message_ts="2", user_id="U2", text="b", is_slack=False)

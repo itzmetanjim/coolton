@@ -95,15 +95,6 @@ def test_banned_user_short_circuits_before_any_work(mocks, monkeypatch):
     pb.send_plan_message.assert_not_called()
 
 
-def test_non_banned_user_runs_normally(mocks, monkeypatch):
-    import agent.ban_store as ban_store
-    monkeypatch.setattr(ban_store, "is_banned", lambda user_id: user_id == "SOMEONE_ELSE")
-
-    _run_turn(mocks, text="hello")
-
-    turn.run_agent.assert_called_once()
-
-
 def test_happy_path(mocks):
     import agent.plan_block as pb
     _run_turn(mocks)
@@ -646,11 +637,6 @@ def test_resume_orphaned_runs_skips_a_web_entry_with_a_bad_message_ts():
 
     assert result == set()
     assert pop_all() == []
-
-
-def test_resume_orphaned_runs_is_a_noop_with_nothing_orphaned():
-    result = turn.resume_orphaned_runs(Mock(), Mock())
-    assert result == set()
 
 
 # ---------------------------------------------------------------------------

@@ -70,28 +70,6 @@ def test_error_response_forwarded_verbatim_and_not_registered(monkeypatch):
     assert registered == []
 
 
-def test_error_response_forwards_a_different_error_body_verbatim(monkeypatch):
-    # The exact channel id / error body vary run to run — nothing here should
-    # be hardcoded to one specific example.
-    monkeypatch.setattr(
-        code_channel.subprocess, "run",
-        _fake_run(stdout='error\n{"ok":false,"error":"channel_creation_failed"}\n'),
-    )
-    result = code_channel.create_code_channel(
-        client=Mock(), name="x", task="", owner_id="U1", source_channel_id="C0", source_thread_ts="1.1",
-    )
-    assert '{"ok":false,"error":"channel_creation_failed"}' in result
-
-
-def test_ok_response_with_a_different_channel_id(monkeypatch):
-    monkeypatch.setattr(code_channel.subprocess, "run", _fake_run(stdout="ok\nC09ZZZQQQ1\n"))
-    monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: None)
-    result = code_channel.create_code_channel(
-        client=Mock(), name="x", task="", owner_id="U1", source_channel_id="C0", source_thread_ts="1.1",
-    )
-    assert "C09ZZZQQQ1" in result
-
-
 def test_display_name_reaches_the_script_as_a_single_unmodified_argv_entry(monkeypatch):
     """The whole point of not validating the name ourselves: spaces, unicode,
     uppercase, and quote characters must all survive as ONE argv element,

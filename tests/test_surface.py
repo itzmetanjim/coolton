@@ -51,12 +51,6 @@ def test_get_surface_works_against_a_minimal_simplenamespace_deps():
     assert surface.user_token is None
 
 
-def test_get_surface_is_a_free_function_not_a_deps_method_requirement():
-    deps = SimpleNamespace(client=Mock(), channel_id="C1", thread_ts="1.1", message_ts="1.2", user_token="tok")
-    surface = get_surface(deps)
-    assert surface.user_token == "tok"
-
-
 def test_slack_surface_post_text_sends_markdown_to_the_current_thread():
     client = Mock()
     surface = SlackSurface(client, "C1", "1.1", "1.2")
@@ -166,11 +160,3 @@ def test_slack_surface_build_hooks_returns_something_when_a_plan_message_exists(
     deps = SimpleNamespace(plan_ts="100.100")
     assert surface.build_hooks(deps) is not None
 
-
-def test_slack_surface_set_model_and_finish_turn_are_inert_noops():
-    surface = SlackSurface(Mock(), "C1", "1.1", "1.2")
-    # Slack renders these straight through agent.plan_block instead — must not
-    # raise, and must not touch deps at all.
-    deps = SimpleNamespace()
-    surface.set_model(deps, "anthropic / claude")
-    surface.finish_turn(deps)

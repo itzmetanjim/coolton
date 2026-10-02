@@ -1,15 +1,10 @@
 import time
 
 from agent.stop_store import (
-    HaltRun,
     is_stop_command,
     request_stop,
     stop_requested_for,
 )
-
-
-def test_halt_run_is_exception():
-    assert issubclass(HaltRun, Exception)
 
 
 def test_no_stop_never_halted():

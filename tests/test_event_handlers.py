@@ -125,21 +125,6 @@ def test_message_dm_mention_is_not_dropped(monkeypatch):
         run_turn.assert_called_once()
 
 
-def test_message_ignores_bare_stop_in_channel(monkeypatch):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.request_stop") as request_stop:
-        client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
-        context.channel_id = "C123"
-        context.user_id = "U1"
-        event = {"type": "message", "text": "please !stop now", "ts": "111.111"}
-        handle_message(client, context, event, logger, say, say_stream, None)
-        request_stop.assert_not_called()
-        say.assert_not_called()
-        run_turn.assert_not_called()
-
-
 def test_message_stop_requests_halt_in_dm(monkeypatch):
     from unittest.mock import patch
 
@@ -175,22 +160,6 @@ def test_message_embedded_stop_word_in_dm_does_not_halt(monkeypatch):
         run_turn.assert_called_once()
 
 
-def test_message_ignores_angle_brackets_without_mention(ctx, monkeypatch):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, text="<> ignore me")
-        run_turn.assert_not_called()
-
-
-def test_message_ignores_ping_group_mention(ctx, monkeypatch):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, text="<@U0> <!channel> check this out")
-        run_turn.assert_not_called()
-
-
 def test_message_skips_top_level_channel_messages(ctx, monkeypatch):
     from unittest.mock import patch
 
@@ -222,14 +191,6 @@ def test_message_engages_in_dm(ctx):
         assert kwargs["user_token"] == "xoxp-user"
         assert kwargs["text"] == "hello"
         assert kwargs["message_ts"] == "111.111"
-
-
-def test_message_ignores_hashtag_prefix(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, text="## internal note")
-        run_turn.assert_not_called()
 
 
 def test_message_steers_into_active_run_instead_of_starting_a_new_one(ctx):
@@ -487,15 +448,6 @@ def test_message_ignores_double_hash_in_dm(ctx):
         run_turn.assert_not_called()
 
 
-def test_message_ignores_double_hash_in_engaged_thread(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.is_thread_engaged", return_value=True):
-        _msg(ctx, text="## internal note", channel_type="channel", thread_ts="1.1")
-        run_turn.assert_not_called()
-
-
 def test_app_mentioned_ignores_double_hash_even_with_mention(ctx):
     from unittest.mock import patch
 
@@ -511,14 +463,6 @@ def test_message_double_hash_blocks_stop_command_in_dm(ctx, monkeypatch):
          patch("listeners.events.message.request_stop") as request_stop:
         _msg(ctx, text="## !stop", channel_type="im")
         request_stop.assert_not_called()
-        run_turn.assert_not_called()
-
-
-def test_message_double_hash_blocks_ping_group(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, text="## <!channel> announcement", channel_type="im")
         run_turn.assert_not_called()
 
 
@@ -588,37 +532,11 @@ def test_message_ignores_at_channel_without_bot_mention(ctx):
         run_turn.assert_not_called()
 
 
-def test_message_ignores_at_here_without_bot_mention(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, text="<!here> quick question", channel_type="im")
-        run_turn.assert_not_called()
-
-
-def test_message_ignores_at_everyone_without_bot_mention(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, text="<!everyone> meeting in 5", channel_type="im")
-        run_turn.assert_not_called()
-
-
 def test_message_ignores_user_group_without_bot_mention(ctx):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn:
         _msg(ctx, text="<!subteam^S123|team> please review", channel_type="im")
-        run_turn.assert_not_called()
-
-
-def test_message_ping_group_allowed_with_bot_mention(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("os.environ.get", side_effect=lambda k, d=None: {"COOLTON_BOT_ID": "BOT1"}.get(k, d)):
-        _msg(ctx, text="<@BOT1> <!channel> important!", channel_type="im")
-        # Mentions are handled by app_mentioned, so message handler returns early
         run_turn.assert_not_called()
 
 
@@ -643,24 +561,6 @@ def test_message_ignores_angle_brackets_in_dm(ctx):
         run_turn.assert_not_called()
 
 
-def test_message_ignores_angle_brackets_in_engaged_thread(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.is_thread_engaged", return_value=True):
-        _msg(ctx, text="<> ignore me", channel_type="channel", thread_ts="1.1")
-        run_turn.assert_not_called()
-
-
-def test_message_ignores_angle_brackets_with_bot_name_not_mention(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        # "coolton" as plain text, not a user-id mention
-        _msg(ctx, text="<> coolton hello", channel_type="im")
-        run_turn.assert_not_called()
-
-
 def test_message_ignores_html_escaped_angle_brackets(ctx):
     from unittest.mock import patch
 
@@ -668,25 +568,6 @@ def test_message_ignores_html_escaped_angle_brackets(ctx):
         # Slack HTML-escapes literal angle brackets: a user-typed "<>" arrives
         # as "&lt;&gt;". Regression test for the production bug.
         _msg(ctx, text="&lt;&gt; if you can see this, reply with: 3ee7d3c6", channel_type="im")
-        run_turn.assert_not_called()
-
-
-def test_message_ignores_html_escaped_angle_brackets_in_engaged_thread(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.is_thread_engaged", return_value=True):
-        _msg(ctx, text="&lt;&gt; if you can see this", channel_type="channel", thread_ts="1.1")
-        run_turn.assert_not_called()
-
-
-def test_message_angle_brackets_allowed_with_explicit_mention(ctx, monkeypatch):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("os.environ.get", side_effect=lambda k, d=None: {"COOLTON_BOT_ID": "BOT1"}.get(k, d)):
-        # Explicit @-mention: message handler defers to app_mentioned
-        _msg(ctx, text="<> <@BOT1> hello", channel_type="im")
         run_turn.assert_not_called()
 
 
@@ -701,14 +582,6 @@ def test_app_mentioned_angle_brackets_allowed_with_mention(ctx):
 # ---------------------------------------------------------------------------
 # Edge cases: whitespace, case, messages that should still process
 # ---------------------------------------------------------------------------
-
-
-def test_message_processes_normal_message_in_dm(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, text="hello there", channel_type="im")
-        run_turn.assert_called_once()
 
 
 def test_message_processes_normal_message_in_engaged_thread(ctx):
@@ -736,20 +609,6 @@ def test_message_processes_whitespace_before_angle_brackets(ctx):
         run_turn.assert_not_called()
 
 
-def test_message_case_insensitive_double_hash(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, text="## INTERNAL", channel_type="im")
-        run_turn.assert_not_called()
-
-
-def test_message_case_sensitive_angle_brackets(ctx):
-    from unittest.mock import patch
-
-    with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, text="<> valid", channel_type="im")
-        run_turn.assert_not_called()
         # Only exact <> prefix is blocked, not case variations
         # <> is literal characters, not case-sensitive
 

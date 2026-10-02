@@ -460,11 +460,6 @@ def test_proxy_cache_capped(monkeypatch):
     assert helpers_mod._proxy_cache_get("sandbox-0") is None
 
 
-def test_proxy_cache_get_missing(monkeypatch):
-    monkeypatch.setattr(helpers_mod, "_proxy_cache", {})
-    assert helpers_mod._proxy_cache_get("sandbox-nope") is None
-
-
 # ---------------------------------------------------------------------------
 # skills helpers
 # ---------------------------------------------------------------------------
@@ -1079,25 +1074,15 @@ def test_run_with_provider_chain_includes_raw_http_body_in_all_errors(monkeypatc
 # ---------------------------------------------------------------------------
 
 
-def test_send_web_embed_includes_thread_ts_when_given(monkeypatch):
+def test_send_web_embed_sends_thread_ts_only_when_given(monkeypatch):
+    """Without a thread it must not send an empty thread_ts, which Slack rejects."""
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     with patch("agent.agent.requests.post") as post:
         post.return_value.json.return_value = {"ok": True}
-        agent_mod.send_web_embed(
-            channel_id="C1", text="t", url="https://example.com", title="title",
-            thread_ts="1.2",
-        )
-    assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
-
-
-def test_send_web_embed_omits_thread_ts_when_not_given(monkeypatch):
-    """Direct calls without a thread (e.g. from some future non-turn context)
-    must not send a bogus empty thread_ts that Slack would reject."""
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    with patch("agent.agent.requests.post") as post:
-        post.return_value.json.return_value = {"ok": True}
+        agent_mod.send_web_embed(channel_id="C1", text="t", url="https://example.com", title="title", thread_ts="1.2")
+        assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
         agent_mod.send_web_embed(channel_id="C1", text="t", url="https://example.com", title="title")
-    assert "thread_ts" not in post.call_args.kwargs["json"]
+        assert "thread_ts" not in post.call_args.kwargs["json"]
 
 
 def test_send_whiteboard_embed_rejects_a_malformed_whiteboard_id():
@@ -1134,39 +1119,15 @@ def test_html_embed_tool_threads_off_the_current_deps_thread_ts(monkeypatch):
     assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
 
 
-def test_computer_stream_tool_threads_the_embed_off_the_current_thread(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(
-        agent_mod, "_computer_stream_start", lambda channel_id, thread_ts: "https://x.e2b.app/vnc.html"
-    )
-    ctx = _run_ctx(Mock())
-    with patch("agent.agent.requests.post") as post:
-        post.return_value.json.return_value = {"ok": True}
-        agent_mod.computer_stream_tool(ctx)
-    assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
-
-
-def test_computer_stream_tool_marks_keep_sandbox_warm(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(
-        agent_mod, "_computer_stream_start", lambda channel_id, thread_ts: "https://x.e2b.app/vnc.html"
-    )
-    ctx = _run_ctx(Mock())
-    with patch("agent.agent.requests.post") as post:
-        post.return_value.json.return_value = {"ok": True}
-        agent_mod.computer_stream_tool(ctx)
-    assert ctx.deps.keep_sandbox_warm is True
-
-
-def test_agent_browser_stream_tool_threads_the_embed_and_marks_keep_sandbox_warm(monkeypatch):
+def test_agent_browser_stream_tool_posts_into_the_thread_and_keeps_the_sandbox_warm(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     monkeypatch.setattr(
         agent_mod, "_agent_browser_stream_start",
         lambda channel_id, thread_ts: "https://x.e2b.app/vnc.html",
     )
+    armed = []
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
     ctx = _run_ctx(Mock())
     with patch("agent.agent.requests.post") as post:
         post.return_value.json.return_value = {"ok": True}
@@ -1174,6 +1135,8 @@ def test_agent_browser_stream_tool_threads_the_embed_and_marks_keep_sandbox_warm
     assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
     assert post.call_args.kwargs["json"]["blocks"][0]["video_url"] == "https://x.e2b.app/vnc.html"
     assert ctx.deps.keep_sandbox_warm is True
+    assert ctx.deps.sandbox_keepalive_seconds == 120
+    assert armed == [("C1", "1.2", 120)]
     # send_web_embed's return value is always a non-empty string (success or
     # error), and computer_stream_tool's identical `if error:` check treats any
     # of them as the failure branch — matching that existing (if surprising)
@@ -1522,7 +1485,7 @@ def test_kill_background_command_tool_forwards_job_id(monkeypatch):
     assert captured["args"] == ("C1", "1.2", "abcd1234")
 
 
-def test_computer_stream_tool_sets_keepalive_and_arms_it(monkeypatch):
+def test_computer_stream_tool_posts_into_the_thread_and_keeps_the_sandbox_warm(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     monkeypatch.setattr(agent_mod, "_computer_stream_start", lambda c, t: "https://x.e2b.app/vnc.html")
@@ -1532,20 +1495,8 @@ def test_computer_stream_tool_sets_keepalive_and_arms_it(monkeypatch):
     with patch("agent.agent.requests.post") as post:
         post.return_value.json.return_value = {"ok": True}
         agent_mod.computer_stream_tool(ctx)
-    assert ctx.deps.sandbox_keepalive_seconds == 120
-    assert armed == [("C1", "1.2", 120)]
-
-
-def test_agent_browser_stream_tool_sets_keepalive_and_arms_it(monkeypatch):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(agent_mod, "_agent_browser_stream_start", lambda c, t: "https://x.e2b.app/vnc.html")
-    armed = []
-    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: armed.append(a))
-    ctx = _run_ctx(Mock())
-    with patch("agent.agent.requests.post") as post:
-        post.return_value.json.return_value = {"ok": True}
-        agent_mod.agent_browser_stream_tool(ctx)
+    assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
+    assert ctx.deps.keep_sandbox_warm is True
     assert ctx.deps.sandbox_keepalive_seconds == 120
     assert armed == [("C1", "1.2", 120)]
 

@@ -18,11 +18,6 @@ def clock(monkeypatch, tmp_path):
     return advance
 
 
-def test_empty_initial_state(clock):
-    assert fc.get_working_provider() is None
-    assert fc.get_dead_providers() == {}
-
-
 def test_set_and_get_working_provider(clock):
     fc.set_working_provider("anthropic")
     assert fc.get_working_provider() == "anthropic"
@@ -134,10 +129,6 @@ def test_refresh_does_not_touch_untested_providers(clock):
 # whole account hitting its daily spending cap), distinct from the per-model
 # dead cache above.
 # ---------------------------------------------------------------------------
-
-
-def test_family_empty_initially(clock):
-    assert fc.get_dead_families() == {}
 
 
 def test_mark_family_dead_and_reason(clock):

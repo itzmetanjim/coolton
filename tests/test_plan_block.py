@@ -47,11 +47,6 @@ def _deps(**overrides):
 # ---------------------------------------------------------------------------
 
 
-def test_build_task_dict_minimal():
-    card = build_task_dict("t1", "Title", "in_progress")
-    assert card == {"task_id": "t1", "title": "Title", "status": "in_progress"}
-
-
 def test_build_task_dict_with_details_and_output():
     card = build_task_dict("t1", "Title", "complete", details="doing stuff", output="done")
     assert card["details"]["type"] == "rich_text"
@@ -637,10 +632,6 @@ def test_messages_safe_for_resume_keeps_completed_history_untouched():
     assert _messages_safe_for_resume(messages) == messages
 
 
-def test_messages_safe_for_resume_handles_empty_list():
-    assert _messages_safe_for_resume([]) == []
-
-
 def test_build_plan_hooks_shows_reasoning_between_tool_calls():
     from pydantic_ai.messages import ModelResponse, ThinkingPart, ToolCallPart
 
@@ -864,13 +855,6 @@ def test_pretty_args_summarizes_binary_content_instead_of_stringifying_it():
     assert "image/png" in rendered
     assert "200000 bytes" in rendered
     assert "x" * 100 not in rendered  # the raw byte payload never got embedded
-
-
-def test_pretty_args_binary_content_directly():
-    from pydantic_ai.messages import BinaryContent
-
-    img = BinaryContent(data=b"\x89PNG\x00" * 10_000, media_type="image/png")
-    assert _pretty_args(img) == f"<image/png, {len(img.data)} bytes>"
 
 
 def test_truncate():

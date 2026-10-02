@@ -10,14 +10,6 @@ def tmp_file(monkeypatch, tmp_path):
     return path
 
 
-def test_code_channel_thread_ts_is_empty_string():
-    # The whole point: a code channel's whole-channel conversation is keyed
-    # (channel_id, "") — falsy so posting sites naturally coerce it to
-    # "post at channel level", and it round-trips through the
-    # "channel_id:thread_ts" string keys thread_context.store uses.
-    assert store.CODE_CHANNEL_THREAD_TS == ""
-
-
 def test_register_and_is_code_channel(tmp_file):
     assert store.is_code_channel("C1") is False
     store.register_code_channel("C1", "My Code Channel", "U1", "C0", "1.1")

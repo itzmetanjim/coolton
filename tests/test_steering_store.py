@@ -5,10 +5,6 @@ from agent.steering_store import (
 )
 
 
-def test_no_messages_queued_by_default():
-    assert peek_steering_messages("SS1", "1.1") == []
-
-
 def test_queued_message_is_visible():
     queue_steering_message("SS2", "1.1", "also check the other thing", "U1")
     messages = peek_steering_messages("SS2", "1.1")

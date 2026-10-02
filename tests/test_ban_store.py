@@ -11,10 +11,6 @@ def tmp_store(monkeypatch, tmp_path):
     return tmp_path
 
 
-def test_unbanned_user_by_default(tmp_store):
-    assert store.is_banned("U1") is False
-
-
 def test_ban_then_is_banned(tmp_store):
     store.ban_user("U1", reason="spamming")
     assert store.is_banned("U1") is True

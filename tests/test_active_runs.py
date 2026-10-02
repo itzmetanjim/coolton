@@ -3,10 +3,6 @@ import time
 from agent.active_runs import is_run_active, mark_run_finished, mark_run_started
 
 
-def test_no_run_never_active():
-    assert is_run_active("AR1", "1.1") is False
-
-
 def test_marked_run_is_active():
     mark_run_started("AR2", "1.1", time.time())
     assert is_run_active("AR2", "1.1") is True

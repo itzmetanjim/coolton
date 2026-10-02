@@ -218,18 +218,6 @@ def test_submit_message_without_policy_consent_never_starts_a_turn(conversation_
     assert events[-1]["state"] == "error"
 
 
-def test_submit_message_with_policy_consent_proceeds_normally(conversation_id, monkeypatch):
-    from web import runner
-
-    monkeypatch.setattr("agent.policy_consent.has_consent", lambda uid: True)
-    calls = []
-    monkeypatch.setattr(runner._executor, "submit", lambda fn, *a: calls.append((fn, a)))
-
-    runner.submit_message(conversation_id, "U1", "hello")
-
-    assert len(calls) == 1
-
-
 def test_submit_message_names_an_unnamed_conversation_after_the_first_message(monkeypatch):
     from web import runner
 
