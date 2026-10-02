@@ -1967,8 +1967,10 @@ def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manife
 def leave_thread_tool(ctx: RunContext[AgentDeps]) -> str:
     """Leave the current thread - ignore messages here until coolton is mentioned again.
 
-    Use this when the user asks you to stop responding in a thread. A mid-thread
-    mention still answers once but does not rejoin the thread.
+    Use this when someone asks you to stop responding in a thread, including a message
+    telling bots/AIs/agents in general to leave, or saying the thread is only for someone
+    else. Then call skip() with no reply. A mid-thread mention still answers once but
+    does not rejoin the thread.
     """
     return _surface(ctx.deps).set_engaged(False)
 
