@@ -195,7 +195,7 @@ account or OAuth needed on the user's end. See the `slack-bot-deploy` and `cf-wr
 | `agent/scheduler.py` | reminders + recurring cron scheduled tasks. |
 | `agent/token_rotation.py` | rotates Slack CLI (xoxe) tokens automatically. |
 | `agent/byok_store.py`, `agent/mcp_server_store.py` | encrypted per-user BYOK endpoints / custom MCP servers. |
-| `agent/history_compaction.py` | folds old thread history into a summary once it gets long. |
+| `agent/observational_memory.py` | turns a long thread's older messages into dated observations (observer + reflector). |
 | `agent/redact.py` | strips known secret values out of anything before it can leak. |
 | `agent/policy_consent.py` | first-use opt-in gate. |
 | `agent/tools/` | individual tool implementations (web search, vision, image gen, reminders, Slack info/search, AgentMail, computer_use, agent-browser stream, mermaid, data analysis, etc.). |

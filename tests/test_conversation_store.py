@@ -117,7 +117,7 @@ def test_response_messages_roundtrip(tmp_path):
 # ---------------------------------------------------------------------------
 # One broken conversation must not stay broken forever — a stored history
 # with an unpaired tool call/return gets rejected by every provider on every
-# future turn (see agent/history_compaction.py's split-boundary fix for how
+# future turn (see agent/observational_memory.py's split-boundary fix for how
 # this could happen), so get_history()/_load_from_disk() discard it and let
 # the thread start fresh instead of failing identically forever.
 # ---------------------------------------------------------------------------

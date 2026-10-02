@@ -2320,7 +2320,7 @@ def _run_chain_with_history(monkeypatch, window: int, history: list):
 
     monkeypatch.setattr(agent_mod, "_resolve_provider_order", lambda user_id, tag=None: [("p_0", {"model": "m", "context_window": window})])
     monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
-    monkeypatch.setattr("agent.history_compaction._summarize", lambda transcript, deps: "summary of earlier turns")
+    monkeypatch.setattr("agent.observational_memory._ask", lambda task, deps: "- 2026-10-02 10:00 observed earlier turns")
     seen = {}
 
     def run_sync(**kwargs):
@@ -2332,11 +2332,11 @@ def _run_chain_with_history(monkeypatch, window: int, history: list):
     return seen["history"], deps
 
 
-def test_chain_compacts_just_in_time_only_for_a_model_too_small_for_the_history(monkeypatch, clean_env):
+def test_chain_observes_just_in_time_only_for_a_model_too_small_for_the_history(monkeypatch, clean_env):
     from pydantic_ai.messages import ModelResponse, TextPart
 
-    from agent import history_compaction as hc
-    small_threshold, _ = hc._compaction_budget(65_536)
+    from agent import observational_memory as om
+    small_threshold, _ = om._budget(65_536)
     history = [ModelResponse(parts=[TextPart(content="x" * 4000)]) for _ in range(small_threshold // 1000 + 5)]
 
     sent, deps = _run_chain_with_history(monkeypatch, 1_050_000, history)
@@ -2344,8 +2344,8 @@ def test_chain_compacts_just_in_time_only_for_a_model_too_small_for_the_history(
     assert deps.model_context_window == 1_050_000
 
     sent, _ = _run_chain_with_history(monkeypatch, 65_536, history)
-    assert len(sent) < len(history)  # compacted before trying the 65K model
-    assert "summary of earlier turns" in str(sent[0])
+    assert len(sent) < len(history)  # observed before trying the 65K model
+    assert "observed earlier turns" in str(sent[0])
 
 
 def test_get_datetime_returns_the_current_utc_time(monkeypatch):

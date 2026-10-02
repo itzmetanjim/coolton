@@ -195,7 +195,8 @@ def test_preloading_into_an_existing_thread_keeps_its_history(monkeypatch):
     request, _, _ = _run_turn(monkeypatch, preloaded={"diagrams"}, history=history)
     roles = [m["role"] for m in request["messages"] if m["role"] != "system"]
     assert roles == ["user", "assistant", "user", "assistant", "tool"]
-    assert [m["content"] for m in request["messages"]].count("SYSTEM") == 1
+    # The stored "SYSTEM" prompt is replaced by the current one (agent.agent._with_system_prompt), once.
+    assert len([m for m in request["messages"] if m["role"] == "system" and m["content"].startswith("SYSTEM")]) == 1
 
 
 def test_tools_already_defined_in_the_thread_are_not_loaded_again():

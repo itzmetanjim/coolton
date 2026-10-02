@@ -84,7 +84,7 @@ def test_extract_tag_directive_only_first_live_directive_wins(isolated_config):
 
 
 def test_every_configured_model_declares_a_context_window():
-    """history_compaction.py sizes its compaction budget off the smallest
+    """observational_memory.py sizes its thresholds off the smallest
     reachable model's context_window — a model added without one silently
     falls back to a generic default instead of actually protecting that
     model's real limit. Scoped to chat models (see _is_chat_model) — an

@@ -296,15 +296,14 @@ def run_agent_turn(
             debug_timer.record("phase", "posting the reply", post_started, time.perf_counter())
         history_started = time.perf_counter()
 
-        # Store conversation history, compacting it first if the thread has run long
-        # enough that carrying the full raw history would waste context on every
-        # future turn (see agent/history_compaction.py).
+        # Store conversation history, turning older messages into observations first
+        # once the thread has run long (see agent/observational_memory.py).
         all_messages = result.all_messages()
         try:
-            from agent.history_compaction import maybe_compact_history
-            stored_messages = maybe_compact_history(all_messages, deps)
+            from agent.observational_memory import maybe_observe
+            stored_messages = maybe_observe(all_messages, deps)
         except Exception:
-            logger.exception("History compaction failed; storing full history")
+            logger.exception("Observational memory failed; storing full history")
             stored_messages = all_messages
         conversation_store.set_history(channel_id, thread_ts, stored_messages, last_seen_ts=message_ts)
         try:

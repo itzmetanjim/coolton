@@ -2913,6 +2913,12 @@ def run_agent(text, deps, message_history=None, images=None):
     # instructions, message_ts, the current model) goes at the end instead: in
     # the user prompt, via `dynamic_context` below.
     full_prompt = platform.system_prompt + _current_year_note()
+    # pydantic-ai only adds the system prompt to an EMPTY history, so a stored thread
+    # would otherwise keep the prompt from its first turn forever, and a thread whose
+    # history starts with its observation log (agent.observational_memory) would have none.
+    gap_note = _resumed_after_note(message_history)
+    stored_history = message_history
+    message_history = _with_system_prompt(message_history, full_prompt)
     dynamic_context = platform.build_context_prompt(deps).strip() + "\n\n"
     if custom_instructions:
         dynamic_context += f"## USER'S CUSTOM INSTRUCTIONS\n{custom_instructions}\n\n"
@@ -2958,7 +2964,7 @@ def run_agent(text, deps, message_history=None, images=None):
         from agent.debug_timing import build_timing_hooks
         capabilities.append(build_timing_hooks(deps.debug_timer))
 
-    turn_context = dynamic_context + platform.build_turn_context(deps, first_model, is_vision)
+    turn_context = dynamic_context + gap_note + platform.build_turn_context(deps, first_model, is_vision)
     text_with_turn_context = turn_context + text
 
     user_prompt: str | list = text_with_turn_context
@@ -3042,7 +3048,7 @@ def run_agent(text, deps, message_history=None, images=None):
             # the default) leaves it unset, so that path still reverts to the
             # pre-turn history — correct there, since it means the turn truly
             # never happened.
-            history = deps.halted_messages if deps.halted_messages is not None else message_history
+            history = deps.halted_messages if deps.halted_messages is not None else stored_history
             return _SkipResult(history)
     finally:
         # computer_use / agent_browser_stream_tool don't pause the sandbox after every
@@ -3108,6 +3114,59 @@ def _preload_search_call(groups: set[str], history=None) -> list | None:
     return [ModelResponse(parts=[call])]
 
 
+def _with_system_prompt(history, system_prompt: str):
+    """`history` with its system prompt replaced by the current one: any stored
+    SystemPromptPart is dropped and `system_prompt` leads the first request. An empty
+    history is left to pydantic-ai, which adds the system prompt itself."""
+    if not history:
+        return history
+    stripped = []
+    for message in history:
+        if isinstance(message, ModelRequest):
+            parts = [p for p in message.parts if not isinstance(p, SystemPromptPart)]
+            if len(parts) != len(message.parts):
+                message = replace(message, parts=parts)
+            if not message.parts:
+                continue
+        stripped.append(message)
+    first = stripped[0] if stripped else None
+    if isinstance(first, ModelRequest):
+        return [replace(first, parts=[SystemPromptPart(system_prompt), *first.parts]), *stripped[1:]]
+    return [ModelRequest(parts=[SystemPromptPart(system_prompt)]), *stripped]
+
+
+_RESUMED_AFTER_SECONDS = 10 * 60
+
+
+def _resumed_after_note(history) -> str:
+    """A turn-context line saying the conversation resumed after a pause of 10+ minutes
+    (a temporal gap marker, as in Mastra's observational memory), so coolton doesn't
+    treat a message from days later as part of the same moment."""
+    import datetime
+
+    latest = None
+    for message in history or []:
+        for obj in (message, *getattr(message, "parts", [])):
+            ts = getattr(obj, "timestamp", None)
+            if ts and (latest is None or ts > latest):
+                latest = ts
+    if latest is None:
+        return ""
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=datetime.timezone.utc)
+    gap = (datetime.datetime.now(datetime.timezone.utc) - latest).total_seconds()
+    if gap < _RESUMED_AFTER_SECONDS:
+        return ""
+    minutes = int(gap // 60)
+    if minutes < 120:
+        ago = f"{minutes} minutes"
+    elif minutes < 48 * 60:
+        ago = f"{minutes // 60} hours"
+    else:
+        ago = f"{minutes // (24 * 60)} days"
+    return f"[This conversation resumed after a {ago} pause; the last message before this one was at {latest:%Y-%m-%d %H:%M} UTC.]\n\n"
+
+
 def _current_year_note() -> str:
     """The current year, at the very end of the system prompt. Models trained
     before it otherwise assume their training year and treat real search
@@ -3129,17 +3188,17 @@ def _fit_history_to_model(run_kwargs: dict, deps, prov_config: dict) -> None:
     history first if it doesn't fit that model's budget — so compaction only
     happens when a turn actually lands on a model too small for the thread,
     not pre-emptively for the smallest model anywhere in the chain (see
-    agent.history_compaction)."""
+    agent.observational_memory)."""
     window = prov_config.get("context_window") or 0
     deps.model_context_window = window
     history = run_kwargs.get("message_history")
     if not window or not history:
         return
-    from agent.history_compaction import maybe_compact_history
+    from agent.observational_memory import maybe_observe
 
-    compacted = maybe_compact_history(history, deps, context_window=window)
+    compacted = maybe_observe(history, deps, context_window=window)
     if compacted is not history:
-        logger.info(f"Compacted history to fit {prov_config.get('model')} ({window:,}-token window) before trying it")
+        logger.info(f"Observed history to fit {prov_config.get('model')} ({window:,}-token window) before trying it")
         run_kwargs["message_history"] = compacted
 
 
