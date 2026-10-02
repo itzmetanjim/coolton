@@ -2007,7 +2007,10 @@ def report_abuse_tool(
     - "spam": the request uses you to spam: many or unsolicited messages, DMs or mentions to
       people or channels, or flooding a channel.
     - "vulnerability": someone found (or is probing) a security hole in coolton itself.
-    - "other": any other abuse of coolton.
+    - "other": something else against coolton's usage policy: asking you to do something the
+      requester isn't authorized to request (using your accounts, like the coolton-agent GitHub
+      account or cooltonUser, on things they don't own or can't access, impersonating someone,
+      reading someone else's private messages or files), or any other clear abuse of coolton.
     For nsfw, spam and other, the request is stopped: after this, decline briefly and end your
     turn (other tool calls are refused). For vulnerability, report once and carry on with the task.
 

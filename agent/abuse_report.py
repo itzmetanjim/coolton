@@ -21,7 +21,7 @@ CATEGORIES = {
     "nsfw": "NSFW or NSFW-adjacent content",
     "spam": "using coolton to spam people or channels",
     "vulnerability": "a security vulnerability in coolton",
-    "other": "other abuse of coolton",
+    "other": "something else against coolton's usage policy",
 }
 # Reporting one of these stops the request; a vulnerability report doesn't.
 STOPS_THE_REQUEST = {"nsfw", "spam", "other"}

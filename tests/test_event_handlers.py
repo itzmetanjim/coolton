@@ -71,11 +71,12 @@ def _mention(ctx, **event):
     )
 
 
-def test_message_skips_bot_messages(ctx, monkeypatch):
+@pytest.mark.parametrize("sender", [{"bot_id": "B123"}, {"app_id": "A123"}])  # a bot, or an app's user token
+def test_message_skips_bot_and_app_messages(ctx, sender):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn:
-        _msg(ctx, bot_id="B123")
+        _msg(ctx, channel_type="im", **sender)  # a DM, which would otherwise always get a turn
         run_turn.assert_not_called()
 
 
@@ -349,11 +350,12 @@ def test_app_mentioned_uses_existing_history(ctx):
         assert run_turn.call_args.kwargs["history"] == ["old-history"]
 
 
-def test_app_mentioned_skips_bot_mentions(ctx):
+@pytest.mark.parametrize("sender", [{"bot_id": "B123"}, {"app_id": "A123"}])
+def test_app_mentioned_skips_bot_and_app_mentions(ctx, sender):
     from unittest.mock import patch
 
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
-        _mention(ctx, bot_id="B123")
+        _mention(ctx, **sender)
     run_turn.assert_not_called()
     ctx.say.assert_not_called()
 

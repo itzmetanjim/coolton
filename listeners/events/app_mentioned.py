@@ -34,8 +34,9 @@ def handle_app_mentioned(
         if channel_id == "C06QV2T1P4G":
             return
 
-        # Never reply to bot messages, not even @mentions from other bots.
-        if event.get("bot_id"):
+        # Never reply to bot messages, not even @mentions from other bots, nor to messages an
+        # app posted with a user token (an app_id but no bot_id).
+        if event.get("bot_id") or event.get("app_id"):
             return
 
         # Banned users get nothing at all — not even !stop or a steering

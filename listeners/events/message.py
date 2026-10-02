@@ -41,10 +41,11 @@ def handle_message(
 ):
     """Handle messages sent to the agent via DM or in threads the bot is part of."""
 
-    # Skip message subtypes (edits, deletes, etc.) and bot messages.
+    # Skip message subtypes (edits, deletes, etc.), bot messages, and messages an app posted
+    # with a user token (those carry an app_id but no bot_id; cooltonUser's own posts too).
     if event.get("subtype"):
         return
-    if event.get("bot_id"):
+    if event.get("bot_id") or event.get("app_id"):
         return
 
     # Hardcoded: never respond in this channel, no matter what. The agent
