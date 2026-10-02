@@ -23,6 +23,7 @@ Importable:
 """
 
 import base64
+import gzip
 import hashlib
 import hmac
 import json
@@ -442,6 +443,23 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(req.content)
         self.close_connection = True
 
+    def _read_body(self) -> bytes | None:
+        """The request body, whether sent with Content-Length or chunked (git sends a
+        large push chunked)."""
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            chunks = []
+            while True:
+                size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                if size == 0:
+                    while self.rfile.readline() not in (b"\r\n", b"\n", b""):
+                        pass  # trailers
+                    break
+                chunks.append(self.rfile.read(size))
+                self.rfile.readline()  # the CRLF after each chunk
+            return b"".join(chunks) or None
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        return self.rfile.read(length) if length else None
+
     def _forward(self):
         tok = _extract_token(self.headers)
         if tok is None:
@@ -483,12 +501,25 @@ class _Handler(BaseHTTPRequestHandler):
             self._deny(502)
             return
 
-        body = None
-        if self.command in ("POST", "PUT", "PATCH"):
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            body = self.rfile.read(length) if length else None
+        body = self._read_body() if self.command in ("POST", "PUT", "PATCH") else None
 
-        forbidden = _forbidden_reason(self.command, upstream, body)
+        # git gzips larger requests (Content-Encoding: gzip). Check the decoded body, so a
+        # gzipped forbidden call can't slip past _forbidden_reason, and forward the
+        # original bytes with their encoding. Any other encoding can't be checked: refuse it.
+        encoding = (self.headers.get("Content-Encoding") or "").strip().lower()
+        inspected = body
+        if body and encoding in ("gzip", "x-gzip"):
+            try:
+                inspected = gzip.decompress(body)
+            except (OSError, EOFError):
+                self._deny(400)
+                return
+        elif body and encoding not in ("", "identity"):
+            logger.warning("deny: unsupported request Content-Encoding %r", encoding)
+            self._deny(415)
+            return
+
+        forbidden = _forbidden_reason(self.command, upstream, inspected)
         if forbidden:
             logger.warning("deny: %s %s (%s)", self.command, upstream, forbidden)
             payload = json.dumps({"message": f"Blocked by coolton's GitHub proxy: {forbidden} is not allowed from the sandbox."}).encode()
@@ -509,6 +540,10 @@ class _Handler(BaseHTTPRequestHandler):
             fwd["Authorization"] = _real_auth(upstream)
         if "Content-Type" in self.headers:
             fwd["Content-Type"] = self.headers["Content-Type"]
+        if body and encoding:
+            fwd["Content-Encoding"] = self.headers["Content-Encoding"]
+        if "Git-Protocol" in self.headers:  # git's protocol v2 handshake
+            fwd["Git-Protocol"] = self.headers["Git-Protocol"]
 
         try:
             req = requests.request(

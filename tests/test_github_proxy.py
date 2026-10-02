@@ -393,3 +393,77 @@ def test_forward_never_contacts_an_ambiguous_host(monkeypatch):
         gp.allowlist.remove("sandbox-token")
     assert denied == [502]
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# request bodies: gzip (git's larger requests) and chunked (large pushes)
+# ---------------------------------------------------------------------------
+
+
+def _send(monkeypatch, path, headers, raw_body):
+    """Push one POST through _forward; returns (what reached GitHub or None, response code)."""
+    import io
+    from unittest.mock import MagicMock
+
+    captured = {}
+
+    class _FakeResp:
+        status_code = 200
+        headers = {}
+
+        def iter_content(self, n):
+            return iter([b""])
+
+        def close(self):
+            pass
+
+    def fake_request(method, url, data=None, headers=None, **kwargs):
+        captured.update(url=url, data=data, headers=headers)
+        return _FakeResp()
+
+    monkeypatch.setattr(gp.requests, "request", fake_request)
+    gp.allowlist.add("sandbox-tok")
+    handler = gp._Handler.__new__(gp._Handler)
+    handler.command = "POST"
+    handler.path = path
+    handler.headers = {"Authorization": "Bearer sandbox-tok", "Host": HOST, **headers}
+    handler.rfile = io.BytesIO(raw_body)
+    handler.wfile = io.BytesIO()
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.connection = MagicMock()
+    handler._forward()
+    return (captured or None), handler.send_response.call_args.args[0]
+
+
+def test_a_gzipped_git_request_reaches_github_with_its_encoding(monkeypatch):
+    """git gzips its larger fetch negotiation; dropping Content-Encoding made GitHub
+    answer 400 ("RPC failed; HTTP 400") for any clone with enough unknown local history."""
+    import gzip
+
+    body = gzip.compress(b"0032want 645855beed708ce5b3312c2e99593c32d52b1ad6\n" * 50)
+    sent, _ = _send(monkeypatch, "/o/r/git-upload-pack", {
+        "Content-Encoding": "gzip", "Content-Length": str(len(body)), "Git-Protocol": "version=2",
+        "Content-Type": "application/x-git-upload-pack-request"}, body)
+
+    assert sent["url"] == "https://github.com/o/r/git-upload-pack" and sent["data"] == body
+    assert sent["headers"]["Content-Encoding"] == "gzip" and sent["headers"]["Git-Protocol"] == "version=2"
+
+
+def test_gzip_cant_hide_a_forbidden_call_and_other_encodings_are_refused(monkeypatch):
+    import gzip
+    import json as _json
+
+    mutation = gzip.compress(_json.dumps({"query": "mutation { deleteRepository(input: {}) { clientMutationId } }"}).encode())
+    sent, code = _send(monkeypatch, "/api/graphql", {"Content-Encoding": "gzip", "Content-Length": str(len(mutation))}, mutation)
+    assert sent is None and code == 403
+
+    sent, code = _send(monkeypatch, "/api/graphql", {"Content-Encoding": "br", "Content-Length": "4"}, b"abcd")
+    assert sent is None and code == 415
+
+
+def test_a_chunked_request_body_is_read_in_full(monkeypatch):
+    raw = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+    sent, _ = _send(monkeypatch, "/o/r/git-receive-pack", {"Transfer-Encoding": "chunked"}, raw)
+    assert sent["data"] == b"hello world"
