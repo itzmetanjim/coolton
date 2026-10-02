@@ -31,6 +31,8 @@ class AgentDeps:
     custom_instructions: str = ""
     plan_ts: str | None = None
     plan_tasks: dict = field(default_factory=dict)
+    # Earlier plan messages of this turn, full and frozen (agent.plan_block._roll_over_if_full).
+    plan_earlier_ts: list = field(default_factory=list)
     should_skip: bool = False
     halt_reason: str = ""
     model_used: str = ""

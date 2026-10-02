@@ -167,9 +167,45 @@ def _retrying(call, where: str, attempts: int = 3) -> None:
         _log_slack_error(where, last_exc)
 
 
+# Slack's plan block takes at most 50 tasks; past this many, continue in a new plan message
+# (leaving room for the few tasks finalize_plan_message/set_plan_error add at the end).
+PLAN_TASK_LIMIT = 45
+
+
+def _roll_over_if_full(deps) -> None:
+    """Freeze the finished tasks in the current plan message and continue the rest in a
+    new one below it, once the plan passes PLAN_TASK_LIMIT. Unfinished tasks move along,
+    so their completion still finds them in deps.plan_tasks."""
+    if len(deps.plan_tasks) <= PLAN_TASK_LIMIT:
+        return
+    finished = {k: t for k, t in deps.plan_tasks.items() if t.get("status") in ("complete", "error")}
+    if not finished:
+        return
+    carried = {k: t for k, t in deps.plan_tasks.items() if k not in finished}
+    try:
+        deps.client.chat_update(
+            channel=deps.channel_id, ts=deps.plan_ts,
+            blocks=build_plan_blocks("Continued below", list(finished.values())), text="Continued below",
+        )
+        resp = deps.client.chat_postMessage(
+            channel=deps.channel_id, thread_ts=deps.thread_ts or None,
+            blocks=build_plan_blocks("Thinking...", list(carried.values()) or [
+                {"task_id": _DEFAULT_THINKING_ID, "title": "Thinking", "status": "in_progress"}]),
+            text="Thinking...",
+        )
+    except Exception as e:
+        _log_slack_error("Failed to continue the plan in a new message", e)
+        return
+    if resp.get("ts"):
+        deps.plan_earlier_ts.append(deps.plan_ts)
+        deps.plan_ts = resp["ts"]
+        deps.plan_tasks = carried
+
+
 def update_plan_message(deps) -> None:
     if not deps.plan_ts:
         return
+    _roll_over_if_full(deps)
     # The initial "Thinking" placeholder must never coexist with real progress — once
     # anything else has been added (a reasoning step, a tool call, the model task),
     # something has clearly already superseded it, even on a code path that forgot to
@@ -311,10 +347,12 @@ def delete_plan_message(deps) -> None:
     """
     if not deps.plan_ts:
         return
-    _retrying(
-        lambda: deps.client.chat_delete(channel=deps.channel_id, ts=deps.plan_ts),
-        "Failed to delete plan message",
-    )
+    for ts in [*getattr(deps, "plan_earlier_ts", []), deps.plan_ts]:
+        _retrying(
+            lambda ts=ts: deps.client.chat_delete(channel=deps.channel_id, ts=ts),
+            "Failed to delete plan message",
+        )
+    deps.plan_earlier_ts = []
     deps.plan_ts = None
 
 

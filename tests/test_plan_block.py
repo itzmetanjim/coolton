@@ -34,6 +34,7 @@ def _deps(**overrides):
         "thread_ts": "1.1",
         "plan_ts": None,
         "plan_tasks": {},
+        "plan_earlier_ts": [],
         "model_used": "",
         "run_started_at": 0.0,
     }
@@ -889,3 +890,25 @@ def test_combined_io():
     text = combined["elements"][0]["elements"][0]["text"]
     assert "$ ls -la" in text
     assert "3 files" in text
+
+
+def test_a_plan_past_slacks_task_limit_continues_in_a_new_message():
+    """Slack's plan block takes at most 50 tasks."""
+    from agent.plan_block import PLAN_TASK_LIMIT, delete_plan_message, update_plan_message
+
+    deps = _deps(plan_ts="100.1")
+    deps.client.chat_postMessage.return_value = {"ts": "200.2"}
+    for i in range(PLAN_TASK_LIMIT):
+        deps.plan_tasks[f"t{i}"] = {"task_id": f"t{i}", "title": f"step {i}", "status": "complete"}
+    deps.plan_tasks["running"] = {"task_id": "running", "title": "long tool", "status": "in_progress"}
+
+    update_plan_message(deps)
+
+    frozen = deps.client.chat_update.call_args_list[0].kwargs
+    assert frozen["ts"] == "100.1" and len(frozen["blocks"][0]["tasks"]) == PLAN_TASK_LIMIT
+    assert [t["task_id"] for t in deps.client.chat_postMessage.call_args.kwargs["blocks"][0]["tasks"]] == ["running"]
+    assert deps.plan_ts == "200.2" and deps.plan_earlier_ts == ["100.1"]
+    assert list(deps.plan_tasks) == ["running"]  # its completion can still find it
+
+    delete_plan_message(deps)  # a skipped turn removes every plan message it posted
+    assert [c.kwargs["ts"] for c in deps.client.chat_delete.call_args_list] == ["100.1", "200.2"]
