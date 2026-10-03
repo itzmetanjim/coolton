@@ -41,42 +41,43 @@ _STATE_CHARS = 4000
 
 # Group -> (the yes/no question Jev answers, the deferred function tools it loads).
 # The Slack MCP and library-docs groups load MCP tools instead (MCP_GROUP_TOOLS).
+# Questions are deliberately broad (a missed preload costs a model round trip, an
+# extra one only some prompt tokens), and _question adds the group's tool names.
 TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
-    "email": ("Does this involve email: reading, checking or sending emails, or an email inbox?", frozenset({
+    "email": ("Could this involve email in any way: reading, checking, searching, sending or replying to emails, an email address or inbox, or coolton's own inbox?", frozenset({
         "agentmail_create_inbox", "agentmail_list_inboxes", "agentmail_list_messages",
         "agentmail_read_message", "agentmail_send_email"})),
-    "huddlefm": ("Is this about HuddleFM, or playing, queueing or DJing music in a Slack huddle?", frozenset({
+    "huddlefm": ("Is this about HuddleFM, music or a Slack huddle in any way: playing, queueing, skipping or DJing songs, the volume, or what's playing?", frozenset({
         "huddlefm_request_control_tool", "huddlefm_command_tool"})),
-    "slack_bot_building": ("Does this ask to create, configure, install or deploy a Slack bot or Slack app?", frozenset({
+    "slack_bot_building": ("Does this involve making or changing a Slack bot or Slack app: creating, configuring, installing or deploying one, or its manifest, tokens or scopes?", frozenset({
         "create_slack_bot_tool", "check_bot_install_status_tool", "register_bot_tokens_tool",
         "update_slack_bot_manifest_tool", "wrangler_bot_deploy_tool"})),
-    "scheduled_tasks": ("Does this ask for something recurring (every day, every week, a cron job), or to list, pause, resume or delete scheduled tasks?", frozenset({
+    "scheduled_tasks": ("Does this involve doing something on a schedule: a recurring task (every day, every week, every hour, a cron job), or listing, changing, pausing, resuming or deleting scheduled tasks?", frozenset({
         "create_scheduled_task_tool", "list_scheduled_tasks_tool", "pause_scheduled_task_tool",
         "resume_scheduled_task_tool", "delete_scheduled_task_tool"})),
-    "code_channels": ("Does this ask to create a code channel?", frozenset({"create_code_channel_tool"})),
-    "data_analysis": ("Does this involve analyzing data: a CSV or spreadsheet file, a SQL query, statistics or charts?", frozenset({
+    "code_channels": ("Does this involve a code channel, such as asking coolton to create one?", frozenset({"create_code_channel_tool"})),
+    "data_analysis": ("Does this involve analyzing data: a CSV, Excel or spreadsheet file, a SQL query, statistics, or charts and graphs of numbers?", frozenset({
         "analyze_csv_tool", "run_sql_on_csv_tool", "run_python_data_analysis_tool"})),
-    "archives": ("Does this involve extracting a .tar.gz archive?", frozenset({"extract_tar_gz_tool"})),
-    "opencode": ("Does this ask to use opencode, the coding agent CLI?", frozenset({"install_opencode_tool", "run_opencode_tool"})),
-    "embeds": ("Does this ask for an interactive HTML page, web embed or whiteboard?", frozenset({
+    "archives": ("Does this involve an archive file to extract or unpack, like a .tar.gz, .tgz or .tar?", frozenset({"extract_tar_gz_tool"})),
+    "opencode": ("Does this mention opencode, or ask coolton to hand coding work to another coding agent?", frozenset({"install_opencode_tool", "run_opencode_tool"})),
+    "embeds": ("Does this ask coolton to build an interactive HTML page: a web embed, a mini app or game, a calculator or form, or a whiteboard to draw on?", frozenset({
         "send_html_embed_tool", "send_whiteboard_embed_tool"})),
-    "diagrams": ("Does this ask for a diagram or flowchart (e.g. Mermaid)?", frozenset({"render_mermaid_tool"})),
-    "custom_emoji": ("Does this ask to add or upload a custom Slack emoji?", frozenset({"upload_emoji_tool"})),
-    "coolton_feedback": ("Is the user reporting a bug in coolton itself, or giving feedback or a suggestion about coolton?", frozenset({"submit_feedback_tool"})),
-    "skills": ("Does this ask to create, install, rename, delete or otherwise manage coolton's skills?", frozenset({
+    "diagrams": ("Does this ask for a diagram of any kind: a flowchart, sequence diagram, mind map, architecture or relationship diagram, or Mermaid?", frozenset({"render_mermaid_tool"})),
+    "custom_emoji": ("Does this involve custom Slack emoji: adding, uploading or making a new one?", frozenset({"upload_emoji_tool"})),
+    "coolton_feedback": ("Is the user reporting a bug or problem with coolton itself, complaining about it, or giving feedback, ideas or suggestions about coolton?", frozenset({"submit_feedback_tool"})),
+    "skills": ("Does this involve changing coolton's skills (its reusable playbooks): creating, installing, renaming, editing or deleting one?", frozenset({
         "create_skill", "rename_skill", "delete_skill", "install_skill"})),
-    "live_view": ("Does the user want to watch a browser or desktop live, through a live stream or view link?", frozenset({
+    "live_view": ("Does the user want to watch what coolton is doing live: a live stream or view link of its browser or desktop, or keeping its sandbox running?", frozenset({
         "set_sandbox_keepalive_tool", "computer_stream_tool", "agent_browser_stream_tool"})),
-    "slack_admin": ("Does this ask to invite coolton's helper account to a channel, remove a reaction, leave a channel, or call the Slack API as the bot?", frozenset({
+    "slack_admin": ("Does this involve managing Slack channels or acting as coolton's bot: inviting coolton's helper account to a channel, removing a reaction, leaving a channel, or calling the Slack API as the bot (posting as the bot, topics, bookmarks, invites, creating channels)?", frozenset({
         "invite_coolton_user_to_channel", "remove_reaction_tool", "leave_channel_tool", "slack_api_call_as_bot_tool"})),
     # The Slack MCP tools are split small: their definitions are large (~11k tokens for all
-    # twelve, ~5.6k for the canvas ones alone), and the questions ask for a request, not a
-    # mention, so chatter about canvases doesn't load anything.
-    "slack_canvases": ("Does the user ask coolton to create, read or edit a Slack canvas (not just mention canvases)?", frozenset()),
-    "slack_lists": ("Does the user ask coolton to create, read or edit a Slack list (Slack's spreadsheet-like lists, not a bullet list)?", frozenset()),
-    "slack_drafts_scheduling": ("Does the user ask coolton to draft a Slack message for them, or schedule one to be sent later?", frozenset()),
-    "slack_people": ("Does the user ask coolton to look up someone's Slack profile (title, timezone, pronouns) or who is in a channel?", frozenset()),
-    "library_docs": ("Is this a question about how to use a programming library, framework, SDK or API?", frozenset()),
+    # twelve, ~5.6k for the canvas ones alone).
+    "slack_canvases": ("Does this involve a Slack canvas in any way: creating, opening, reading, viewing, summarizing, editing or updating one, or a link to one (slack.com/docs/...)?", frozenset()),
+    "slack_lists": ("Does this involve a Slack list (Slack's spreadsheet-like lists with items and columns, not a bullet list) in any way: creating, reading, viewing, editing, or adding or changing its items, or a link to one?", frozenset()),
+    "slack_drafts_scheduling": ("Does this ask coolton to draft a Slack message for the user, or to send a message later at a set time?", frozenset()),
+    "slack_people": ("Does this involve looking up Slack people: someone's profile, title, timezone, pronouns or status, or who is in a channel?", frozenset()),
+    "library_docs": ("Is this about using a programming library, framework, SDK, CLI or API: how to call it, its docs or versions, or code that uses it?", frozenset()),
 }
 LIBRARY_DOCS_GROUP = "library_docs"
 
@@ -149,9 +150,15 @@ def ask_jev(entry: dict, state, questions: dict, timeout: float = JEV_TIMEOUT_SE
     return answers
 
 
+def _question(group: str) -> str:
+    """A TOOL_GROUPS question, followed by the names of the tools it loads."""
+    names = sorted(TOOL_GROUPS[group][1] | MCP_GROUP_TOOLS.get(group, frozenset()))
+    return f"{TOOL_GROUPS[group][0]} (Tools: {', '.join(names)}.)"
+
+
 def _decide(entry: dict, state: dict) -> set[str]:
     """The tool groups to load and the ABUSE_CHECKS keys flagged, from one Jev call."""
-    questions = {group: {"type": "noul", "instructions": spec[0]} for group, spec in TOOL_GROUPS.items()}
+    questions = {group: {"type": "noul", "instructions": _question(group)} for group in TOOL_GROUPS}
     questions.update({key: {"type": "noul", "instructions": q} for key, q in ABUSE_CHECKS.items()})
     answers = ask_jev(entry, state, questions)
     picked = set()
