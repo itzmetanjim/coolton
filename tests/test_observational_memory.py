@@ -12,7 +12,7 @@ from agent import observational_memory as om
 
 agent_mod = importlib.import_module("agent.agent")
 T0 = datetime.datetime(2026, 10, 2, 14, 0, tzinfo=datetime.timezone.utc)
-DEPS = SimpleNamespace(model_context_window=1_000_000, provider_tag_filter=None)
+DEPS = SimpleNamespace(model_context_window=100_000, provider_tag_filter=None)  # observes past 20k tokens
 
 
 def _turn(i: int, size: int = 4_000) -> list:
@@ -57,7 +57,7 @@ def test_a_long_thread_becomes_an_observation_log_plus_recent_raw_messages(monke
     log, tail = result[0], result[1:]
     assert isinstance(log.parts[0], SystemPromptPart) and log.parts[0].content == "SYSTEM"
     assert log.parts[1].content == f"{om.LOG_HEADER}\n- 2026-10-02 14:00 Lily asked coolton about X"
-    assert tail == history[-len(tail):] and om._estimate_tokens(tail) <= om.KEEP_RAW_TOKENS
+    assert tail == history[-len(tail):] and om._estimate_tokens(tail) <= om._budget(DEPS.model_context_window)[1]
     # The Observer sees dated, attributed lines.
     assert "[2026-10-02 14:00] message: U1 (Lily): message 0" in tasks[0]
     assert "[2026-10-02 14:00] coolton: reply 0" in tasks[0]

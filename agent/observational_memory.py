@@ -1,9 +1,10 @@
 """Observational memory: long threads keep notes instead of their raw history.
 
 thread_context/store.py persists every message a thread has produced. Once the
-raw messages since the last observation pass OBSERVE_AFTER_TOKENS, an Observer
-model turns the older ones into short, dated, attributed notes ("observations")
-and they're dropped; the most recent KEEP_RAW_TOKENS stay verbatim. Observations
+raw messages since the last observation pass OBSERVE_AT_FRACTION of the model's
+context window, an Observer model turns the older ones into short, dated,
+attributed notes ("observations") and they're dropped; the most recent
+KEEP_RAW_FRACTION of the window stays verbatim. Observations
 are appended to one log message at the start of the history, so the log only
 grows at its end (earlier notes never get rewritten, which keeps the prompt prefix
 stable for caching) until it passes REFLECT_AFTER_TOKENS. Then a Reflector
@@ -17,7 +18,7 @@ providers mid-thread.
 
 maybe_observe() runs after each turn (listeners.events.turn) and before each
 provider attempt (agent.agent._fit_history_to_model), where the thresholds
-shrink for a small-window fallback model. It never raises: on any failure the
+follow the window of the model about to be tried. It never raises: on any failure the
 history is returned untouched and the next turn tries again.
 """
 
@@ -30,12 +31,13 @@ from pydantic_ai.messages import (
 
 logger = logging.getLogger(__name__)
 
-OBSERVE_AFTER_TOKENS = 30_000
-KEEP_RAW_TOKENS = 8_000
+# Shares of the model's context window: observe once the raw history passes
+# OBSERVE_AT_FRACTION of it, keeping the most recent KEEP_RAW_FRACTION raw. Cached
+# history is cheap to resend, and every observation rewrites the prompt (a cache
+# miss), so the raw history is allowed to grow large before it's turned into notes.
+OBSERVE_AT_FRACTION = 0.20
+KEEP_RAW_FRACTION = 0.05
 REFLECT_AFTER_TOKENS = 12_000
-# For a model with a small context window, observe sooner: at this share of it.
-_SMALL_WINDOW_OBSERVE_FRACTION = 0.35
-_SMALL_WINDOW_KEEP_FRACTION = 0.10
 
 LOG_HEADER = (
     "[Observations: coolton's notes on earlier parts of this thread, oldest first. The raw "
@@ -118,8 +120,8 @@ def _safe_split_index(messages: list[ModelMessage], keep_tokens: int) -> int:
 
 def _budget(context_window: int) -> tuple[int, int]:
     """(observe once raw history passes this, keep this much raw) for a model's window."""
-    observe_at = min(OBSERVE_AFTER_TOKENS, int(context_window * _SMALL_WINDOW_OBSERVE_FRACTION))
-    keep = min(KEEP_RAW_TOKENS, int(context_window * _SMALL_WINDOW_KEEP_FRACTION))
+    observe_at = int(context_window * OBSERVE_AT_FRACTION)
+    keep = int(context_window * KEEP_RAW_FRACTION)
     return max(observe_at, 4_000), max(keep, 1_000)
 
 
