@@ -467,3 +467,41 @@ def test_a_chunked_request_body_is_read_in_full(monkeypatch):
     raw = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
     sent, _ = _send(monkeypatch, "/o/r/git-receive-pack", {"Transfer-Encoding": "chunked"}, raw)
     assert sent["data"] == b"hello world"
+
+
+def test_oversized_bodies_are_refused_before_anything_reaches_github(monkeypatch):
+    """Bodies are held in memory to check and forward: past MAX_BODY_BYTES (raw, chunked,
+    or after un-gzipping) they're refused, so a sandbox can't exhaust the server's memory."""
+    import gzip
+
+    monkeypatch.setattr(gp, "MAX_BODY_BYTES", 1000)
+    sent, code = _send(monkeypatch, "/o/r/git-receive-pack", {"Content-Length": "1001"}, b"x" * 1001)
+    assert sent is None and code == 413
+
+    chunked = b"3e8\r\n" + b"x" * 1000 + b"\r\n1\r\nx\r\n0\r\n\r\n"
+    sent, code = _send(monkeypatch, "/o/r/git-receive-pack", {"Transfer-Encoding": "chunked"}, chunked)
+    assert sent is None and code == 413
+
+    bomb = gzip.compress(b"\0" * 100_000)  # a few hundred bytes that inflate 100x past the cap
+    sent, code = _send(monkeypatch, "/o/r/git-upload-pack",
+                       {"Content-Encoding": "gzip", "Content-Length": str(len(bomb))}, bomb)
+    assert len(bomb) < 1000 and sent is None and code == 413
+
+
+def test_a_corrupt_gzip_or_chunk_size_is_a_bad_request(monkeypatch):
+    sent, code = _send(monkeypatch, "/o/r/git-upload-pack", {"Content-Encoding": "gzip", "Content-Length": "4"}, b"nope")
+    assert sent is None and code == 400
+
+    sent, code = _send(monkeypatch, "/o/r/git-receive-pack", {"Transfer-Encoding": "chunked"}, b"zz\r\nhi\r\n0\r\n\r\n")
+    assert sent is None and code == 400
+
+
+def test_multi_member_gzip_is_checked_in_full(monkeypatch):
+    """gzip.decompress read every member; a forbidden call in a later member must not slip past."""
+    import gzip
+    import json as _json
+
+    body = gzip.compress(b" ") + gzip.compress(
+        _json.dumps({"query": "mutation { deleteRepository(input: {}) { clientMutationId } }"}).encode())
+    sent, code = _send(monkeypatch, "/api/graphql", {"Content-Encoding": "gzip", "Content-Length": str(len(body))}, body)
+    assert sent is None and code == 403

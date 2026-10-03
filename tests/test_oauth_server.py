@@ -10,6 +10,12 @@ from fastapi.testclient import TestClient
 import oauth_server
 
 
+@pytest.fixture(autouse=True)
+def _isolated_error_log(tmp_path, monkeypatch):
+    """Failed redirects append to oauth_errors.log: keep it out of the checkout."""
+    monkeypatch.setattr(oauth_server, "ERROR_LOG_PATH", tmp_path / "oauth_errors.log")
+
+
 @pytest.fixture
 def client():
     return TestClient(oauth_server.app)

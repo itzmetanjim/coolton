@@ -38,6 +38,7 @@ def public_only(monkeypatch):
     "auth.revoke", "admin.users.remove", "admin.conversations.archive", "usergroups.update",
     "users.profile.set", "chat.startStream", "canvases.create", "search.messages", "apps.manifest.create",
     "api.test", "reactions.list", "reminders.list", "agents.sessions.rename", "bookmarks.remove",
+    "files.upload",
 ])
 def test_methods_off_the_allowlist_are_refused(method):
     assert "not on coolton's Slack API allowlist" in check_api_call(method, {}, "C1")
@@ -146,6 +147,10 @@ def test_slack_api_call_as_bot_tool_refuses_before_calling_slack(monkeypatch):
      ("C_NEW", f"This channel was created by <@{ASKER}>.")),
     ("conversations.invite", {"channel": "C2", "users": "U1, U2"}, {},
      ("C2", f"<@U1> and <@U2> were invited here by <@{ASKER}>.")),
+    ("conversations.kick", {"channel": "C2", "user": "U3"}, {},
+     ("C2", f"<@U3> was removed from this channel by <@{ASKER}>.")),
+    ("conversations.archive", {"channel": "C2"}, {},
+     ("C2", f"This channel was archived by <@{ASKER}>.")),
 ])
 def test_channel_changes_name_who_asked(method, params, result, notice):
     from agent.change_notices import notice_for
@@ -162,20 +167,93 @@ def test_channel_change_posts_its_notice_only_after_it_succeeds(monkeypatch):
         calls.append((url.rsplit("/", 1)[1], data))
         return Mock(json=lambda: {"ok": url.endswith("chat.postMessage") or data.get("topic") == "ok"})
 
-    args = '{"channel": "C2", "topic": "%s"}'
+    args = '{"channel": "C1", "topic": "%s"}'
     with patch("agent.agent.requests.post", fake_post), patch("agent.change_notices.requests.post", fake_post):
         agent_mod.slack_api_call(ctx, method="conversations.setTopic", api_parameters=args % "refused")
         assert [m for m, _ in calls] == ["conversations.setTopic"]
         agent_mod.slack_api_call(ctx, method="conversations.setTopic", api_parameters=args % "ok")
-    assert calls[-1] == ("chat.postMessage", {"channel": "C2", "text": f"The channel topic was changed by <@{ASKER}>."})
+    assert calls[-1] == ("chat.postMessage", {"channel": "C1", "text": f"The channel topic was changed by <@{ASKER}>."})
+
+
+@pytest.mark.parametrize("method,params", [
+    ("conversations.invite", {"channel": "G_SECRET", "users": ASKER}),
+    ("conversations.kick", {"channel": "G_SECRET", "user": "U2"}),
+    ("conversations.archive", {"channel": "G_SECRET"}),
+    ("conversations.rename", {"channel": "G_SECRET", "name": "x"}),
+    ("conversations.setTopic", {"channel": "G_SECRET", "topic": "x"}),
+    ("conversations.setPurpose", {"channel": "G_SECRET", "purpose": "x"}),
+    ("bookmarks.add", {"channel_id": "G_SECRET", "title": "x", "type": "link", "link": "https://x"}),
+    ("bookmarks.edit", {"channel_id": "G_SECRET", "bookmark_id": "Bk1"}),
+    ("conversations.invite", {"users": ASKER}),
+])
+def test_a_private_channel_can_only_be_changed_from_inside_it(public_only, method, params):
+    """cooltonUser is in private channels the asker isn't: inviting themselves in would
+    hand them its whole history, and the rest would change a channel they can't see."""
+    assert "must be a public channel or the one this conversation is in" in check_api_call(method, params, "C1", ASKER)
+    in_it = {**params, ("channel_id" if "channel_id" in params else "channel"): "G_SECRET"}
+    assert check_api_call(method, in_it, "G_SECRET", ASKER) is None
+    public = {**params, ("channel_id" if "channel_id" in params else "channel"): "P_OPEN"}
+    assert check_api_call(method, public, "C1", ASKER) is None
+
+
+def _notice_calls(monkeypatch, *, archive_ok=True, notice_ok=True):
+    """slack_api_call with Slack faked: returns (the tool's result, every Slack method called in order)."""
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    calls = []
+
+    def fake_post(url, data, headers, timeout):
+        method = url.rsplit("/", 1)[1]
+        calls.append(method)
+        ok = {"conversations.archive": archive_ok, "chat.postMessage": notice_ok}.get(method, True)
+        return Mock(json=lambda: {"ok": ok, "ts": "9.9"} if ok else {"ok": False, "error": "nope"})
+
+    deps = SimpleNamespace(client=Mock(), channel_id="C1", thread_ts="1.2", user_id=ASKER)
+    ctx = RunContext(model=None, usage=None, prompt="", deps=deps)
+    with patch("agent.agent.requests.post", fake_post), patch("agent.change_notices.requests.post", fake_post):
+        result = agent_mod.slack_api_call(ctx, method="conversations.archive", api_parameters='{"channel": "C1"}')
+    return result, calls
+
+
+def test_archiving_posts_its_notice_first(monkeypatch):
+    """Nothing can be posted in an archived channel, so the notice has to go out before."""
+    result, calls = _notice_calls(monkeypatch)
+    assert result.startswith("Success") and calls == ["chat.postMessage", "conversations.archive"]
+
+
+def test_a_failed_archive_deletes_its_notice(monkeypatch):
+    result, calls = _notice_calls(monkeypatch, archive_ok=False)
+    assert result.startswith("Slack API error")
+    assert calls == ["chat.postMessage", "conversations.archive", "chat.delete"]
+
+
+def test_no_archive_without_its_notice(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")  # both tokens fail to post
+    result, calls = _notice_calls(monkeypatch, notice_ok=False)
+    assert result.startswith("Error: couldn't post the notice")
+    assert "conversations.archive" not in calls
+
+
+def test_a_file_share_is_footed():
+    from agent.attribution import attribute_api_params
+
+    shared = attribute_api_params("files.completeUploadExternal", {"files": "[]", "channel_id": "C2", "initial_comment": "here"}, ASKER)
+    assert shared["initial_comment"] == f"here\n\n(sent from <@{ASKER}>)"
+    bare = attribute_api_params("files.completeUploadExternal", {"files": "[]", "channels": "C2"}, ASKER)
+    assert bare["initial_comment"] == f"(sent from <@{ASKER}>)"
+    # not shared anywhere: nothing visible to foot
+    assert attribute_api_params("files.completeUploadExternal", {"files": "[]"}, ASKER) == {"files": "[]"}
+
+
+def test_a_file_share_cant_swap_its_comment_for_blocks():
+    assert "initial_comment" in check_api_call(
+        "files.completeUploadExternal", {"files": "[]", "channel_id": "C2", "blocks": "[]"}, "C1", ASKER)
 
 
 def test_message_methods_strip_impersonation_overrides(monkeypatch):
-    monkeypatch.setattr(agent_mod, "_get_user_display_info", lambda user_id: ("", ""))
     captured = {}
     monkeypatch.setattr(
         "agent.tools.slack_bot_api.slack_api_call_as_bot",
-        lambda method, params: captured.update(params) or "Success",
+        lambda method, params, on_success=None: captured.update(params) or "Success",
     )
     deps = SimpleNamespace(client=Mock(), channel_id="C1", thread_ts="1.2", user_id=ASKER)
     ctx = RunContext(model=None, usage=None, prompt="", deps=deps)

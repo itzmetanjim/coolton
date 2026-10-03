@@ -14,8 +14,9 @@ generic slack_api_call tools, and the Slack MCP read tools):
 The generic slack_api_call / slack_api_call_as_bot_tool additionally only call
 methods on ALLOWED_API_METHODS — reads, posting (always footed, see
 agent.attribution), reactions, pins, joining/leaving, uploads and channel
-changes (which name who asked in the channel, see agent.change_notices) —
-never admin, deleting, or token-management methods.
+changes (which name who asked in the channel, see agent.change_notices, and
+only for public channels or the current one) — never admin, deleting, or
+token-management methods.
 """
 
 from __future__ import annotations
@@ -55,12 +56,29 @@ FILE_READ_METHODS = {
     "files.sharedPublicURL": "file",
 }
 
+# Methods that change a channel (each posts a notice there naming who asked, see
+# agent.change_notices). The channel must be public or the one this conversation
+# is in: changing a private channel from outside it would let anyone add themselves
+# to it (conversations.invite) or act on a channel they can't see.
+CHANNEL_CHANGE_METHODS = {
+    "bookmarks.add",
+    "bookmarks.edit",
+    "conversations.archive",
+    "conversations.invite",
+    "conversations.kick",
+    "conversations.rename",
+    "conversations.setPurpose",
+    "conversations.setTopic",
+}
+
 # Methods whose `types` must be public channels only, or they'd reveal private ones.
 PUBLIC_CHANNELS_ONLY_METHODS = {"conversations.list", "users.conversations"}
 
 # No delete methods: coolton doesn't delete Slack messages (see the system
 # prompt's rules), and a deletion can't carry an attribution footer anyway.
-ALLOWED_API_METHODS = CHANNEL_READ_METHODS | set(FILE_READ_METHODS) | PUBLIC_CHANNELS_ONLY_METHODS | {
+ALLOWED_API_METHODS = (
+    CHANNEL_READ_METHODS | set(FILE_READ_METHODS) | PUBLIC_CHANNELS_ONLY_METHODS | CHANNEL_CHANGE_METHODS
+) | {
     # reads that don't expose channel content
     "auth.test",
     "auth.teams.list",
@@ -96,22 +114,11 @@ ALLOWED_API_METHODS = CHANNEL_READ_METHODS | set(FILE_READ_METHODS) | PUBLIC_CHA
     "pins.remove",
     "reactions.add",
     "reactions.remove",
-    # channel changes: each posts a notice in the channel naming who asked
-    # (agent.change_notices)
-    "bookmarks.add",
-    "bookmarks.edit",
+    # a new channel (with a notice naming who asked, agent.change_notices)
     "conversations.create",
-    "conversations.invite",
-    "conversations.rename",
-    "conversations.setPurpose",
-    "conversations.setTopic",
-    # only work where a channel manager has given coolton the right to
-    "conversations.archive",
-    "conversations.kick",
-    # uploading files
+    # uploading files (a share's initial_comment is footed by agent.attribution)
     "files.completeUploadExternal",
     "files.getUploadURLExternal",
-    "files.upload",
     # only change coolton's own account
     "conversations.mark",
     "dnd.endDnd",
@@ -159,6 +166,15 @@ def check_api_call(method: str, params: dict, current_channel_id: str, requester
         denied = channel_read_error(channel, current_channel_id)
         if denied:
             return f"Error: {method} refused — {denied}"
+    if method in CHANNEL_CHANGE_METHODS:
+        denied = channel_read_error(channel, current_channel_id)
+        if denied:
+            return (
+                f"Error: {method} refused for {channel or 'that channel'}: it must be a public channel or the "
+                f"one this conversation is in ({denied})"
+            )
+    if method == "files.completeUploadExternal" and "blocks" in params:
+        return "Error: files.completeUploadExternal can't take blocks here; put the message in initial_comment."
     if method == "workflows.featured.list":
         channel_ids = params.get("channel_ids") or []
         if isinstance(channel_ids, str):
