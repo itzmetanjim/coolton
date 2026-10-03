@@ -1818,6 +1818,13 @@ def _prepare_slack_api_call(ctx: RunContext[AgentDeps], method: str, api_paramet
     return attribute_api_params(method, parsed_parameters, credited), None
 
 
+def _post_change_notice(ctx: RunContext[AgentDeps], method: str, params: dict, result: dict) -> None:
+    """Name who asked for a channel change in that channel (agent.change_notices)."""
+    from agent.attribution import attribution_user_id
+    from agent.change_notices import post_change_notice
+    post_change_notice(method, params, result, attribution_user_id(ctx.deps))
+
+
 @agent.tool
 def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str) -> str:
     """Make a Slack Web API call as cooltonUser.
@@ -1851,6 +1858,7 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str)
         response = requests.post(url, data=form, headers=headers, timeout=30)
         res_json = _strip_secret_keys(response.json())
         if res_json.get("ok"):
+            _post_change_notice(ctx, method, parsed_parameters, res_json)
             return f"Success: {_redact(str(res_json), context='slack_api_call')}"
         return f"Slack API error: {_redact(str(res_json), context='slack_api_call')}"
     except Exception as e:
@@ -1876,8 +1884,14 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_para
     parsed_parameters, error = _prepare_slack_api_call(ctx, method, api_parameters)
     if error:
         return error
+    from agent.change_notices import NOTICE_METHODS
     from agent.tools.slack_bot_api import slack_api_call_as_bot
-    return slack_api_call_as_bot(method, parsed_parameters)
+    if method not in NOTICE_METHODS:
+        return slack_api_call_as_bot(method, parsed_parameters)
+    return slack_api_call_as_bot(
+        method, parsed_parameters,
+        on_success=lambda result: _post_change_notice(ctx, method, parsed_parameters, result),
+    )
 
 
 @agent.tool

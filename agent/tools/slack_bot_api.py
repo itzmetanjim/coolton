@@ -5,7 +5,7 @@ import requests
 from agent.redact import redact, strip_secret_keys
 
 
-def slack_api_call_as_bot(method: str, api_parameters: dict) -> str:
+def slack_api_call_as_bot(method: str, api_parameters: dict, on_success=None) -> str:
     """Make an arbitrary Slack API call as the BOT (not cooltonUser).
 
     Uses SLACK_BOT_TOKEN instead of SLACK_USER_TOKEN.
@@ -15,6 +15,7 @@ def slack_api_call_as_bot(method: str, api_parameters: dict) -> str:
     Args:
         method: Slack API method (e.g., 'chat.postMessage', 'chat.update', 'reactions.add').
         api_parameters: Dictionary of parameters for the method.
+        on_success: Called with the parsed response when the call succeeds.
 
     Returns:
         Success/error message.
@@ -37,6 +38,8 @@ def slack_api_call_as_bot(method: str, api_parameters: dict) -> str:
         res_json = strip_secret_keys(response.json())
 
         if res_json.get("ok"):
+            if on_success:
+                on_success(res_json)
             return f"Success: {redact(str(res_json), context='slack_api_call_as_bot')}"
 
         return f"Slack API error: {redact(str(res_json), context='slack_api_call_as_bot')}"

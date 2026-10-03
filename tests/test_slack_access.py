@@ -35,10 +35,9 @@ def public_only(monkeypatch):
 
 
 @pytest.mark.parametrize("method", [
-    "auth.revoke", "admin.users.remove", "conversations.kick", "conversations.archive",
-    "conversations.rename", "conversations.invite", "usergroups.update", "users.profile.set",
-    "files.upload", "chat.startStream", "canvases.create", "search.messages", "apps.manifest.create",
-    "api.test", "files.sharedPublicURL", "reactions.list", "reminders.list", "agents.sessions.rename",
+    "auth.revoke", "admin.users.remove", "admin.conversations.archive", "usergroups.update",
+    "users.profile.set", "chat.startStream", "canvases.create", "search.messages", "apps.manifest.create",
+    "api.test", "reactions.list", "reminders.list", "agents.sessions.rename", "bookmarks.remove",
 ])
 def test_methods_off_the_allowlist_are_refused(method):
     assert "not on coolton's Slack API allowlist" in check_api_call(method, {}, "C1")
@@ -91,6 +90,7 @@ def test_users_conversations_lists_public_channels_only():
 @pytest.mark.parametrize("method,param", [
     ("files.info", "file"), ("canvases.sections.lookup", "canvas_id"),
     ("slackLists.items.list", "list_id"), ("slackLists.items.info", "list_id"),
+    ("files.sharedPublicURL", "file"),
 ])
 def test_file_methods_follow_the_file_read_rule(monkeypatch, method, param):
     infos = {"F_PUBLIC": {"shares": {"public": {"P_PUB": []}}}, "F_THEIR_DM": {"user": "U_OTHER", "ims": ["D9"]}}
@@ -132,9 +132,42 @@ def test_slack_api_call_as_bot_tool_refuses_before_calling_slack(monkeypatch):
     deps = SimpleNamespace(client=Mock(), channel_id="C1", thread_ts="1.2", user_id=ASKER)
     ctx = RunContext(model=None, usage=None, prompt="", deps=deps)
     with patch("agent.tools.slack_bot_api.requests.post") as post:
-        result = agent_mod.slack_api_call_as_bot_tool(ctx, method="conversations.kick", api_parameters='{"channel": "C1"}')
+        result = agent_mod.slack_api_call_as_bot_tool(ctx, method="admin.users.remove", api_parameters='{"user_id": "U1"}')
     assert "allowlist" in result
     post.assert_not_called()
+
+
+@pytest.mark.parametrize("method,params,result,notice", [
+    ("conversations.setTopic", {"channel": "C2", "topic": "x"}, {},
+     ("C2", f"The channel topic was changed by <@{ASKER}>.")),
+    ("bookmarks.edit", {"channel_id": "C2", "bookmark_id": "Bk1"}, {},
+     ("C2", f"A bookmark was edited by <@{ASKER}>.")),
+    ("conversations.create", {"name": "new"}, {"channel": {"id": "C_NEW"}},
+     ("C_NEW", f"This channel was created by <@{ASKER}>.")),
+    ("conversations.invite", {"channel": "C2", "users": "U1, U2"}, {},
+     ("C2", f"<@U1> and <@U2> were invited here by <@{ASKER}>.")),
+])
+def test_channel_changes_name_who_asked(method, params, result, notice):
+    from agent.change_notices import notice_for
+    assert notice_for(method, params, result, ASKER) == notice
+
+
+def test_channel_change_posts_its_notice_only_after_it_succeeds(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    deps = SimpleNamespace(client=Mock(), channel_id="C1", thread_ts="1.2", user_id=ASKER)
+    ctx = RunContext(model=None, usage=None, prompt="", deps=deps)
+    calls = []
+
+    def fake_post(url, data, headers, timeout):
+        calls.append((url.rsplit("/", 1)[1], data))
+        return Mock(json=lambda: {"ok": url.endswith("chat.postMessage") or data.get("topic") == "ok"})
+
+    args = '{"channel": "C2", "topic": "%s"}'
+    with patch("agent.agent.requests.post", fake_post), patch("agent.change_notices.requests.post", fake_post):
+        agent_mod.slack_api_call(ctx, method="conversations.setTopic", api_parameters=args % "refused")
+        assert [m for m, _ in calls] == ["conversations.setTopic"]
+        agent_mod.slack_api_call(ctx, method="conversations.setTopic", api_parameters=args % "ok")
+    assert calls[-1] == ("chat.postMessage", {"channel": "C2", "text": f"The channel topic was changed by <@{ASKER}>."})
 
 
 def test_message_methods_strip_impersonation_overrides(monkeypatch):

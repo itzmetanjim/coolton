@@ -13,8 +13,9 @@ generic slack_api_call tools, and the Slack MCP read tools):
 
 The generic slack_api_call / slack_api_call_as_bot_tool additionally only call
 methods on ALLOWED_API_METHODS — reads, posting (always footed, see
-agent.attribution), reactions, pins and joining/leaving — never admin,
-deleting, or token-management methods.
+agent.attribution), reactions, pins, joining/leaving, uploads and channel
+changes (which name who asked in the channel, see agent.change_notices) —
+never admin, deleting, or token-management methods.
 """
 
 from __future__ import annotations
@@ -50,6 +51,8 @@ FILE_READ_METHODS = {
     "canvases.sections.lookup": "canvas_id",
     "slackLists.items.list": "list_id",
     "slackLists.items.info": "list_id",
+    # makes a public link to the file, so the same rule as reading it
+    "files.sharedPublicURL": "file",
 }
 
 # Methods whose `types` must be public channels only, or they'd reveal private ones.
@@ -93,6 +96,22 @@ ALLOWED_API_METHODS = CHANNEL_READ_METHODS | set(FILE_READ_METHODS) | PUBLIC_CHA
     "pins.remove",
     "reactions.add",
     "reactions.remove",
+    # channel changes: each posts a notice in the channel naming who asked
+    # (agent.change_notices)
+    "bookmarks.add",
+    "bookmarks.edit",
+    "conversations.create",
+    "conversations.invite",
+    "conversations.rename",
+    "conversations.setPurpose",
+    "conversations.setTopic",
+    # only work where a channel manager has given coolton the right to
+    "conversations.archive",
+    "conversations.kick",
+    # uploading files
+    "files.completeUploadExternal",
+    "files.getUploadURLExternal",
+    "files.upload",
     # only change coolton's own account
     "conversations.mark",
     "dnd.endDnd",
