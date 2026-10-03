@@ -2183,6 +2183,10 @@ async def text_only_response(ctx: RunContext[AgentDeps], emoji_name: str, respon
     — it saves a whole round trip. Call it as your ONLY tool call. If you need any other tool,
     don't use this: react with add_emoji_reaction and answer normally at the end.
 
+    It ends your turn immediately, so `response` must be your complete final answer. Never use
+    it to say you're about to look something up or do something ("let me check..."): nothing
+    runs after it, and the user gets a promise with no answer.
+
     Args:
         emoji_name: Slack emoji name without colons to react with (same rules as add_emoji_reaction).
         response: Your complete final reply, exactly as you'd otherwise write it (Markdown supported),
