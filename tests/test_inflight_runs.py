@@ -14,7 +14,8 @@ def test_record_start_then_pop_all_returns_it():
     inflight_runs.record_start("C1", "1.1", message_ts="111.111", user_id="U1", text="hi", is_slack=True)
     entries = inflight_runs.pop_all()
     assert entries == [
-        {"channel_id": "C1", "thread_ts": "1.1", "message_ts": "111.111", "user_id": "U1", "text": "hi", "is_slack": True},
+        {"channel_id": "C1", "thread_ts": "1.1", "message_ts": "111.111", "user_id": "U1", "text": "hi", "is_slack": True,
+         "on_behalf_of": ""},
     ]
 
 

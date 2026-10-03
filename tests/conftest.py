@@ -62,6 +62,15 @@ def _isolated_feedback_store(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback_store, "FEEDBACK_FILE", str(tmp_path / "feedback.json"))
 
 
+@pytest.fixture(autouse=True)
+def _isolated_web_conversations(tmp_path, monkeypatch):
+    """Turn and restart handling log web conversation events as a side effect —
+    keep them out of the real web_conversations/ directory."""
+    from web import conversation_log
+
+    monkeypatch.setattr(conversation_log, "STORE_DIR", str(tmp_path / "web_conversations"))
+
+
 @pytest.fixture
 def isolated_config(tmp_path):
     def _write(data: dict):

@@ -145,3 +145,43 @@ def test_a_pause_of_ten_minutes_or_more_is_noted_for_the_model():
     assert "after a 45 minutes pause" in agent_mod._resumed_after_note(history(45))
     assert "after a 3 days pause" in agent_mod._resumed_after_note(history(3 * 24 * 60 + 5))
     assert agent_mod._resumed_after_note([]) == ""
+
+
+def _with_turn_request(monkeypatch, request_parts, prompt_size=60_000):
+    """A long thread whose history already ends with this turn's own big request (as with
+    Jev's preload), fitted to a model the way _run_with_provider_chain does before trying it."""
+    _observer(monkeypatch)
+    current = ModelRequest(parts=[UserPromptPart("CURRENT REQUEST " + "z" * prompt_size), *request_parts])
+    preload = ModelResponse(parts=[ToolCallPart("search_tools", {"queries": ["x"]}, tool_call_id="preload_1")])
+    run_kwargs = {"user_prompt": None, "message_history": [*_history(40), current, preload]}
+    agent_mod._fit_history_to_model(run_kwargs, SimpleNamespace(provider_tag_filter=None), {"context_window": 131_072})
+    return current, run_kwargs["message_history"]
+
+
+def test_the_turns_own_request_is_never_turned_into_notes(monkeypatch):
+    """Folded into the log it'd reach the model as "background, not a new request"."""
+    current, fitted = _with_turn_request(monkeypatch, [])
+    assert fitted[0].parts[-1].content.startswith(om.LOG_HEADER)  # older turns were observed
+    assert current in fitted and fitted[-1].parts[0].tool_name == "search_tools"
+
+
+def test_a_resumed_turn_keeps_its_request_ahead_of_its_tool_rounds(monkeypatch):
+    _observer(monkeypatch)
+    current = ModelRequest(parts=[UserPromptPart("CURRENT REQUEST " + "z" * 60_000)])
+    rounds = [ModelResponse(parts=[ToolCallPart("run_linux_command", {"command": "ls"}, tool_call_id="c1")]),
+              ModelRequest(parts=[ToolReturnPart("run_linux_command", "ok", tool_call_id="c1"),
+                                  UserPromptPart(agent_mod.RESTART_NOTE)])]
+    run_kwargs = {"user_prompt": None, "message_history": [*_history(40), current, *rounds]}
+    agent_mod._fit_history_to_model(run_kwargs, SimpleNamespace(provider_tag_filter=None), {"context_window": 131_072})
+    assert run_kwargs["message_history"][-3:] == [current, *rounds]
+
+
+def test_a_turn_request_passed_separately_doesnt_hold_back_older_history(monkeypatch):
+    """Without a preload the request goes in as user_prompt, so the history's last user
+    message is an earlier turn's and may be observed as usual."""
+    _observer(monkeypatch)
+    earlier = ModelRequest(parts=[UserPromptPart("EARLIER REQUEST " + "z" * 60_000)])
+    history = [*_history(40), earlier, ModelResponse(parts=[TextPart("done")])]
+    run_kwargs = {"user_prompt": "hi", "message_history": history}
+    agent_mod._fit_history_to_model(run_kwargs, SimpleNamespace(provider_tag_filter=None), {"context_window": 131_072})
+    assert earlier not in run_kwargs["message_history"]

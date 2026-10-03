@@ -1818,11 +1818,28 @@ def _prepare_slack_api_call(ctx: RunContext[AgentDeps], method: str, api_paramet
     return attribute_api_params(method, parsed_parameters, credited), None
 
 
-def _post_change_notice(ctx: RunContext[AgentDeps], method: str, params: dict, result: dict) -> None:
-    """Name who asked for a channel change in that channel (agent.change_notices)."""
+def _with_change_notice(ctx: RunContext[AgentDeps], method: str, params: dict, call) -> str:
+    """Make one Slack API call with the channel notice naming who asked for it
+    (agent.change_notices). `call(on_success)` makes the call, calls `on_success`
+    with the response if it succeeds, and returns the tool result. The notice is
+    posted once the call succeeds, or for NOTICE_FIRST_METHODS (archiving) before
+    it, and deleted again if the call then fails."""
     from agent.attribution import attribution_user_id
-    from agent.change_notices import post_change_notice
-    post_change_notice(method, params, result, attribution_user_id(ctx.deps))
+    from agent.change_notices import NOTICE_FIRST_METHODS, NOTICE_METHODS, delete_notice, post_change_notice
+
+    requester = attribution_user_id(ctx.deps)
+    if method in NOTICE_FIRST_METHODS:
+        posted = post_change_notice(method, params, {}, requester)
+        if posted is None:
+            return f"Error: couldn't post the notice naming who asked in that channel, so {method} wasn't called."
+        succeeded = []
+        result = call(succeeded.append)
+        if not succeeded:
+            delete_notice(posted)
+        return result
+    if method in NOTICE_METHODS:
+        return call(lambda response: post_change_notice(method, params, response, requester))
+    return call(None)
 
 
 @agent.tool
@@ -1854,15 +1871,20 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str)
         k: json.dumps(v) if isinstance(v, (dict, list)) else v
         for k, v in parsed_parameters.items()
     }
-    try:
-        response = requests.post(url, data=form, headers=headers, timeout=30)
-        res_json = _strip_secret_keys(response.json())
-        if res_json.get("ok"):
-            _post_change_notice(ctx, method, parsed_parameters, res_json)
-            return f"Success: {_redact(str(res_json), context='slack_api_call')}"
-        return f"Slack API error: {_redact(str(res_json), context='slack_api_call')}"
-    except Exception as e:
-        return f"Error: {_redact(str(e), context='slack_api_call')}"
+
+    def call(on_success) -> str:
+        try:
+            response = requests.post(url, data=form, headers=headers, timeout=30)
+            res_json = _strip_secret_keys(response.json())
+            if res_json.get("ok"):
+                if on_success:
+                    on_success(res_json)
+                return f"Success: {_redact(str(res_json), context='slack_api_call')}"
+            return f"Slack API error: {_redact(str(res_json), context='slack_api_call')}"
+        except Exception as e:
+            return f"Error: {_redact(str(e), context='slack_api_call')}"
+
+    return _with_change_notice(ctx, method, parsed_parameters, call)
 
 
 @agent.tool
@@ -1884,13 +1906,10 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_para
     parsed_parameters, error = _prepare_slack_api_call(ctx, method, api_parameters)
     if error:
         return error
-    from agent.change_notices import NOTICE_METHODS
     from agent.tools.slack_bot_api import slack_api_call_as_bot
-    if method not in NOTICE_METHODS:
-        return slack_api_call_as_bot(method, parsed_parameters)
-    return slack_api_call_as_bot(
-        method, parsed_parameters,
-        on_success=lambda result: _post_change_notice(ctx, method, parsed_parameters, result),
+    return _with_change_notice(
+        ctx, method, parsed_parameters,
+        lambda on_success: slack_api_call_as_bot(method, parsed_parameters, on_success=on_success),
     )
 
 
@@ -3296,6 +3315,19 @@ def _current_year_note() -> str:
     )
 
 
+def _turn_request_index(history: list) -> int | None:
+    """Index of the turn's own request in a history that holds it: the last request
+    carrying a user prompt and no tool results (a tool round's request, even with
+    the restart note added to it, isn't one)."""
+    for i in range(len(history) - 1, -1, -1):
+        parts = getattr(history[i], "parts", [])
+        if not isinstance(history[i], ModelRequest) or not any(isinstance(p, UserPromptPart) for p in parts):
+            continue
+        if not any(getattr(p, "part_kind", "") in ("tool-return", "retry-prompt") for p in parts):
+            return i
+    return None
+
+
 def _fit_history_to_model(run_kwargs: dict, deps, prov_config: dict) -> None:
     """Record the window of the model about to be tried, and compact the
     history first if it doesn't fit that model's budget — so compaction only
@@ -3309,7 +3341,10 @@ def _fit_history_to_model(run_kwargs: dict, deps, prov_config: dict) -> None:
         return
     from agent.observational_memory import maybe_observe
 
-    compacted = maybe_observe(history, deps, context_window=window)
+    # No user_prompt means the turn's own request is already in the history (Jev's
+    # preload, or a resumed turn): it must reach the model as itself, not as notes.
+    keep_from = _turn_request_index(history) if run_kwargs.get("user_prompt") is None else None
+    compacted = maybe_observe(history, deps, context_window=window, keep_from=keep_from)
     if compacted is not history:
         logger.info(f"Observed history to fit {prov_config.get('model')} ({window:,}-token window) before trying it")
         run_kwargs["message_history"] = compacted

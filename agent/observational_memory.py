@@ -240,11 +240,15 @@ def reflect(log: str, deps) -> str:
     return _observation_lines(_ask(f"{REFLECTOR_INSTRUCTIONS}\n\nObservation log:\n{log}", deps))
 
 
-def maybe_observe(messages: list[ModelMessage], deps, context_window: int | None = None) -> list[ModelMessage]:
+def maybe_observe(
+    messages: list[ModelMessage], deps, context_window: int | None = None, keep_from: int | None = None,
+) -> list[ModelMessage]:
     """`messages` unchanged if the raw history since the last observation is small
     enough; otherwise [observation log, recent raw messages]. Thresholds come from
     `context_window` if given (the model about to be tried), else the model this turn
-    used, else the smallest window in the fallback chain. Never raises."""
+    used, else the smallest window in the fallback chain. `keep_from` is an index into
+    `messages` from which everything stays raw however big it is: the turn's own request
+    and what follows, when the history being fitted already holds them. Never raises."""
     try:
         log, raw = split_log(messages)
         if not context_window:
@@ -257,6 +261,8 @@ def maybe_observe(messages: list[ModelMessage], deps, context_window: int | None
         if raw_tokens <= observe_at:
             return messages
         split = _safe_split_index(raw, keep)
+        if keep_from is not None:
+            split = max(0, min(split, keep_from - (len(messages) - len(raw))))
         head, tail = raw[:split], raw[split:]
         if not head:
             return messages

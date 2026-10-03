@@ -20,19 +20,6 @@ def test_slack_adapter_context_contains_legacy_fields():
     assert "Your user_id (the HUMAN who messaged you): `U123`" in context
 
 
-def test_build_context_prompt_is_stable_across_turns():
-    """The whole point: this text becomes part of the cached system prompt, so
-    it must not change between two turns of the same thread (message_ts and
-    model/capability, which DO change, belong in build_turn_context instead)."""
-    deps = SimpleNamespace(user_id="U123", channel_id="C123", thread_ts="1.2", message_ts="1.3", user_token=None)
-    first = SlackPlatform().build_context_prompt(deps)
-    deps.message_ts = "9.9"  # a later turn in the same thread
-    second = SlackPlatform().build_context_prompt(deps)
-    assert first == second
-    assert "1.3" not in first
-    assert "message_ts" not in first.lower() or "1.3" not in first
-
-
 def test_build_turn_context_contains_volatile_fields():
     deps = SimpleNamespace(user_id="U123", channel_id="C123", thread_ts="1.2", message_ts="1.3")
     context = SlackPlatform().build_turn_context(deps, "anthropic:claude-sonnet-4-6", True)

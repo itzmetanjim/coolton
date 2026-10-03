@@ -105,7 +105,7 @@ def submit_message(conversation_id: str, user_id: str, text: str, attachments: l
 
 
 def resume_turn(conversation_id: str, user_id: str, text: str, message_seq: int,
-                resume_messages: list | None = None) -> None:
+                on_behalf_of: str = "", resume_messages: list | None = None) -> None:
     """Re-run a turn that was still in flight when the process died mid-turn
     (see agent.inflight_runs / listeners.events.turn.resume_orphaned_runs).
 
@@ -116,7 +116,8 @@ def resume_turn(conversation_id: str, user_id: str, text: str, message_seq: int,
     does: this only ever runs once, right at startup, before anything else
     could have started a run for this conversation.
     """
-    _executor.submit(_run_turn, conversation_id, user_id, text, message_seq, [], resume_messages=resume_messages)
+    _executor.submit(_run_turn, conversation_id, user_id, text, message_seq, [],
+                     on_behalf_of=on_behalf_of, resume_messages=resume_messages)
 
 
 def wake_conversation(

@@ -23,7 +23,6 @@ Importable:
 """
 
 import base64
-import gzip
 import hashlib
 import hmac
 import json
@@ -31,6 +30,7 @@ import logging
 import os
 import re
 import threading
+import zlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, urlunparse
@@ -395,6 +395,39 @@ def _extract_token(headers: dict) -> str | None:
     return None
 
 
+# Request bodies are held in memory to check (_forbidden_reason) and forward, so their
+# size is capped, raw and after un-gzipping: otherwise code in a sandbox could exhaust
+# the server's memory with one huge body or a small gzip bomb. Plenty for pushing an
+# ordinary repo.
+MAX_BODY_BYTES = 100 * 1024 * 1024
+
+
+class _BodyError(Exception):
+    """A request body that can't be accepted; `code` is the HTTP status to answer."""
+
+    def __init__(self, code: int):
+        super().__init__(code)
+        self.code = code
+
+
+def _gunzip_capped(data: bytes) -> bytes:
+    """Un-gzip `data` (every gzip member in it), refusing more than MAX_BODY_BYTES of
+    output with _BodyError(413) and a corrupt or truncated stream with _BodyError(400)."""
+    out = bytearray()
+    while data:
+        decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        try:
+            out += decompressor.decompress(data, MAX_BODY_BYTES + 1 - len(out))
+        except zlib.error:
+            raise _BodyError(400) from None
+        if len(out) > MAX_BODY_BYTES:
+            raise _BodyError(413)
+        if not decompressor.eof:
+            raise _BodyError(400)
+        data = decompressor.unused_data
+    return bytes(out)
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -417,8 +450,11 @@ class _Handler(BaseHTTPRequestHandler):
         additionally checks the sandbox registration and per-tool allowlist, and executes
         the tool with that thread's AgentDeps.
         """
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        body = self.rfile.read(length) if length else None
+        try:
+            body = self._read_body()
+        except _BodyError as e:
+            self._deny(e.code)
+            return
         upstream = f"http://127.0.0.1:{TOOL_PROXY_PORT}{self.path}"
         fwd = {
             "Authorization": self.headers.get("Authorization", ""),
@@ -445,19 +481,30 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _read_body(self) -> bytes | None:
         """The request body, whether sent with Content-Length or chunked (git sends a
-        large push chunked)."""
+        large push chunked). Raises _BodyError past MAX_BODY_BYTES or when malformed."""
         if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
-            chunks = []
+            chunks, total = [], 0
             while True:
-                size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                try:
+                    size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                except ValueError:
+                    raise _BodyError(400) from None
                 if size == 0:
                     while self.rfile.readline() not in (b"\r\n", b"\n", b""):
                         pass  # trailers
                     break
+                total += size
+                if size < 0 or total > MAX_BODY_BYTES:
+                    raise _BodyError(413)
                 chunks.append(self.rfile.read(size))
                 self.rfile.readline()  # the CRLF after each chunk
             return b"".join(chunks) or None
-        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            raise _BodyError(400) from None
+        if length < 0 or length > MAX_BODY_BYTES:
+            raise _BodyError(413)
         return self.rfile.read(length) if length else None
 
     def _forward(self):
@@ -501,20 +548,18 @@ class _Handler(BaseHTTPRequestHandler):
             self._deny(502)
             return
 
-        body = self._read_body() if self.command in ("POST", "PUT", "PATCH") else None
-
         # git gzips larger requests (Content-Encoding: gzip). Check the decoded body, so a
         # gzipped forbidden call can't slip past _forbidden_reason, and forward the
         # original bytes with their encoding. Any other encoding can't be checked: refuse it.
         encoding = (self.headers.get("Content-Encoding") or "").strip().lower()
-        inspected = body
-        if body and encoding in ("gzip", "x-gzip"):
-            try:
-                inspected = gzip.decompress(body)
-            except (OSError, EOFError):
-                self._deny(400)
-                return
-        elif body and encoding not in ("", "identity"):
+        try:
+            body = self._read_body() if self.command in ("POST", "PUT", "PATCH") else None
+            inspected = _gunzip_capped(body) if body and encoding in ("gzip", "x-gzip") else body
+        except _BodyError as e:
+            logger.warning("deny: request body refused (%s)", e.code)
+            self._deny(e.code)
+            return
+        if body and encoding not in ("", "identity", "gzip", "x-gzip"):
             logger.warning("deny: unsupported request Content-Encoding %r", encoding)
             self._deny(415)
             return

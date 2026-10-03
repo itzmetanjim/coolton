@@ -563,7 +563,7 @@ def test_inflight_run_left_behind_if_never_reaches_finally(mocks):
     assert len(entries) == 1
     assert entries[0] == {
         "channel_id": "C1", "thread_ts": "1.1", "message_ts": "111.111",
-        "user_id": "U1", "text": "hello", "is_slack": True,
+        "user_id": "U1", "text": "hello", "is_slack": True, "on_behalf_of": "",
     }
 
 
@@ -577,7 +577,8 @@ def test_resume_orphaned_runs_reruns_a_slack_turn(monkeypatch):
     from agent.inflight_runs import record_start
     from thread_context import conversation_store
 
-    record_start("C1", "1.1", message_ts="111.111", user_id="U1", text="hello", is_slack=True)
+    record_start("C1", "1.1", message_ts="111.111", user_id="AUTOMATED", text="hello", is_slack=True,
+                 on_behalf_of="U1")
 
     client = Mock()
     logger = Mock()
@@ -599,7 +600,8 @@ def test_resume_orphaned_runs_reruns_a_slack_turn(monkeypatch):
     assert calls[0]["channel_id"] == "C1"
     assert calls[0]["thread_ts"] == "1.1"
     assert calls[0]["message_ts"] == "111.111"
-    assert calls[0]["user_id"] == "U1"
+    assert calls[0]["user_id"] == "AUTOMATED"
+    assert calls[0]["on_behalf_of"] == "U1"  # still credits who the automated turn acts for
     assert calls[0]["text"] == "hello"
     assert calls[0]["history"] == ["history"]
     client.chat_postMessage.assert_called_once()
@@ -611,11 +613,11 @@ def test_resume_orphaned_runs_reruns_a_web_turn(monkeypatch):
 
     from agent.inflight_runs import record_start
 
-    record_start("web", "conv1", message_ts="5", user_id="U1", text="hello", is_slack=False)
+    record_start("web", "conv1", message_ts="5", user_id="U1", text="hello", is_slack=False, on_behalf_of="U2")
 
     import web.runner as runner
     calls = []
-    monkeypatch.setattr(runner, "resume_turn", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(runner, "resume_turn", lambda *a, **k: calls.append((a, k["on_behalf_of"])))
 
     result = turn.resume_orphaned_runs(Mock(), Mock())
 
@@ -625,7 +627,7 @@ def test_resume_orphaned_runs_reruns_a_web_turn(monkeypatch):
         time.sleep(0.01)
 
     assert result == {"conv1"}
-    assert calls == [("conv1", "U1", "hello", 5)]
+    assert calls == [(("conv1", "U1", "hello", 5), "U2")]
 
 
 def test_resume_orphaned_runs_skips_a_web_entry_with_a_bad_message_ts():

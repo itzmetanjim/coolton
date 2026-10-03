@@ -58,7 +58,10 @@ def _key(channel_id: str, thread_ts: str) -> str:
     return f"{channel_id}:{thread_ts}"
 
 
-def record_start(channel_id: str, thread_ts: str, *, message_ts: str, user_id: str, text: str, is_slack: bool) -> None:
+def record_start(
+    channel_id: str, thread_ts: str, *, message_ts: str, user_id: str, text: str, is_slack: bool,
+    on_behalf_of: str = "",
+) -> None:
     with _lock:
         data = _load()
         data[_key(channel_id, thread_ts)] = {
@@ -68,6 +71,9 @@ def record_start(channel_id: str, thread_ts: str, *, message_ts: str, user_id: s
             "user_id": user_id,
             "text": text,
             "is_slack": is_slack,
+            # who an automated turn acts for (AgentDeps.on_behalf_of), so a resumed
+            # one still credits them
+            "on_behalf_of": on_behalf_of,
         }
         _save(data)
         # A new turn starts clean: never resume it from an older turn's checkpoint.

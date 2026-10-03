@@ -100,7 +100,7 @@ def test_slack_api_call_as_bot_foots_an_edit_including_its_blocks(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         "agent.tools.slack_bot_api.slack_api_call_as_bot",
-        lambda method, params: captured.update(method=method, params=params) or "Success",
+        lambda method, params, on_success=None: captured.update(method=method, params=params) or "Success",
     )
     blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "edited"}}]
     agent_mod.slack_api_call_as_bot_tool(

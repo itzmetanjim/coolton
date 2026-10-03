@@ -2,7 +2,7 @@
 
 Applied in code by every tool that can post or edit a Slack message on the
 model's say-so (post_message_tool, chat_postMessage, slack_api_call,
-slack_api_call_as_bot_tool, and the Slack MCP posting tools — see
+slack_api_call_as_bot_tool, including file shares, and the Slack MCP posting tools — see
 agent.slack_mcp_guard) — NOT left to the system prompt, where a user can talk
 the model out of it ("don't mention me", "stay anonymous"). The only exempt
 tool is send_message: it posts in-thread status updates, where the person who
@@ -26,6 +26,9 @@ MESSAGE_METHODS = {
     "chat.postephemeral",
     "chat.memessage",
 }
+
+# Shares a file into a channel, with `initial_comment` as the visible message.
+FILE_SHARE_METHOD = "files.completeuploadexternal"
 
 _METHOD_RE = re.compile(r"^[A-Za-z]+(\.[A-Za-z]+)+$")
 _SLACK_USER_ID_RE = re.compile(r"^[UW][A-Z0-9]+$")
@@ -80,9 +83,17 @@ def attribute_api_params(method: str, params: dict, user_id: str) -> dict:
     Slack renders them INSTEAD of `text`, so footing only `text` would leave
     the visible message unattributed). A message carrying none of those
     (e.g. only legacy `attachments`) gets the footer as its `text`, which
-    Slack shows above the attachments. Non-message methods pass through
-    unchanged.
+    Slack shows above the attachments. A file shared into a channel
+    (files.completeUploadExternal with a channel_id or channels) gets the
+    footer on its initial_comment, or as its initial_comment when it has none.
+    Other methods pass through unchanged.
     """
+    if method.lower() == FILE_SHARE_METHOD:
+        if not (params.get("channel_id") or params.get("channels")):
+            return params
+        comment = params.get("initial_comment")
+        comment = comment if isinstance(comment, str) else ""
+        return {**params, "initial_comment": attribute_text(comment, user_id).strip()}
     if method.lower() not in MESSAGE_METHODS:
         return params
     params = dict(params)
