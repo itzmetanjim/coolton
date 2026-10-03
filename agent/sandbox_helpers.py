@@ -10,11 +10,18 @@ same way:
   store. connect() to a dead id does not fail eagerly, so a probe ("echo active")
   surfaces the lifecycle error at a predictable point; the stale id is then dropped
   and a fresh provisioned sandbox takes its place.
+- Several tool calls can use one thread's sandbox at once (parallel tool calls,
+  parallel subagents). Creating it is serialized per thread, so they never make two,
+  and a call that's done only pauses it when no other call is still using it
+  (sandbox_use / pause_if_idle); otherwise the last one to finish does.
 """
 
 import logging
 import os
 import threading
+from collections import defaultdict
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 from e2b import Sandbox
 from e2b.exceptions import SandboxNotFoundException
@@ -156,13 +163,85 @@ def kill_thread_sandbox(channel_id: str, thread_ts: str) -> None:
         _proxy_cache.pop(sandbox_id, None)
 
 
+_thread_locks: defaultdict[tuple[str, str], threading.RLock] = defaultdict(threading.RLock)
+_thread_locks_lock = threading.Lock()
+_in_use: dict[tuple[str, str], int] = {}
+
+
+def _thread_lock(channel_id: str, thread_ts: str) -> threading.RLock:
+    with _thread_locks_lock:
+        return _thread_locks[(channel_id, thread_ts)]
+
+
+def _pause_quietly(sandbox, channel_id: str, thread_ts: str) -> None:
+    try:
+        sandbox.pause()
+    except Exception as e:
+        logger.warning("Couldn't pause the sandbox for %s/%s: %s", channel_id, thread_ts, e)
+
+
+@contextmanager
+def sandbox_use(channel_id: str, thread_ts: str):
+    """Mark this thread's sandbox in use for the block. Set `.sandbox` on the yielded
+    object once there is one; on the way out it's paused if `.pause` is still True and
+    no other call is using it any more (that call pauses it when it's done instead)."""
+    key = (channel_id, thread_ts)
+    use = SimpleNamespace(sandbox=None, pause=True)
+    with _thread_lock(*key):
+        _in_use[key] = _in_use.get(key, 0) + 1
+    try:
+        yield use
+    finally:
+        with _thread_lock(*key):
+            left = _in_use.get(key, 1) - 1
+            if left:
+                _in_use[key] = left
+            else:
+                _in_use.pop(key, None)
+            if not left and use.pause and use.sandbox is not None:
+                _pause_quietly(use.sandbox, channel_id, thread_ts)
+
+
+@contextmanager
+def while_idle(channel_id: str, thread_ts: str):
+    """Yields whether no call is using the thread's sandbox, holding its lock for the
+    block so none can start meanwhile (pause it inside the block)."""
+    with _thread_lock(channel_id, thread_ts):
+        yield not _in_use.get((channel_id, thread_ts))
+
+
+def pause_if_idle(channel_id: str, thread_ts: str, sandbox=None) -> bool:
+    """Pause the thread's sandbox (`sandbox`, or the stored one) unless a call is still
+    using it. Returns whether it was paused."""
+    with while_idle(channel_id, thread_ts) as idle:
+        if not idle:
+            return False
+        if sandbox is None:
+            sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
+            if not sandbox_id:
+                return False
+            try:
+                sandbox = Sandbox.connect(sandbox_id)
+            except Exception as e:
+                logger.warning("Couldn't connect to pause the sandbox for %s/%s: %s", channel_id, thread_ts, e)
+                return False
+        _pause_quietly(sandbox, channel_id, thread_ts)
+        return True
+
+
 def get_or_create_sandbox(channel_id: str, thread_ts: str):
     """Return (sandbox, proxy_info) for this thread, guaranteed to be alive.
 
     If the thread has no stored sandbox, one is created and provisioned. If the stored
     id points at a sandbox E2B already recycled, that id is dropped and a fresh
-    provisioned sandbox is created instead.
+    provisioned sandbox is created instead. One call at a time per thread, so two
+    parallel calls never create two sandboxes.
     """
+    with _thread_lock(channel_id, thread_ts):
+        return _get_or_create_sandbox(channel_id, thread_ts)
+
+
+def _get_or_create_sandbox(channel_id: str, thread_ts: str):
     sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
     if sandbox_id:
         try:

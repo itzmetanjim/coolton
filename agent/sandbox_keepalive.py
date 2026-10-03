@@ -29,10 +29,15 @@ _timers: dict[tuple[str, str], threading.Timer] = {}
 def _pause(channel_id: str, thread_ts: str) -> None:
     with _lock:
         _timers.pop((channel_id, thread_ts), None)
+    # A command still running (e.g. a long one a parallel subagent started) keeps it up;
+    # that command pauses the sandbox itself when it's done.
+    from agent.sandbox_helpers import while_idle
+
     try:
-        sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
-        if sandbox_id:
-            Sandbox.connect(sandbox_id).pause()
+        with while_idle(channel_id, thread_ts) as idle:
+            sandbox_id = get_thread_sandbox_id(channel_id, thread_ts) if idle else None
+            if sandbox_id:
+                Sandbox.connect(sandbox_id).pause()
     except Exception as e:
         logger.warning(f"sandbox keepalive auto-pause failed for {channel_id}/{thread_ts}: {e}")
 

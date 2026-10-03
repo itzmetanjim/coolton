@@ -31,7 +31,7 @@ from agent.redact import redact as _redact, strip_secret_keys as _strip_secret_k
 from e2b import Sandbox
 from e2b.exceptions import FileNotFoundException
 from agent.sandbox_store import get_thread_sandbox_id
-from agent.sandbox_helpers import get_or_create_sandbox, _proxy_env
+from agent.sandbox_helpers import get_or_create_sandbox, pause_if_idle, sandbox_use, _proxy_env
 from agent import sandbox_keepalive
 from agent.github_proxy_client import PUBLIC_PROXY_HOST
 from agent.tool_proxy import (
@@ -315,6 +315,38 @@ _RUN_LINUX_COMMAND_MAX_TIMEOUT = 1800
 _RUN_LINUX_COMMAND_DEFAULT_TIMEOUT = 60
 
 
+def _run_in_thread_sandbox(ctx: RunContext[AgentDeps], use, command: str, timeout: int):
+    """run_linux_command's command run, inside its sandbox_use block."""
+    channel_id = ctx.deps.channel_id
+    thread_ts = ctx.deps.thread_ts
+    sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
+    use.sandbox = sandbox
+    # Pass the GitHub proxy env directly (E2B `envs=`) so gh/git/curl are authenticated
+    # via the host proxy on every command; the real token never enters the sandbox.
+    # timeout=0 here means "disabled" (falsy timeout -> no deadline sent, per the E2B
+    # SDK's own timeout_to_ms helper) — the model opts into that explicitly per call,
+    # it isn't the implicit default.
+    try:
+        return sandbox.commands.run(command, envs=_proxy_env(proxy_info), timeout=timeout)
+    finally:
+        # A VNC stream (deps.sandbox_keepalive_seconds > 0) needs the sandbox to
+        # survive between commands, not pause the instant this one returns — arm a
+        # countdown instead (agent.sandbox_keepalive), reset on every action, so it
+        # only actually pauses after real inactivity. A pending run_background_command
+        # job on this thread needs the same thing for the same reason (see
+        # agent.tools.sandbox_background's module docstring) — an unrelated
+        # run_linux_command call must not freeze it back to zero progress. Otherwise
+        # sandbox_use pauses it, unless another call is still using it.
+        from agent.background_jobs_store import has_pending_jobs
+        from agent.tools.sandbox_background import BG_JOB_KEEPALIVE_SECONDS
+        has_bg_jobs = has_pending_jobs(channel_id, thread_ts)
+        if ctx.deps.sandbox_keepalive_seconds > 0 or has_bg_jobs:
+            use.pause = False
+            ctx.deps.keep_sandbox_warm = True
+            seconds = max(ctx.deps.sandbox_keepalive_seconds, BG_JOB_KEEPALIVE_SECONDS) if has_bg_jobs else ctx.deps.sandbox_keepalive_seconds
+            sandbox_keepalive.arm(channel_id, thread_ts, seconds)
+
+
 @agent.tool
 def run_linux_command(ctx: RunContext[AgentDeps], command: str, timeout: int = _RUN_LINUX_COMMAND_DEFAULT_TIMEOUT) -> str:
     """Execute a bash/shell command inside a private cloud Linux sandbox (E2B).
@@ -344,32 +376,8 @@ def run_linux_command(ctx: RunContext[AgentDeps], command: str, timeout: int = _
     if timeout != 0:
         timeout = max(_RUN_LINUX_COMMAND_MIN_TIMEOUT, min(timeout, _RUN_LINUX_COMMAND_MAX_TIMEOUT))
     try:
-        sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
-        # Pass the GitHub proxy env directly (E2B `envs=`) so gh/git/curl are authenticated
-        # via the host proxy on every command; the real token never enters the sandbox.
-        # timeout=0 here means "disabled" (falsy timeout -> no deadline sent, per the E2B
-        # SDK's own timeout_to_ms helper) — the model opts into that explicitly per call,
-        # it isn't the implicit default.
-        try:
-            result = sandbox.commands.run(command, envs=_proxy_env(proxy_info), timeout=timeout)
-        finally:
-            # A VNC stream (deps.sandbox_keepalive_seconds > 0) needs the sandbox to
-            # survive between commands, not pause the instant this one returns — arm a
-            # countdown instead (agent.sandbox_keepalive), reset on every action, so it
-            # only actually pauses after real inactivity. A pending run_background_command
-            # job on this thread needs the same thing for the same reason (see
-            # agent.tools.sandbox_background's module docstring) — an unrelated
-            # run_linux_command call must not freeze it back to zero progress. Otherwise
-            # pause immediately, same as always.
-            from agent.background_jobs_store import has_pending_jobs
-            from agent.tools.sandbox_background import BG_JOB_KEEPALIVE_SECONDS
-            has_bg_jobs = has_pending_jobs(channel_id, thread_ts)
-            if ctx.deps.sandbox_keepalive_seconds > 0 or has_bg_jobs:
-                ctx.deps.keep_sandbox_warm = True
-                seconds = max(ctx.deps.sandbox_keepalive_seconds, BG_JOB_KEEPALIVE_SECONDS) if has_bg_jobs else ctx.deps.sandbox_keepalive_seconds
-                sandbox_keepalive.arm(channel_id, thread_ts, seconds)
-            else:
-                sandbox.pause()
+        with sandbox_use(channel_id, thread_ts) as use:
+            result = _run_in_thread_sandbox(ctx, use, command, timeout)
         output = []
         if result.stdout:
             output.append(f"STDOUT:\n{result.stdout}")
@@ -463,6 +471,7 @@ CODE_MODE_EXCLUDED_TOOLS = {
     "join_thread_tool",
     "add_emoji_reaction",
     "delegate_to_subagent",
+    "delegate_to_subagents",
     "create_code_channel_tool",
     # Need a live agent run; code mode already calls hidden tools directly by name.
     "search_tools",
@@ -471,11 +480,21 @@ CODE_MODE_EXCLUDED_TOOLS = {
 }
 
 
-def _code_mode_tools() -> tuple[list[str], dict[str, str]]:
+def _code_mode_tools(excluded=None) -> tuple[list[str], dict[str, str]]:
+    """The tools code_mode can call, minus `excluded` (a subagent's off-limits tools)."""
     registry = agent._function_toolset.tools
-    allowlist = [n for n in registry if n not in CODE_MODE_EXCLUDED_TOOLS]
+    allowlist = [n for n in registry if n not in CODE_MODE_EXCLUDED_TOOLS and n not in (excluded or ())]
     signatures = format_signatures({n: registry[n] for n in allowlist})
     return allowlist, signatures
+
+
+_code_mode_locks: dict[tuple[str, str], threading.Lock] = {}
+_code_mode_locks_lock = threading.Lock()
+
+
+def _code_mode_lock(channel_id: str, thread_ts: str) -> threading.Lock:
+    with _code_mode_locks_lock:
+        return _code_mode_locks.setdefault((channel_id, thread_ts), threading.Lock())
 
 
 def _tool_resolver(tool_name: str):
@@ -520,33 +539,36 @@ def code_mode(ctx: RunContext[AgentDeps], code: str) -> str:
     thread_ts = ctx.deps.thread_ts
     try:
         start_tool_proxy()
-        sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
+        # One code_mode run per thread at a time: runs share the sandbox's proxy token,
+        # its registration and the script files, so parallel ones would clobber each other.
+        with _code_mode_lock(channel_id, thread_ts), sandbox_use(channel_id, thread_ts) as use:
+            sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
+            use.sandbox = sandbox
 
-        allowlist, signatures = _code_mode_tools()
-        register_sandbox(sandbox.sandbox_id, proxy_info["token"], ctx.deps, _tool_resolver, allowlist)
-        sandbox.files.write("/home/user/agent_tools.py", build_sandbox_module(allowlist, signatures))
-        sandbox.files.write("/home/user/code_mode_run.py", code)
-        envs = dict(_proxy_env(proxy_info))
-        envs.update({
-            "AGENT_TOOLS_BASE": f"https://{PUBLIC_PROXY_HOST}/agent_tools",
-            "AGENT_TOOLS_TOKEN": proxy_info["token"],
-            "AGENT_TOOLS_SANDBOX": sandbox.sandbox_id,
-        })
-        try:
-            result = sandbox.commands.run(
-                "cd /home/user && python3 code_mode_run.py", timeout=600, envs=envs
-            )
-        finally:
-            # The tool-proxy registration only needs to live for this one run — the
-            # sandboxed script has already exited by the time commands.run() returns,
-            # so nothing can call back into /agent_tools/* with this token again.
-            # Leaving it registered would let a leaked/replayed sandbox token keep
-            # executing tools with THIS call's deps (this turn's WebClient, user_id,
-            # user_token) indefinitely, and would grow _registrations without bound
-            # across every code_mode call ever made. A later code_mode call on the
-            # same (paused, not killed) sandbox re-registers fresh deps anyway.
-            unregister_sandbox(sandbox.sandbox_id)
-            sandbox.pause()
+            allowlist, signatures = _code_mode_tools(getattr(ctx.deps, "excluded_tools", None))
+            register_sandbox(sandbox.sandbox_id, proxy_info["token"], ctx.deps, _tool_resolver, allowlist)
+            sandbox.files.write("/home/user/agent_tools.py", build_sandbox_module(allowlist, signatures))
+            sandbox.files.write("/home/user/code_mode_run.py", code)
+            envs = dict(_proxy_env(proxy_info))
+            envs.update({
+                "AGENT_TOOLS_BASE": f"https://{PUBLIC_PROXY_HOST}/agent_tools",
+                "AGENT_TOOLS_TOKEN": proxy_info["token"],
+                "AGENT_TOOLS_SANDBOX": sandbox.sandbox_id,
+            })
+            try:
+                result = sandbox.commands.run(
+                    "cd /home/user && python3 code_mode_run.py", timeout=600, envs=envs
+                )
+            finally:
+                # The tool-proxy registration only needs to live for this one run — the
+                # sandboxed script has already exited by the time commands.run() returns,
+                # so nothing can call back into /agent_tools/* with this token again.
+                # Leaving it registered would let a leaked/replayed sandbox token keep
+                # executing tools with THIS call's deps (this turn's WebClient, user_id,
+                # user_token) indefinitely, and would grow _registrations without bound
+                # across every code_mode call ever made. A later code_mode call on the
+                # same (paused, not killed) sandbox re-registers fresh deps anyway.
+                unregister_sandbox(sandbox.sandbox_id)
         output = []
         if result.stdout:
             output.append(f"STDOUT:\n{result.stdout}")
@@ -2312,11 +2334,10 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
     if skill:
         cmd += f" -s {shlex.quote(skill)}"
     try:
-        sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
-        try:
+        with sandbox_use(channel_id, thread_ts) as use:
+            sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
+            use.sandbox = sandbox
             result = sandbox.commands.run(cmd, timeout=180, envs=_proxy_env(proxy_info))
-        finally:
-            sandbox.pause()
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -2536,20 +2557,47 @@ def delegate_to_subagent(
     target: str,
     task: str,
 ) -> str:
-    """Delegate a focused subtask to a specialized subagent and return its findings.
+    """Hand one focused, self-contained task to a subagent and get its result back.
 
-    Use this when a subtask is large, self-contained, and benefits from focused tools:
-    - "research": focused Slack/web/user/channel/thread research, returns compact sourced findings.
-    - "explore": inspect sandbox workspace files (read/list/grep) to gather implementation context.
-    - "summarizer": summarize a Slack conversation transcript, preserving decisions and action items.
+    For several independent tasks, use delegate_to_subagents instead: it runs them in
+    parallel. Subagents:
+    - "general": does the task with all of your tools (sandbox, web, Slack, files, email...).
+    - "research": read-only Slack/web/canvas/docs research; returns compact sourced findings.
+    - "explore": reads the sandbox workspace (files, grep, read-only commands) for context.
+    - "summarizer": summarizes a transcript you include in the task.
 
     Args:
-        target: One of "research", "explore", "summarizer".
-        task: A fully self-contained instruction describing exactly what to investigate or produce.
+        target: One of "general", "research", "explore", "summarizer".
+        task: A fully self-contained instruction: the subagent can't see this conversation,
+            so include every id, link, file path and detail it needs, and what to return.
     """
-    from agent.subagents import run_subagent
+    from agent.subagents import delegate
 
-    return run_subagent(target, task, ctx.deps)
+    return delegate(target, task, ctx.deps)
+
+
+@agent.tool
+def delegate_to_subagents(ctx: RunContext[AgentDeps], tasks: str) -> str:
+    """Run several subagents IN PARALLEL, each on its own self-contained task, and get
+    every result back at once (in the order given). Use it whenever a request splits into
+    independent parts (several things to look up, several files or repos to check, several
+    pieces of work that don't depend on each other): it's much faster than doing them one
+    after another. Up to 6 at once. Targets are the same as delegate_to_subagent's.
+
+    Example: delegate_to_subagents(tasks='[{"target": "research", "task": "Find ..."},
+    {"target": "general", "task": "In the sandbox, ..."}]')
+
+    Args:
+        tasks: A JSON array, as a plain STRING, of {"target": ..., "task": ...} objects. Each
+            task must be fully self-contained (the subagents can't see this conversation or
+            each other).
+    """
+    from agent.subagents import delegate_many, parse_tasks
+
+    parsed, error = parse_tasks(tasks)
+    if error:
+        return error
+    return delegate_many(parsed, ctx.deps)
 
 
 def _repo_root() -> str:
@@ -2628,12 +2676,11 @@ def _run_skill_script_in_sandbox(script, args=None, ctx=None) -> str:
         run_cmd += " " + " ".join(cmd_args)
 
     try:
-        sandbox, proxy_info = get_or_create_sandbox(deps.channel_id, deps.thread_ts)
-        try:
+        with sandbox_use(deps.channel_id, deps.thread_ts) as use:
+            sandbox, proxy_info = get_or_create_sandbox(deps.channel_id, deps.thread_ts)
+            use.sandbox = sandbox
             sandbox.files.write(remote_path, content)
             result = sandbox.commands.run(run_cmd, envs=_proxy_env(proxy_info), timeout=120)
-        finally:
-            sandbox.pause()
     except Exception as e:
         return f"Error running skill script in sandbox: {e}"
 
@@ -3148,12 +3195,7 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
         # point (agent.background_jobs_poller notifies once it's actually done).
         if deps.keep_sandbox_warm and _should_force_pause_sandbox(deps.channel_id, deps.thread_ts):
             sandbox_keepalive.cancel(deps.channel_id, deps.thread_ts)
-            try:
-                sandbox_id = get_thread_sandbox_id(deps.channel_id, deps.thread_ts)
-                if sandbox_id:
-                    Sandbox.connect(sandbox_id).pause()
-            except Exception:
-                pass
+            pause_if_idle(deps.channel_id, deps.thread_ts)
 
 
 # Tools kept out of the model's tool list: it finds them with `search_tools`

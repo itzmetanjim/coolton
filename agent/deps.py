@@ -62,6 +62,11 @@ class AgentDeps:
     abuse_stop: str = ""
     # Toolsets reached through search_tools/call_tool (agent.deferred_tools), set by run_agent.
     hidden_toolsets: list = field(default_factory=list)
+    # A subagent's copy of the turn's deps points at the turn's own deps here, where the
+    # per-turn limits (agent.slack_budget) are counted (agent.subagents.subagent_deps).
+    parent_deps: object | None = None
+    # Tools this run may not call, including through code_mode (a subagent's exclusions).
+    excluded_tools: frozenset = frozenset()
     # Snapshot of the in-progress message history, captured right before a
     # `!stop` halts the run (see plan_block.before_tool). Lets run_agent keep
     # everything up to the halt (the user's message, any completed tool

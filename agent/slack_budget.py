@@ -6,7 +6,8 @@ for every other conversation. Past SLACK_CALL_BUDGET calls in one turn, Slack
 tools refuse with a message telling the model to narrow down and answer from
 what it has. Counted on AgentDeps.slack_calls, from both tool paths: the
 pydantic-ai hook in agent.agent (normal tool calls, Slack MCP included) and
-agent.tool_proxy (code_mode, which bypasses those hooks).
+agent.tool_proxy (code_mode, which bypasses those hooks). Subagents' calls count
+toward the turn that started them.
 """
 from __future__ import annotations
 
@@ -40,6 +41,8 @@ def spend(deps, tool_name: str) -> str | None:
     once this turn is past the budget, else None."""
     if deps is None or not is_slack_tool(tool_name):
         return None
+    # A subagent's calls count toward its turn's budget (agent.subagents).
+    deps = getattr(deps, "parent_deps", None) or deps
     with _lock:
         count = (getattr(deps, "slack_calls", 0) or 0) + 1
         deps.slack_calls = count

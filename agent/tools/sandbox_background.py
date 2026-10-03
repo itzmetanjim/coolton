@@ -39,7 +39,7 @@ import re
 import shlex
 import uuid
 
-from agent.sandbox_helpers import get_or_create_sandbox
+from agent.sandbox_helpers import get_or_create_sandbox, pause_if_idle
 
 _JOB_ID_RE = re.compile(r"^[a-f0-9]{8}$")
 _BG_DIR = "~/.coolton_bg"
@@ -72,7 +72,7 @@ def _rearm_or_pause(sandbox, channel_id: str, thread_ts: str, still_running: boo
     if still_running or has_pending_jobs(channel_id, thread_ts):
         sandbox_keepalive.arm(channel_id, thread_ts, BG_JOB_KEEPALIVE_SECONDS)
     else:
-        sandbox.pause()
+        pause_if_idle(channel_id, thread_ts, sandbox)
 
 
 def run_background_command(channel_id: str, thread_ts: str, command: str, user_id: str, cwd: str = "") -> str:
@@ -98,11 +98,11 @@ def run_background_command(channel_id: str, thread_ts: str, command: str, user_i
     try:
         result = sandbox.commands.run(script, timeout=30)
     except Exception as e:
-        sandbox.pause()
+        pause_if_idle(channel_id, thread_ts, sandbox)
         return f"Error starting background command: {e}"
 
     if result.exit_code != 0:
-        sandbox.pause()
+        pause_if_idle(channel_id, thread_ts, sandbox)
         return f"Error starting background command (exit {result.exit_code}): {result.stderr}"
 
     from agent.background_jobs_store import register_job

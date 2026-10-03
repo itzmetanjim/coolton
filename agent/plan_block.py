@@ -416,7 +416,8 @@ TOOL_DISPLAY_NAMES = {
     "agentmail_list_messages": "Listing AgentMail messages",
     "agentmail_read_message": "Reading AgentMail message",
     "agentmail_send_email": "Sending AgentMail email",
-    "delegate_to_subagent": "Running focused subagent",
+    "delegate_to_subagent": "Running a subagent",
+    "delegate_to_subagents": "Running subagents in parallel",
 }
 
 _task_counter = 0

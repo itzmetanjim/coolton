@@ -2109,7 +2109,7 @@ def test_run_agent_finally_cancels_keepalive_before_pausing():
     src = inspect.getsource(agent_mod.run_agent)
     finally_block = src[src.index("finally:"):]
     assert "sandbox_keepalive.cancel(" in finally_block
-    assert finally_block.index("sandbox_keepalive.cancel(") < finally_block.index(".pause()")
+    assert finally_block.index("sandbox_keepalive.cancel(") < finally_block.index("pause_if_idle(")
 
 
 # ---------------------------------------------------------------------------
