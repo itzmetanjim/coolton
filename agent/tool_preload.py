@@ -111,6 +111,8 @@ class PreloadRequest:
     future: Future
     started: float
     name: str
+    provider: str = ""
+    api_key: str = ""
 
 
 def tools_for(groups: set[str]) -> frozenset[str]:
@@ -204,7 +206,8 @@ def start_preload(text: str, history=None) -> PreloadRequest | None:
         previous = _last_reply_text(history)
         if previous:
             state["coolton_previous_reply"] = previous[:_STATE_CHARS]
-        return PreloadRequest(_executor.submit(_decide, entry, state), time.monotonic(), entry["name"])
+        return PreloadRequest(_executor.submit(_decide, entry, state), time.monotonic(), entry["name"],
+                              entry.get("provider", ""), entry.get("api_key", ""))
     except Exception:
         logger.exception("Jev tool preload: couldn't start")
         return None
@@ -226,6 +229,13 @@ def collect_preloads(request: PreloadRequest | None) -> set[str]:
         mark_dead(request.name, f"Jev took over {JEV_TIMEOUT_SECONDS:g}s")
         return set()
     except Exception as e:
+        from agent.provider_config import on_outage
+
+        # The key's account is out but HCAI has another key: later turns use it
+        # (build_jev_provider_order), so Jev isn't down.
+        if on_outage(request.provider, request.api_key, str(e))[0] == "next_key":
+            logger.warning("Jev tool preload failed on an API key that's out, switching keys: %s", e)
+            return set()
         logger.warning("Jev tool preload failed, skipping (marked down): %s", e)
         mark_dead(request.name, f"Jev failed: {e}")
         return set()

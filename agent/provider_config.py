@@ -99,8 +99,7 @@ def get_min_context_window(tag: str | None = None, default: int = 128_000) -> in
         pconf = pmap.get(model_entry["provider"])
         if not pconf:
             continue
-        env_var = pconf.get("api_key_env_var_name")
-        if not (env_var and os.environ.get(env_var)):
+        if not provider_api_key(pconf):
             continue
         window = model_entry.get("context_window")
         if window:
@@ -190,6 +189,56 @@ def provider_family(provider_name: str) -> str:
     return re.sub(r"_\d+$", "", provider_name)
 
 
+def _configured_keys(pconf: dict) -> list[tuple[str, str]]:
+    """(env var, key) for each of the provider's API keys that is set: its
+    api_key_env_var_name, then any fallback_api_key_env_var_names, in order."""
+    names = [pconf.get("api_key_env_var_name"), *(pconf.get("fallback_api_key_env_var_names") or [])]
+    return [(name, os.environ[name]) for name in names if name and os.environ.get(name)]
+
+
+def provider_api_key(pconf: dict) -> str | None:
+    """The API key to call this provider with: its first key not marked out of credits
+    (agent.fallback_cache.mark_key_out), or its first key if they all are (the provider
+    is skipped as dead then anyway, see on_outage). None if it has no key set."""
+    from agent.fallback_cache import get_out_keys
+
+    keys = _configured_keys(pconf)
+    if not keys:
+        return None
+    out = get_out_keys() if len(keys) > 1 else {}
+    return next((key for name, key in keys if name not in out), keys[0][1])
+
+
+def on_outage(provider_id: str, api_key: str, error_text: str, reason: str = "") -> tuple[str | None, str | None]:
+    """Handle a failed call to `provider_id` made with `api_key`
+    (agent.fallback_cache.outage_kind):
+
+    - ("next_key", key): that key's account is out (no credits, a spending limit,
+      banned...), so it's marked out, and the provider has this other key to use instead.
+    - ("provider_out", None): the provider is out for every key, or this was its last
+      usable one: the whole provider family is marked dead.
+    - (None, None): any other error; nothing is marked.
+    """
+    from agent.fallback_cache import get_out_keys, mark_family_dead, mark_key_out, outage_kind
+
+    kind = outage_kind(error_text)
+    if kind is None:
+        return None, None
+    reason = reason or error_text
+    pconf = _provider_map().get(provider_id)
+    if kind == "key" and pconf:
+        keys = _configured_keys(pconf)
+        failed = next((name for name, key in keys if key == api_key), None)
+        if failed:
+            mark_key_out(failed, reason)
+        out = get_out_keys()
+        usable = [key for name, key in keys if name not in out and name != failed]
+        if usable:
+            return "next_key", usable[0]
+    mark_family_dead(provider_id, reason)
+    return "provider_out", None
+
+
 def _provider_map() -> dict[str, dict]:
     return {p["id"]: p for p in _get_providers()}
 
@@ -248,8 +297,7 @@ def build_provider_order(user_id: str | None = None, tag: str | None = None) -> 
         if not pconf:
             continue
 
-        env_var = pconf.get("api_key_env_var_name")
-        api_key = os.environ.get(env_var) if env_var else None
+        api_key = provider_api_key(pconf)
         if not api_key:
             continue  # Provider needs its env var set
 
@@ -295,8 +343,7 @@ def build_vision_chain() -> list[tuple[str, str, str, str]]:
         if not pconf or not pconf.get("api_url"):
             continue
 
-        env_var = pconf.get("api_key_env_var_name")
-        api_key = os.environ.get(env_var) if env_var else None
+        api_key = provider_api_key(pconf)
         if not api_key:
             continue
 
@@ -366,8 +413,7 @@ def get_model_from_config(user_id: str | None = None) -> str:
             continue
         pid = model_entry["provider"]
         pconf = _provider_map().get(pid, {})
-        env_var = pconf.get("api_key_env_var_name")
-        api_key = os.environ.get(env_var) if env_var else None
+        api_key = provider_api_key(pconf)
 
         if not api_key:
             continue
@@ -437,8 +483,7 @@ def build_image_provider_order(quality: str) -> list[dict]:
             pconf = pmap.get(pid)
             if not pconf:
                 continue
-            env_var = pconf.get("api_key_env_var_name")
-            api_key = os.environ.get(env_var) if env_var else None
+            api_key = provider_api_key(pconf)
             if not api_key:
                 continue
             ordered.append({
@@ -470,8 +515,7 @@ def build_jev_provider_order() -> list[dict]:
         pconf = pmap.get(pid)
         if not pconf or not pconf.get("api_url"):
             continue
-        env_var = pconf.get("api_key_env_var_name")
-        api_key = os.environ.get(env_var) if env_var else None
+        api_key = provider_api_key(pconf)
         if not api_key:
             continue
         index = per_provider.get(pid, 0)

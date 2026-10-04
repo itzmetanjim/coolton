@@ -90,24 +90,65 @@ def _clear_dead_marks(cache: dict, provider_name: str) -> list[str]:
     return cleared
 
 
-# Errors that mean a provider's whole account is out, not just one model: a spending limit
-# (HCAI's daily cap, an OpenRouter top-up wait, coolton's own key's limit) or no credits
-# left. Every model on that account fails the same way until it's topped up, so the
-# whole family is skipped (mark_family_dead) instead of retrying each of its models.
-FAMILY_OUTAGE_MARKERS = (
+# Errors that mean one API key's account is out, not just one model: every model called
+# with that key fails the same way until it's topped up, so the provider switches to its
+# next key (agent.provider_config.on_outage), or is skipped as a whole when it has none.
+# From HCAI's own code (github.com/hackclub/ai): its per-account daily spending limit
+# (429 "Daily spending limit of $N reached"), the account's OpenRouter key hitting its
+# limit ("Key limit exceeded", or OpenRouter's "would exceed the ... spending limit"),
+# and a banned, unverified or unknown account (403/401).
+KEY_OUTAGE_MARKERS = (
     "spending limit",
+    "key limit exceeded",
+    "credit limit",
+    "banned from using this service",
+    "identity verification required",
+    "authentication failed",
+    "authentication required",
+    "invalid api key",
+    "invalid_api_key",
+)
+# Errors that mean the provider itself is out for every key: for HCAI, OpenRouter's 402
+# "Insufficient credits" on HCAI's own account (HCAI is down for everyone).
+PROVIDER_OUTAGE_MARKERS = (
     "insufficient credit",
     "out of credits",
-    "credit limit",
     "payment required",
     "status_code: 402",
 )
 
 
-def family_outage_marker(error_text: str) -> str | None:
-    """The FAMILY_OUTAGE_MARKERS entry in `error_text`, or None."""
+def outage_kind(error_text: str) -> str | None:
+    """"provider" (the provider is out for every key), "key" (this key's account is
+    out), or None for any other error."""
     text = (error_text or "").lower()
-    return next((m for m in FAMILY_OUTAGE_MARKERS if m in text), None)
+    if any(m in text for m in PROVIDER_OUTAGE_MARKERS):
+        return "provider"
+    if any(m in text for m in KEY_OUTAGE_MARKERS):
+        return "key"
+    return None
+
+
+def mark_key_out(env_var: str, reason: str) -> None:
+    """Mark the API key in `env_var` out (no credits, a spending limit, banned...) for
+    DEAD_TTL_SECONDS, so its provider uses its next key (agent.provider_config)."""
+    with _cache_lock:
+        cache = _load_cache()
+        cache.setdefault("out_keys", {})[env_var] = {"since": time.time(), "reason": reason[:300]}
+        _save_cache(cache)
+    logger.warning(f"Fallback cache: marked API key {env_var} out ({reason[:120]})")
+
+
+def get_out_keys() -> dict:
+    """API key env vars currently marked out, env var -> reason."""
+    with _cache_lock:
+        cache = _load_cache()
+        now = time.time()
+        return {
+            name: info.get("reason", "out")
+            for name, info in cache.get("out_keys", {}).items()
+            if now - info.get("since", 0) < DEAD_TTL_SECONDS
+        }
 
 
 def get_dead_providers() -> dict:

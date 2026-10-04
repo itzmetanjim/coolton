@@ -865,6 +865,7 @@ def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatc
     "Error code: 429 - Daily spending limit of $3 reached. Need a higher limit? hey@mahadk.com",
     'status_code: 429, body: The request would exceed the "OpenRouter top-up wait" spending limit',
     "status_code: 402, body: Insufficient credits",
+    "status_code: 403, body: You are banned from using this service.",
 ])
 def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(monkeypatch, clean_env, error):
     """HCAI's daily spending cap fails EVERY model routed through its one
@@ -902,7 +903,7 @@ def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(mon
         return SimpleNamespace(output="ok")
 
     warned = []
-    monkeypatch.setattr("agent.hcai_status.warn_credits_limit", lambda deps: warned.append(deps))
+    monkeypatch.setattr("agent.hcai_status.warn_hcai_outage", lambda deps, reason: warned.append(deps))
     fake_agent = SimpleNamespace(run_sync=fake_run_sync)
     deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
 
@@ -915,6 +916,45 @@ def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(mon
     assert marked == ["hcai"]
     assert slept == []  # no exponential-backoff retry against a guaranteed-dead model
     assert warned == [deps]  # the thread is told coolton's HCAI credits ran out
+
+
+def test_run_with_provider_chain_switches_hcai_to_its_next_key_when_one_runs_out(monkeypatch, clean_env, isolated_config):
+    """One HCAI key's account hitting its spending limit isn't HCAI being out: every
+    HCAI model carries on with the next key, and nothing is marked dead or warned."""
+    from types import SimpleNamespace
+
+    isolated_config({
+        "providers": [{"id": "hcai", "api_url": "https://x.invalid/v1", "api_key_env_var_name": "K1",
+                       "fallback_api_key_env_var_names": ["K2"]}],
+        "models": [{"provider": "hcai", "model": "m0"}, {"provider": "hcai", "model": "m1"}],
+    })
+    monkeypatch.setenv("K1", "key-one")
+    monkeypatch.setenv("K2", "key-two")
+    order = [("hcai_0", {"model": "m0", "api_key": "key-one", "base_url": "https://x.invalid/v1"}),
+             ("hcai_1", {"model": "m1", "api_key": "key-one", "base_url": "https://x.invalid/v1"})]
+    monkeypatch.setattr(agent_mod, "_resolve_provider_order", lambda user_id, tag=None: order)
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+    warned = []
+    monkeypatch.setattr("agent.hcai_status.warn_hcai_outage", lambda deps, reason: warned.append(reason))
+    keys = []
+
+    def fake_run_sync(**kwargs):
+        keys.append(kwargs["model"]._provider.client.api_key)
+        if keys[-1] == "key-one":
+            raise RuntimeError("Error code: 429 - Daily spending limit of $3 reached. Need a higher limit? hey@mahadk.com")
+        return SimpleNamespace(output="ok")
+
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
+    _, provider = agent_mod._run_with_provider_chain(SimpleNamespace(run_sync=fake_run_sync), {}, deps)
+
+    from agent import fallback_cache, provider_config
+    assert (provider, keys) == ("hcai_0", ["key-one", "key-two"])
+    assert order[1][1]["api_key"] == "key-two"  # the family's other models switch too
+    assert set(fallback_cache.get_out_keys()) == {"K1"} and fallback_cache.get_dead_families() == {}
+    assert provider_config.provider_api_key(provider_config._provider_map()["hcai"]) == "key-two"
+    assert warned == []
 
 
 def test_run_with_provider_chain_forces_single_tool_call_for_minimax(monkeypatch, clean_env):

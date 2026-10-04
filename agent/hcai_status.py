@@ -8,11 +8,12 @@ a degraded or hallucinating reply doesn't look like coolton itself broke:
   https://ai.hackclub.com/up at the start of every turn (see
   listeners.events.turn.run_agent_turn), warning once `balanceRemaining` drops
   below LOW_BALANCE_THRESHOLD (WARNING_TEXT).
-- coolton's own HCAI key ran out of credits or hit a spending limit: the provider
-  chain sees the error and marks the whole HCAI family dead
-  (agent.agent._run_with_provider_chain), and warns the thread right then
-  (warn_credits_limit); later turns warn at their start while it stays marked
-  (CREDITS_WARNING_TEXT).
+- coolton's own HCAI keys ran out of credits or hit a spending limit: when one key
+  does, HCAI switches to coolton's next key (agent.provider_config.on_outage) with
+  no notice; once every key has, the whole HCAI family is marked dead and the
+  thread is warned right then (warn_hcai_outage, CREDITS_WARNING_TEXT). An error
+  that means HCAI is out for everyone gets WARNING_TEXT the same way. Later turns
+  warn at their start while HCAI stays marked dead.
 
 The turn-start check runs on a background thread so a slow/unreachable status
 endpoint never delays the turn it was meant to warn about. Each thread is warned at
@@ -85,13 +86,20 @@ def _should_warn(channel_id: str, thread_ts: str) -> bool:
         return True
 
 
-def credits_limited() -> bool:
-    """True while the HCAI family is marked dead for a spending limit or no credits
-    (agent.fallback_cache.FAMILY_OUTAGE_MARKERS)."""
-    from agent.fallback_cache import family_outage_marker, get_dead_families
+def _outage_text(reason: str) -> str | None:
+    """The notice for HCAI being marked dead for `reason`, or None if it's not an outage."""
+    from agent.fallback_cache import outage_kind
+
+    kind = outage_kind(reason)
+    return {"provider": WARNING_TEXT, "key": CREDITS_WARNING_TEXT}.get(kind or "")
+
+
+def marked_out_text() -> str | None:
+    """The notice for HCAI while it's marked dead for an outage, else None."""
+    from agent.fallback_cache import get_dead_families
 
     reason = get_dead_families().get(HCAI_FAMILY)
-    return bool(reason) and family_outage_marker(reason) is not None
+    return _outage_text(reason) if reason else None
 
 
 def _post(client, channel_id: str, thread_ts: str, text: str) -> None:
@@ -106,25 +114,26 @@ def _warn_low_balance(client, channel_id: str, thread_ts: str) -> None:
     balance = status.get("balanceRemaining") if status else None
     if isinstance(balance, (int, float)) and balance < LOW_BALANCE_THRESHOLD:
         text = WARNING_TEXT
-    elif credits_limited():
-        text = CREDITS_WARNING_TEXT
     else:
+        text = marked_out_text()
+    if not text:
         return
     if _should_warn(channel_id, thread_ts):
         _post(client, channel_id, thread_ts, text)
 
 
-def warn_credits_limit(deps) -> None:
-    """Warn this run's thread that coolton's HCAI key is out of credits or at a spending
-    limit, the moment the provider chain hits it. Never raises."""
+def warn_hcai_outage(deps, reason: str) -> None:
+    """Warn this run's thread the moment the provider chain finds HCAI out (every
+    coolton key out of credits or at a limit, or HCAI down for everyone). Never raises."""
+    text = _outage_text(reason)
     channel_id = getattr(deps, "channel_id", "") or ""
     thread_ts = getattr(deps, "thread_ts", "") or ""
-    if not channel_id or not _should_warn(channel_id, thread_ts):
+    if not text or not channel_id or not _should_warn(channel_id, thread_ts):
         return
     try:
-        deps.get_surface().post_text(CREDITS_WARNING_TEXT)
+        deps.get_surface().post_text(text)
     except Exception:
-        logger.exception("Failed to post the HCAI credits warning to %s/%s", channel_id, thread_ts)
+        logger.exception("Failed to post the HCAI outage warning to %s/%s", channel_id, thread_ts)
 
 
 def check_and_warn_async(client, channel_id: str, thread_ts: str) -> None:

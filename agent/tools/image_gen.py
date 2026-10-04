@@ -19,14 +19,22 @@ ASPECT_TO_SIZE = {
 }
 
 
-def _family_outage(result: str) -> bool:
-    """A spending limit or no credits on the provider's whole account (see
-    agent.fallback_cache.FAMILY_OUTAGE_MARKERS): every HCAI model, chat and image,
-    fails the same way until it's topped up, so seeing it from any of them stops us
-    trying the others one by one. agent.agent._run_with_provider_chain does the same."""
-    from agent.fallback_cache import family_outage_marker
+def _with_key_fallback(call, api_key: str, provider: str | None) -> str:
+    """`call(api_key)`, retried with the provider's next API key while the one it used
+    is out of credits or at a spending limit (agent.provider_config.on_outage, the same
+    as the chat chain does). A provider with no usable key left is marked dead."""
+    from agent.provider_config import on_outage
 
-    return family_outage_marker(result) is not None
+    result = call(api_key)
+    for _ in range(5):
+        if "image(s)" in result or not provider:
+            return result
+        outage, next_key = on_outage(provider, api_key, result)
+        if outage != "next_key":
+            return result
+        api_key = next_key
+        result = call(api_key)
+    return result
 
 
 def _resolve_size(size: str, aspect_ratio: str | None) -> str:
@@ -64,7 +72,7 @@ def generate_image(
             if ep:
                 return _generate_openai_compatible(ep["api_key"], ep["base_url"], ep["model"], prompt, n, size, aspect_ratio)
 
-    from agent.fallback_cache import get_dead_families, mark_family_dead
+    from agent.fallback_cache import get_dead_families
     from agent.provider_config import build_image_provider_order
 
     dead_families = set(get_dead_families())
@@ -87,11 +95,13 @@ def generate_image(
     for api_key, base_url, model, provider in attempts:
         if provider in dead_families:
             continue  # a sibling attempt above just marked this family dead
-        result = _generate_openai_compatible(api_key, base_url, model, prompt, n, size, aspect_ratio)
+        result = _with_key_fallback(
+            lambda key: _generate_openai_compatible(key, base_url, model, prompt, n, size, aspect_ratio),  # noqa: B023
+            api_key, provider,
+        )
         if "image(s)" in result:
             return result
-        if provider and _family_outage(result):
-            mark_family_dead(provider, result)
+        if provider and provider in get_dead_families():
             dead_families.add(provider)
     return result
 
@@ -123,7 +133,7 @@ def edit_images(prompt: str, references: list[bytes], quality: str = "low") -> s
         if len(data) > MAX_REFERENCE_BYTES:
             return f"Error: reference image {i} is {len(data) // (1024 * 1024)}MB; resize it below 8MB first."
 
-    from agent.fallback_cache import get_dead_families, mark_family_dead
+    from agent.fallback_cache import get_dead_families
     from agent.provider_config import build_image_provider_order
 
     dead_families = set(get_dead_families())
@@ -135,11 +145,13 @@ def edit_images(prompt: str, references: list[bytes], quality: str = "low") -> s
     for config in attempts:
         if config.get("provider") in dead_families:
             continue
-        result = _edit_via_chat_completions(config["api_key"], config["base_url"], config["model"], prompt, references)
+        result = _with_key_fallback(
+            lambda key: _edit_via_chat_completions(key, config["base_url"], config["model"], prompt, references),  # noqa: B023
+            config["api_key"], config.get("provider"),
+        )
         if "image(s)" in result:
             return result
-        if config.get("provider") and _family_outage(result):
-            mark_family_dead(config["provider"], result)
+        if config.get("provider") and config["provider"] in get_dead_families():
             dead_families.add(config["provider"])
     return result
 

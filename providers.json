@@ -1,6 +1,6 @@
 {
   "providers": [
-    {"id": "hcai", "api_url": "https://ai.hackclub.com/proxy/v1", "api_key_env_var_name": "HCAI_API_KEY", "displayname": "Hack Club AI", "max_retries": 5},
+    {"id": "hcai", "api_url": "https://ai.hackclub.com/proxy/v1", "api_key_env_var_name": "HCAI_API_KEY", "fallback_api_key_env_var_names": ["HCAI_API_KEY_2"], "displayname": "Hack Club AI", "max_retries": 5},
     {"id": "anthropic", "api_url": null, "api_key_env_var_name": "ANTHROPIC_API_KEY", "displayname": "Anthropic"},
     {"id": "openai", "api_url": null, "api_key_env_var_name": "OPENAI_API_KEY", "displayname": "OpenAI"},
     {"id": "groq", "api_url": null, "api_key_env_var_name": "GROQ_API_KEY", "displayname": "Groq"},

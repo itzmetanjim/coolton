@@ -3410,21 +3410,21 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
     to the finished web conversation, which the UI showed as a new turn still
     running — and its [!DEBUG] attempts are labelled with it.
     """
-    from agent.fallback_cache import mark_alive, mark_dead, mark_family_dead, set_working_provider
+    from agent.fallback_cache import mark_alive, mark_dead, set_working_provider
     from agent.plan_block import set_model_task
 
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
     provider_order = _resolve_provider_order(deps.user_id, tag=deps.provider_tag_filter)
 
-    # Family-wide outages (a spending limit or no credits left on a provider's account,
-    # agent.fallback_cache.FAMILY_OUTAGE_MARKERS) are checked BEFORE the generic
-    # retryable/hard-error logic below, deliberately overriding "429" being in
-    # retryable_errors: HCAI's spending limits surface as a 429 on EVERY model routed
-    # through that one account, so treating it as an ordinary rate limit meant retrying
-    # the same dead model with exponential backoff (up to 5x for HCAI's configured
-    # max_retries) before even moving to the next of its chat models, each repeating the
-    # same slow, guaranteed-to-fail cycle.
-    from agent.fallback_cache import family_outage_marker
+    # Outages of a provider's account (agent.fallback_cache.outage_kind: no credits, a
+    # spending limit, a banned key...) are checked BEFORE the generic retryable/hard-error
+    # logic below, deliberately overriding "429" being in retryable_errors: HCAI's
+    # spending limits surface as a 429 on EVERY model routed through that one account, so
+    # treating it as an ordinary rate limit meant retrying the same dead model with
+    # exponential backoff (up to 5x for HCAI's configured max_retries) before even moving
+    # to the next of its chat models, each repeating the same slow, guaranteed-to-fail
+    # cycle. A key that's out switches the provider to its next key instead
+    # (provider_config.on_outage); with none left, the whole family is skipped.
 
     # Families that hit a family-wide outage DURING this turn — the loop skips
     # their remaining models immediately. Families already cached as dead are
@@ -3621,16 +3621,24 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
                     run_kwargs["message_history"] = deps.last_attempt_messages
                     run_kwargs["user_prompt"] = None
                     checkpoint_baseline = deps.last_attempt_messages
-                outage_marker = family_outage_marker(str(e))
-                if outage_marker and provider_name != "byok":
-                    mark_family_dead(family, err)
+                outage, next_key = (None, None) if provider_name == "byok" else provider_config.on_outage(
+                    family, prov_config.get("api_key") or "", str(e), err)
+                if outage == "next_key":
+                    # This API key's account is out (no credits, a spending limit...), but the
+                    # provider has another key: every model of the family uses it from now on.
+                    for other_name, other_config in provider_order:
+                        if provider_config.provider_family(other_name) == family:
+                            other_config["api_key"] = next_key
+                    logger.warning(f"{provider_name}: this {family} API key is out, switching to its next key: {err}")
+                    continue
+                if outage == "provider_out":
                     dead_families_this_turn.add(family)
-                    from agent.hcai_status import HCAI_FAMILY, warn_credits_limit
+                    from agent.hcai_status import HCAI_FAMILY, warn_hcai_outage
                     if family == HCAI_FAMILY:
-                        warn_credits_limit(deps)
+                        warn_hcai_outage(deps, err)
                     logger.warning(
-                        f"{provider_name} hit a family-wide outage ('{outage_marker}') — "
-                        f"marked '{family}' dead, skipping its remaining models: {err}"
+                        f"{provider_name} hit a family-wide outage — marked '{family}' dead, "
+                        f"skipping its remaining models: {err}"
                     )
                     break  # Don't retry or try siblings in this family; move past it
                 if is_hard_error(e):
