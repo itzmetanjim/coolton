@@ -90,6 +90,26 @@ def _clear_dead_marks(cache: dict, provider_name: str) -> list[str]:
     return cleared
 
 
+# Errors that mean a provider's whole account is out, not just one model: a spending limit
+# (HCAI's daily cap, an OpenRouter top-up wait, coolton's own key's limit) or no credits
+# left. Every model on that account fails the same way until it's topped up, so the
+# whole family is skipped (mark_family_dead) instead of retrying each of its models.
+FAMILY_OUTAGE_MARKERS = (
+    "spending limit",
+    "insufficient credit",
+    "out of credits",
+    "credit limit",
+    "payment required",
+    "status_code: 402",
+)
+
+
+def family_outage_marker(error_text: str) -> str | None:
+    """The FAMILY_OUTAGE_MARKERS entry in `error_text`, or None."""
+    text = (error_text or "").lower()
+    return next((m for m in FAMILY_OUTAGE_MARKERS if m in text), None)
+
+
 def get_dead_providers() -> dict:
     """Providers currently in cooldown after a hard failure, name -> reason."""
     with _cache_lock:

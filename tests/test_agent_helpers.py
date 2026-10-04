@@ -861,7 +861,12 @@ def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatc
     assert shown_models == ["hcai_0 / openai/gpt-5.6-luna", "anthropic / anthropic:claude-sonnet-4-6"]
 
 
-def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(monkeypatch, clean_env):
+@pytest.mark.parametrize("error", [
+    "Error code: 429 - Daily spending limit of $3 reached. Need a higher limit? hey@mahadk.com",
+    'status_code: 429, body: The request would exceed the "OpenRouter top-up wait" spending limit',
+    "status_code: 402, body: Insufficient credits",
+])
+def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(monkeypatch, clean_env, error):
     """HCAI's daily spending cap fails EVERY model routed through its one
     shared account with a 429 — and "429" is in retryable_errors, so before
     this check existed the same dead model got retried with exponential
@@ -893,11 +898,11 @@ def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(mon
     def fake_run_sync(**kwargs):
         attempted.append(kwargs.get("model"))
         if len(attempted) == 1:
-            raise RuntimeError(
-                "Error code: 429 - Daily spending limit of $3 reached. Need a higher limit? hey@mahadk.com"
-            )
+            raise RuntimeError(error)
         return SimpleNamespace(output="ok")
 
+    warned = []
+    monkeypatch.setattr("agent.hcai_status.warn_credits_limit", lambda deps: warned.append(deps))
     fake_agent = SimpleNamespace(run_sync=fake_run_sync)
     deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
 
@@ -909,6 +914,7 @@ def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(mon
     assert len(attempted) == 2
     assert marked == ["hcai"]
     assert slept == []  # no exponential-backoff retry against a guaranteed-dead model
+    assert warned == [deps]  # the thread is told coolton's HCAI credits ran out
 
 
 def test_run_with_provider_chain_forces_single_tool_call_for_minimax(monkeypatch, clean_env):

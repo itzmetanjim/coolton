@@ -3416,20 +3416,15 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
     # Provider fallback order: BYOK endpoint → Anthropic → OpenAI → OpenRouter → Cerebras
     provider_order = _resolve_provider_order(deps.user_id, tag=deps.provider_tag_filter)
 
-    # Family-wide outage markers checked BEFORE the generic retryable/hard-error
-    # logic below — this deliberately overrides "429" being in retryable_errors.
-    # HCAI's daily spending cap surfaces as a 429 on EVERY model routed through
-    # that one shared account, so treating it as an ordinary rate limit meant
-    # retrying the same dead model with exponential backoff (up to 5x for
-    # HCAI's configured max_retries) before even moving to the next of its ~7
-    # chat models, each repeating the same slow, guaranteed-to-fail cycle.
-    family_outage_markers = [
-        "daily spending limit",
-    ]
-
-    def family_outage_marker(error: Exception) -> str | None:
-        error_str = str(error).lower()
-        return next((m for m in family_outage_markers if m in error_str), None)
+    # Family-wide outages (a spending limit or no credits left on a provider's account,
+    # agent.fallback_cache.FAMILY_OUTAGE_MARKERS) are checked BEFORE the generic
+    # retryable/hard-error logic below, deliberately overriding "429" being in
+    # retryable_errors: HCAI's spending limits surface as a 429 on EVERY model routed
+    # through that one account, so treating it as an ordinary rate limit meant retrying
+    # the same dead model with exponential backoff (up to 5x for HCAI's configured
+    # max_retries) before even moving to the next of its chat models, each repeating the
+    # same slow, guaranteed-to-fail cycle.
+    from agent.fallback_cache import family_outage_marker
 
     # Families that hit a family-wide outage DURING this turn — the loop skips
     # their remaining models immediately. Families already cached as dead are
@@ -3626,10 +3621,13 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
                     run_kwargs["message_history"] = deps.last_attempt_messages
                     run_kwargs["user_prompt"] = None
                     checkpoint_baseline = deps.last_attempt_messages
-                outage_marker = family_outage_marker(e)
+                outage_marker = family_outage_marker(str(e))
                 if outage_marker and provider_name != "byok":
                     mark_family_dead(family, err)
                     dead_families_this_turn.add(family)
+                    from agent.hcai_status import HCAI_FAMILY, warn_credits_limit
+                    if family == HCAI_FAMILY:
+                        warn_credits_limit(deps)
                     logger.warning(
                         f"{provider_name} hit a family-wide outage ('{outage_marker}') — "
                         f"marked '{family}' dead, skipping its remaining models: {err}"

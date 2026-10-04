@@ -1,12 +1,22 @@
 """Hack Club AI (HCAI) balance check — warns a Slack thread when coolton's
 primary provider is about to fall back to a much worse model.
 
-Hits https://ai.hackclub.com/up at the start of every turn (see
-listeners.events.turn.run_agent_turn) and, once `balanceRemaining` drops below
-LOW_BALANCE_THRESHOLD, posts a heads-up into the thread so a degraded or
-hallucinating reply doesn't look like coolton itself broke. The check runs on
-a background thread so a slow/unreachable status endpoint never delays the
-turn it was meant to warn about.
+Two ways HCAI stops working for coolton, each with its own notice in the thread so
+a degraded or hallucinating reply doesn't look like coolton itself broke:
+
+- HCAI as a whole is down (its global credits ran out): checked against
+  https://ai.hackclub.com/up at the start of every turn (see
+  listeners.events.turn.run_agent_turn), warning once `balanceRemaining` drops
+  below LOW_BALANCE_THRESHOLD (WARNING_TEXT).
+- coolton's own HCAI key ran out of credits or hit a spending limit: the provider
+  chain sees the error and marks the whole HCAI family dead
+  (agent.agent._run_with_provider_chain), and warns the thread right then
+  (warn_credits_limit); later turns warn at their start while it stays marked
+  (CREDITS_WARNING_TEXT).
+
+The turn-start check runs on a background thread so a slow/unreachable status
+endpoint never delays the turn it was meant to warn about. Each thread is warned at
+most once per _REWARN_AFTER_SECONDS, whichever notice it is.
 """
 
 from __future__ import annotations
@@ -23,9 +33,16 @@ HCAI_STATUS_URL = "https://ai.hackclub.com/up"
 LOW_BALANCE_THRESHOLD = 0.10
 _REQUEST_TIMEOUT_SECONDS = 5
 
+HCAI_FAMILY = "hcai"
+
 WARNING_TEXT = (
     "_HCAI is down, so coolton will fall back to significantly worse "
     "models. Expect degraded responses and hallucinations._"
+)
+CREDITS_WARNING_TEXT = (
+    "_coolton's HCAI credits ran out or hit a spending limit, so coolton will fall back "
+    "to significantly worse models until they're topped up. Expect degraded responses "
+    "and hallucinations._"
 )
 
 # Re-warn the same thread at most this often — without this, every single
@@ -68,23 +85,46 @@ def _should_warn(channel_id: str, thread_ts: str) -> bool:
         return True
 
 
+def credits_limited() -> bool:
+    """True while the HCAI family is marked dead for a spending limit or no credits
+    (agent.fallback_cache.FAMILY_OUTAGE_MARKERS)."""
+    from agent.fallback_cache import family_outage_marker, get_dead_families
+
+    reason = get_dead_families().get(HCAI_FAMILY)
+    return bool(reason) and family_outage_marker(reason) is not None
+
+
+def _post(client, channel_id: str, thread_ts: str, text: str) -> None:
+    try:
+        client.chat_postMessage(channel=channel_id, thread_ts=thread_ts or None, text=text)
+    except Exception:
+        logger.exception("Failed to post HCAI warning to %s/%s", channel_id, thread_ts)
+
+
 def _warn_low_balance(client, channel_id: str, thread_ts: str) -> None:
     status = fetch_status()
-    if status is None:
+    balance = status.get("balanceRemaining") if status else None
+    if isinstance(balance, (int, float)) and balance < LOW_BALANCE_THRESHOLD:
+        text = WARNING_TEXT
+    elif credits_limited():
+        text = CREDITS_WARNING_TEXT
+    else:
         return
-    balance = status.get("balanceRemaining")
-    if not isinstance(balance, (int, float)) or balance >= LOW_BALANCE_THRESHOLD:
-        return
-    if not _should_warn(channel_id, thread_ts):
+    if _should_warn(channel_id, thread_ts):
+        _post(client, channel_id, thread_ts, text)
+
+
+def warn_credits_limit(deps) -> None:
+    """Warn this run's thread that coolton's HCAI key is out of credits or at a spending
+    limit, the moment the provider chain hits it. Never raises."""
+    channel_id = getattr(deps, "channel_id", "") or ""
+    thread_ts = getattr(deps, "thread_ts", "") or ""
+    if not channel_id or not _should_warn(channel_id, thread_ts):
         return
     try:
-        client.chat_postMessage(
-            channel=channel_id, thread_ts=thread_ts or None, text=WARNING_TEXT,
-        )
+        deps.get_surface().post_text(CREDITS_WARNING_TEXT)
     except Exception:
-        logger.exception(
-            "Failed to post HCAI low-balance warning to %s/%s", channel_id, thread_ts,
-        )
+        logger.exception("Failed to post the HCAI credits warning to %s/%s", channel_id, thread_ts)
 
 
 def check_and_warn_async(client, channel_id: str, thread_ts: str) -> None:

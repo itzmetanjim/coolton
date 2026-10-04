@@ -19,18 +19,14 @@ ASPECT_TO_SIZE = {
 }
 
 
-# Substring of HCAI's own error text when its one shared account hits its
-# daily spending cap — every HCAI model (chat and image) fails the same way
-# until the cap resets, so seeing this from ANY of them should stop us from
-# wasting the rest of this call (and future ones, within the cooldown) trying
-# every other HCAI model one by one. See agent.agent._run_with_provider_chain
-# for the matching chat-side check.
-_FAMILY_OUTAGE_MARKERS = ["daily spending limit"]
-
-
 def _family_outage(result: str) -> bool:
-    r = result.lower()
-    return any(m in r for m in _FAMILY_OUTAGE_MARKERS)
+    """A spending limit or no credits on the provider's whole account (see
+    agent.fallback_cache.FAMILY_OUTAGE_MARKERS): every HCAI model, chat and image,
+    fails the same way until it's topped up, so seeing it from any of them stops us
+    trying the others one by one. agent.agent._run_with_provider_chain does the same."""
+    from agent.fallback_cache import family_outage_marker
+
+    return family_outage_marker(result) is not None
 
 
 def _resolve_size(size: str, aspect_ratio: str | None) -> str:

@@ -9,8 +9,9 @@ from agent import hcai_status
 
 
 @pytest.fixture(autouse=True)
-def _clear_state():
+def _clear_state(monkeypatch):
     hcai_status._last_warned.clear()
+    monkeypatch.setattr("agent.fallback_cache.get_dead_families", lambda: {})
     yield
     hcai_status._last_warned.clear()
 
@@ -156,3 +157,30 @@ def test_check_and_warn_async_runs_on_a_background_thread(monkeypatch):
             break
         time.sleep(0.02)
     assert calls == [(client, "C1", "1.1")]
+
+
+@pytest.mark.parametrize("reason,warns", [
+    ('raw HTTP 429 body: The request would exceed the "OpenRouter top-up wait" spending limit', True),
+    ("status_code: 402, body: Insufficient credits", True),
+    ("connection reset", False),
+])
+def test_turn_start_warns_while_coolton_s_hcai_credits_are_out(monkeypatch, reason, warns):
+    monkeypatch.setattr(hcai_status, "fetch_status", lambda: {"balanceRemaining": 5.0})
+    monkeypatch.setattr("agent.fallback_cache.get_dead_families", lambda: {"hcai": reason})
+    client = Mock()
+    hcai_status._warn_low_balance(client, "C1", "1.1")
+    if warns:
+        client.chat_postMessage.assert_called_once_with(
+            channel="C1", thread_ts="1.1", text=hcai_status.CREDITS_WARNING_TEXT,
+        )
+    else:
+        client.chat_postMessage.assert_not_called()
+
+
+def test_hitting_the_credits_limit_mid_turn_warns_the_thread_once():
+    surface = Mock()
+    deps = Mock(channel_id="C1", thread_ts="1.1")
+    deps.get_surface.return_value = surface
+    hcai_status.warn_credits_limit(deps)
+    hcai_status.warn_credits_limit(deps)  # e.g. a parallel subagent hitting it too
+    surface.post_text.assert_called_once_with(hcai_status.CREDITS_WARNING_TEXT)
