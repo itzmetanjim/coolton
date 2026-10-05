@@ -69,6 +69,14 @@ and use `search_slack_tool` for messages. Start with the key term on its own and
 to narrow it down. A task with several parts may be several unrelated questions, search each \
 separately.
 
+Be thorough, not fast: getting it right matters more than finishing quickly. Run several \
+genuinely different searches, then read the best hits in full (the whole thread, linked pages, \
+repos, profiles): search results are leads, not answers. Keep going until a message, page or \
+piece of code states each detail you were asked for; a plausible guess isn't an answer. If a \
+candidate doesn't fit every clue in the task, keep looking for one that does. Say plainly what \
+the evidence shows, and what you couldn't find after trying hard; never guess or invent. Put the \
+exact permalink or URL next to every fact.
+
 Git repos: to see inside one (GitHub, GitLab, Codeberg, any git URL), clone it into the sandbox \
 (`git clone --depth 1 <url> /home/user/repos/<name>`) and read it there with the sandbox tools, \
 instead of fetching its web pages. Fall back to fetching only if cloning fails.
@@ -288,6 +296,8 @@ def run_subagent(target: str, task: str, deps: AgentDeps) -> str:
         toolsets=toolsets,
         capabilities=capabilities,
         model_settings={
+            # Careful work over speed, except the summarizer (observational memory, summaries).
+            **({} if target == "summarizer" else {"openai_reasoning_effort": "high"}),
             "anthropic_cache_instructions": True,
             "anthropic_cache_tool_definitions": True,
             "anthropic_cache": True,

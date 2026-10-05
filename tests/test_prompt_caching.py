@@ -103,6 +103,7 @@ def test_run_agent_enables_anthropic_prompt_caching(captured_runs):
     assert settings["anthropic_cache_instructions"] is True
     assert settings["anthropic_cache_tool_definitions"] is True
     assert settings["anthropic_cache"] is True
+    assert settings["openai_reasoning_effort"] == "high"  # careful answers over fast ones
 
 
 def test_run_agent_sets_one_openai_prompt_cache_key_for_every_thread(captured_runs):

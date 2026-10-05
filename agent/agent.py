@@ -1424,7 +1424,7 @@ def submit_feedback_tool(ctx: RunContext[AgentDeps], kind: str, body: str) -> st
 
 
 @agent.tool
-def search_slack_tool(ctx: RunContext[AgentDeps], query: str, count: int = 5) -> str:
+def search_slack_tool(ctx: RunContext[AgentDeps], query: str, count: int = 10) -> str:
     """Search Slack messages in public channels (plus the current conversation). Your
     default message search.
 
@@ -1436,7 +1436,7 @@ def search_slack_tool(ctx: RunContext[AgentDeps], query: str, count: int = 5) ->
 
     Args:
         query: The search query.
-        count: Number of results to return (default 5, max 20).
+        count: Number of results to return (default 10, max 20).
     """
     from agent.tools.slack_search import search_slack_messages
     return search_slack_messages(query, count, current_channel_id=ctx.deps.channel_id)
@@ -3172,6 +3172,10 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
         #   24h retention covers realistic gaps between messages (the
         #   in-memory default is much shorter-lived).
         model_settings={
+            # Think harder before acting: careful answers over fast ones. Every chat model in
+            # providers.json accepts it (checked live 2026-10-05); about 4x luna's default
+            # reasoning on a hard question.
+            "openai_reasoning_effort": "high",
             "anthropic_cache_instructions": True,
             "anthropic_cache_tool_definitions": True,
             "anthropic_cache": True,
