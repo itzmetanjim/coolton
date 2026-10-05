@@ -20,7 +20,7 @@ class _Surface:
         return f"Reacted with :{emoji_name}:"
 
 
-def _run(model_fn, monkeypatch):
+def _run(model_fn, monkeypatch, tools=()):
     surface = _Surface()
     monkeypatch.setattr("agent.tools.emoji_reaction._surface", lambda deps: surface)
     monkeypatch.setattr("agent.tools.emoji_reaction.random.random", lambda: 1.0)  # never randomly skip
@@ -30,7 +30,7 @@ def _run(model_fn, monkeypatch):
         calls.append(info)
         return model_fn(messages, info)
 
-    test_agent = Agent(FunctionModel(counting), deps_type=SimpleNamespace, output_type=agent_mod.OUTPUT_TYPE)
+    test_agent = Agent(FunctionModel(counting), deps_type=SimpleNamespace, output_type=agent_mod.OUTPUT_TYPE, tools=tools)
     result = test_agent.run_sync("hi", deps=SimpleNamespace())
     return result, surface, calls
 
@@ -62,3 +62,19 @@ def test_a_failed_reaction_still_sends_the_reply(monkeypatch):
         deps_type=SimpleNamespace, output_type=agent_mod.OUTPUT_TYPE,
     )
     assert test_agent.run_sync("hi", deps=SimpleNamespace()).output == "still here"
+
+
+def test_a_turn_reacts_to_its_message_only_once(monkeypatch):
+    """Seen live: a long turn reacted first, again ~35 steps later (the model forgot),
+    and once more when it ended with text_only_response: three reactions on one message."""
+    from agent.tools.emoji_reaction import add_emoji_reaction
+
+    steps = iter([
+        ToolCallPart("add_emoji_reaction", {"emoji_name": "brain"}),
+        ToolCallPart("add_emoji_reaction", {"emoji_name": "trophy"}),
+        ToolCallPart("text_only_response", {"emoji_name": "medal", "response": "done"}),
+    ])
+    result, surface, _ = _run(lambda messages, info: ModelResponse(parts=[next(steps)]), monkeypatch,
+                              tools=[add_emoji_reaction])
+    assert result.output == "done"
+    assert surface.reactions == ["brain"]

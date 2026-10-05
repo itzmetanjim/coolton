@@ -49,6 +49,9 @@ class AgentDeps:
     model_context_window: int = 0
     # Slack tool calls made this turn (agent.slack_budget caps them).
     slack_calls: int = 0
+    # What this turn reacted to its message with; set once, so it never reacts twice
+    # (agent.tools.emoji_reaction).
+    reacted_with: str = ""
     # agent.tool_preload: the in-flight Jev request (started at turn start),
     # and the deferred tool groups it decided to load for this turn.
     tool_preload: object | None = None
