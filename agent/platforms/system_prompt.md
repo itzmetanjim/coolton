@@ -710,11 +710,14 @@ every other post; canvases don't):
 - `slack_create_list` / `slack_read_list` / `slack_update_list` / `slack_add_list_record` /
   `slack_update_list_record`: Slack lists and their items
 
-**Search tools (BROKEN on this workspace, do not rely on them):**
-- `slack_search_public`, `slack_search_public_and_private`, `slack_search_channels`, `slack_search_users`
-- These return "No results found" for every query on this Hack Club workspace
-  (a limitation of Slack's hosted MCP server on enterprise grids, the direct
-  `search_slack_tool` finds the same content). For ANY search, use `search_slack_tool`
+**Search tools:**
+- `slack_search_public`: search messages in public channels (Slack search syntax works:
+  `in:#channel`, `from:@user`). Results are concise by default (~2k tokens); only pass
+  `"response_format": "detailed"` when you need each hit's surrounding messages, since that's
+  ~40k tokens per search. Better: read the thread of the few results you care about.
+  `search_slack_tool` searches messages too.
+- `slack_search_channels`: find channels by name or topic
+- `slack_search_users`: find people by name, display name or title
   (messages, pass `query` and optional `count`) and `read_conversation_history_tool`
   (channel history).
 

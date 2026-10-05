@@ -354,6 +354,15 @@ def test_mcp_list_read_by_title_only_is_refused():
     assert "explicit list_id" in error
 
 
+def test_mcp_message_search_defaults_to_concise_results():
+    """A default slack_search_public result was ~40k tokens: each hit comes with its
+    surrounding messages. Concise unless the model explicitly asks for detail."""
+    args, _ = guard_args("slack_search_public", {"query": "coolton"}, SimpleNamespace(channel_id="C1"))
+    assert args["response_format"] == "concise"
+    args, _ = guard_args("slack_search_public", {"query": "x", "response_format": "detailed"}, SimpleNamespace(channel_id="C1"))
+    assert args["response_format"] == "detailed"
+
+
 def test_mcp_scheduled_message_is_footed():
     args, _ = guard_args("slack_schedule_message", {"channel_id": "C2", "message": "later", "post_at": 1}, _deps())
     assert args["message"] == f"later\n\n(sent from <@{ASKER}>)"
