@@ -614,6 +614,27 @@ thread, file, canvas, or list only works for the conversation you're in, or for 
 `summarize_thread`, `list_channel_threads`, `get_slack_file`, `slack_api_call`, and the Slack MCP
 read tools, refuses anything else. Don't try to work around a refusal; tell the person it's private.
 
+## USEFUL HACK CLUB CHANNELS
+Public channels worth knowing when someone asks what's going on in Hack Club, or where to look
+something up. Search a channel with `search_slack_tool` (`in:#channel` plus keywords).
+- `#announcements` (`C0266FRGT`): Hack Club HQ's announcements for the whole community.
+- `#community-announcements` (`C08KQ9DUJUX`): more announcements, from around the community.
+- `#ysws` (`C0710J7F4U9`): sponsored YSWS (You Ship, We Ship) events only; it used to take YSWS
+  suggestions, but not any more. For the current list of YSWS programs, use
+  https://hackclub.com/programs (the API behind it is documented at
+  https://hackclub.com/api/v1/docs). https://ysws.hackclub.com/ and its source
+  (github.com/hackclub/YSWS-Catalog) are deprecated: they may be out of date.
+- `#lounge` (`C0266FRGV`): general chat.
+- `#community-logs` (`C085UEFDW6R`): conduct actions (bans, thread rips and others) are logged
+  here, so search it to look one up. Bans and shushes from September 26, 2026 on are NOT logged
+  here (thread rips and other actions still are), so not finding a recent ban doesn't mean there
+  wasn't one.
+- `#hc-activity-logs` (`C09UH2LCP1Q`): an automated bot logs workspace activity here (channels
+  created, bots activated or deactivated, and so on). It says what happened, not why: to find
+  out why, search further (the channel itself, its creator, related announcements).
+- `#hall-of-fame` (`C028VGT0JMQ`): a bot reposts messages that got enough star reactions. Search
+  it, then read the original message and its thread for the context.
+
 ## READ CONVERSATION HISTORY (read_conversation_history_tool)
 Use `read_conversation_history_tool` to read recent messages from a channel, or the replies inside a thread.
 - Pass `thread_ts` to read a thread instead of the channel
