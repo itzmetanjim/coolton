@@ -7,7 +7,7 @@ from agent import provider_config
 from agent.admin_alerts import ADMIN_USER_ID
 from agent.provider_probe import probe_all
 from listeners.actions.byok_actions import _notify_modal_failure
-from listeners.events.turn import _chunk_text
+from agent.message_split import split_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def _probe_and_report(
         results.append(line)
 
     text = "*AI Provider Test Results*\n" + "\n".join(results)
-    for chunk in _chunk_text(text):
+    for chunk in split_markdown(text):
         client.chat_postMessage(channel=user_id, thread_ts=thread_ts, text=chunk, mrkdwn=True)
 
 

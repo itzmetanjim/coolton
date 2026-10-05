@@ -13,14 +13,12 @@ from slack_sdk import WebClient
 
 import agent.thread_status as thread_status
 from agent import AgentDeps, run_agent
+from agent.message_split import MARKDOWN_LIMIT, split_markdown
 from agent.redact import redact as _redact
 from agent.surface import get_surface as _surface
 from thread_context import conversation_store, conversation_trace_store
 from listeners.views.feedback_builder import build_feedback_blocks
 
-# chat.postMessage hard-caps text at 40,000 chars; stay under it when chunking a
-# response that the streaming API rejected as msg_too_long.
-_MAX_MESSAGE_CHARS = 38000
 
 # run_agent_turn recurses into itself (via the `finally` block below) to drain
 # a message stranded in the steering queue by the run that's ending. Each
@@ -31,39 +29,12 @@ _MAX_MESSAGE_CHARS = 38000
 _MAX_STRANDED_RECURSION_DEPTH = 25
 
 
-def _chunk_text(text: str, limit: int = _MAX_MESSAGE_CHARS) -> list[str]:
-    """Split text into chunks of at most `limit` chars, on line boundaries.
-
-    A single over-long line is hard-split at the limit so the total still fits
-    Slack's per-message cap.
-    """
-    if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
-    current: list[str] = []
-    current_len = 0
-    for line in text.splitlines(keepends=True):
-        if len(line) > limit:
-            if current:
-                chunks.append("".join(current))
-                current, current_len = [], 0
-            chunks.extend(line[i : i + limit] for i in range(0, len(line), limit))
-            continue
-        if current_len + len(line) > limit and current:
-            chunks.append("".join(current))
-            current, current_len = [], 0
-        current.append(line)
-        current_len += len(line)
-    if current:
-        chunks.append("".join(current))
-    return chunks
-
-
 def _post_fallback_response(
     *, client: WebClient, logger: Logger, channel_id: str, thread_ts: str,
     output: str, feedback_blocks,
 ) -> None:
-    """Deliver a response with regular chat.postMessage when streaming fails.
+    """Deliver a response with regular chat.postMessage, split into parts that each fit
+    one message (agent.message_split), when it can't be streamed.
 
     Uses markdown_text (not text) so the model's GFM-style output (**bold**,
     [links](url), etc.) actually renders — plain `text` is parsed as Slack's
@@ -74,8 +45,8 @@ def _post_fallback_response(
     # agent.code_channel_store) — coerce to None so this posts at channel
     # level instead of threading under a "" ts.
     thread_ts = thread_ts or None
-    for chunk in _chunk_text(output):
-        client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, markdown_text=chunk)
+    for part in split_markdown(output):
+        client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, markdown_text=part)
     try:
         client.chat_postMessage(
             channel=channel_id, thread_ts=thread_ts, blocks=feedback_blocks
@@ -275,10 +246,19 @@ def run_agent_turn(
                         output=output,
                         feedback_blocks=feedback_blocks,
                     )
+                elif len(output) > MARKDOWN_LIMIT:
+                    # Too long for one message: a stream of it fails with msg_too_long.
+                    _post_fallback_response(
+                        client=client,
+                        logger=logger,
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        output=output,
+                        feedback_blocks=feedback_blocks,
+                    )
                 else:
-                    # Stream response in thread with feedback buttons. If streaming fails
-                    # (e.g. msg_too_long on chat.startStream), fall back to regular
-                    # chat.postMessage with the message chunked to fit Slack's limit.
+                    # Stream response in thread with feedback buttons. If streaming fails,
+                    # fall back to regular chat.postMessage.
                     try:
                         streamer = say_stream()
                         streamer.append(markdown_text=output)

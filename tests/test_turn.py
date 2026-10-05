@@ -280,29 +280,18 @@ def test_channel_level_reply_never_streams_and_posts_directly(mocks):
     assert all(c.kwargs.get("thread_ts") is None for c in posts)
 
 
-def test_chunk_text_splits_on_line_boundaries():
-    text = "\n".join(f"line {i} " * 30 for i in range(50))
-    chunks = turn._chunk_text(text, limit=1000)
-    assert len(chunks) > 1
-    assert all(len(c) <= 1000 for c in chunks)
-    assert "".join(chunks) == text
+def test_a_reply_too_long_for_one_message_is_posted_in_parts_without_streaming(mocks):
+    """Slack rejects a markdown_text over 12,000 chars (msg_too_long), streamed or not."""
+    from agent.message_split import MARKDOWN_LIMIT
 
+    long_reply = "\n\n".join(f"paragraph {i} " + "word " * 200 for i in range(30))
+    turn.run_agent.return_value.output = long_reply
+    _run_turn(mocks)
 
-def test_chunk_text_short_text_unchanged():
-    assert turn._chunk_text("hi there", limit=1000) == ["hi there"]
-
-
-def test_chunk_text_hard_splits_overlong_line():
-    line = "x" * 2500
-    chunks = turn._chunk_text(line, limit=1000)
-    assert chunks == ["x" * 1000, "x" * 1000, "x" * 500]
-
-
-def test_chunk_text_respects_default_limit():
-    long = "a" * (turn._MAX_MESSAGE_CHARS + 100)
-    chunks = turn._chunk_text(long)
-    assert all(len(c) <= turn._MAX_MESSAGE_CHARS for c in chunks)
-    assert "".join(chunks) == long
+    mocks.say_stream.assert_not_called()
+    parts = [c.kwargs["markdown_text"] for c in mocks.client.chat_postMessage.call_args_list if "markdown_text" in c.kwargs]
+    assert len(parts) > 1 and all(len(p) <= MARKDOWN_LIMIT for p in parts)
+    assert parts[0].startswith("paragraph 0") and "paragraph 29" in parts[-1]
 
 
 # ---------------------------------------------------------------------------

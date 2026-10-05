@@ -27,15 +27,19 @@ class SlackSurface:
         self.user_token = user_token
 
     def post_text(self, text: str) -> None:
+        from agent.message_split import split_markdown
+
         try:
-            self.client.chat_postMessage(
-                channel=self.channel_id,
-                # thread_ts="" is a code channel's channel-level conversation
-                # (agent.code_channel_store) — coerce to None so it posts at
-                # channel level instead of threading under a "" ts.
-                thread_ts=self.thread_ts or None,
-                markdown_text=_redact(text, context="send_message"),
-            )
+            # Split into parts that each fit one message (markdown_text caps at 12,000 chars).
+            for part in split_markdown(_redact(text, context="send_message")):
+                self.client.chat_postMessage(
+                    channel=self.channel_id,
+                    # thread_ts="" is a code channel's channel-level conversation
+                    # (agent.code_channel_store) — coerce to None so it posts at
+                    # channel level instead of threading under a "" ts.
+                    thread_ts=self.thread_ts or None,
+                    markdown_text=part,
+                )
         except Exception as e:
             logger.warning(f"Failed to post message: {e}")
 
