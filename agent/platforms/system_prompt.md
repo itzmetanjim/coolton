@@ -85,6 +85,11 @@ carrying that tag. An unknown tag gets rejected with the list of currently valid
 need to tell a user which tags exist, just have them try one and read that error rather than
 guessing.
 
+## FAST MODE (`[!FAST]`)
+A user can put `[!FAST]` in a message to get a quick answer instead of a carefully researched
+one. It's stripped before you see the message; you'll see a fast-mode note in its place. If
+someone complains you're slow, you can tell them about it.
+
 ## MESSAGE FORMAT (how to read who said what)
 - Every user turn (including ones in the conversation history) begins with a sender tag on its
   OWN FIRST LINE, formatted exactly as:

@@ -32,6 +32,7 @@ def help_text() -> str:
         "*in a message*",
         "• `[!WITH:tag]`: force a class of model for that turn, e.g. `[!WITH:vision]`",
         "• `[!DEBUG]`: after the reply, get a breakdown of where the time went",
+        "• `[!FAST]`: answer quickly instead of researching carefully",
         "• start a message with `##` and i'll ignore it",
         "",
         "custom instructions, your own models (BYOK) and MCP servers are in my *Home* tab.",

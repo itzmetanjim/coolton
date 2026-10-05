@@ -3105,7 +3105,9 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
         from agent.debug_timing import build_timing_hooks
         capabilities.append(build_timing_hooks(deps.debug_timer))
 
+    from agent.fast_mode import FAST_NOTE
     turn_context = (dynamic_context + gap_note + _abuse_check_note(deps.abuse_flags)
+                    + (FAST_NOTE if deps.fast else "")
                     + platform.build_turn_context(deps, first_model, is_vision))
     text_with_turn_context = turn_context + text
 
@@ -3172,10 +3174,10 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
         #   24h retention covers realistic gaps between messages (the
         #   in-memory default is much shorter-lived).
         model_settings={
-            # Think harder before acting: careful answers over fast ones. Every chat model in
-            # providers.json accepts it (checked live 2026-10-05); about 4x luna's default
-            # reasoning on a hard question.
-            "openai_reasoning_effort": "high",
+            # Think harder before acting: careful answers over fast ones, unless the user
+            # sent [!FAST] (agent.fast_mode). Every chat model in providers.json accepts it
+            # (checked live 2026-10-05); about 4x luna's default reasoning on a hard question.
+            **({} if deps.fast else {"openai_reasoning_effort": "high"}),
             "anthropic_cache_instructions": True,
             "anthropic_cache_tool_definitions": True,
             "anthropic_cache": True,

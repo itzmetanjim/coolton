@@ -258,7 +258,10 @@ def _task_with_context(task: str, deps: AgentDeps) -> str:
     return (
         f"## CONTEXT\n- Requested by Slack user `{deps.user_id}`\n"
         f"- coolton's conversation: channel_id `{deps.channel_id}`, thread_ts `{deps.thread_ts}`\n"
-        f"- Current time: {now}\n\n## TASK\n{task}"
+        f"- Current time: {now}\n"
+        + ("- Fast mode: the user asked for speed over thoroughness, so work quickly with the few "
+           "tool calls clearly needed instead of researching exhaustively.\n" if deps.fast else "")
+        + f"\n## TASK\n{task}"
     )
 
 
@@ -296,8 +299,9 @@ def run_subagent(target: str, task: str, deps: AgentDeps) -> str:
         toolsets=toolsets,
         capabilities=capabilities,
         model_settings={
-            # Careful work over speed, except the summarizer (observational memory, summaries).
-            **({} if target == "summarizer" else {"openai_reasoning_effort": "high"}),
+            # Careful work over speed, except the summarizer (observational memory, summaries)
+            # and turns the user sent [!FAST] in (agent.fast_mode).
+            **({} if target == "summarizer" or sub.fast else {"openai_reasoning_effort": "high"}),
             "anthropic_cache_instructions": True,
             "anthropic_cache_tool_definitions": True,
             "anthropic_cache": True,

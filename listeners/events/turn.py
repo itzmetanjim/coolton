@@ -145,6 +145,8 @@ def run_agent_turn(
         from agent.debug_timing import TurnTimer, extract_debug_directive
         text, debug = extract_debug_directive(text)
         debug_timer = TurnTimer() if debug else None
+        from agent.fast_mode import extract_fast_directive
+        text, fast = extract_fast_directive(text)
         from agent.provider_config import extract_tag_directive
         text, tag_filter, tag_error = extract_tag_directive(text)
         if tag_error:
@@ -173,6 +175,7 @@ def run_agent_turn(
             provider_tag_filter=tag_filter,
             surface=surface,
             debug_timer=debug_timer,
+            fast=fast,
         )
         # Jev decides which deferred tools this turn needs, in the background
         # while the rest of setup runs; run_agent collects it (agent.tool_preload).

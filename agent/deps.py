@@ -41,6 +41,9 @@ class AgentDeps:
     # agent/provider_config.extract_tag_directive) — forces the provider
     # fallback chain to only try models carrying this tag for the turn.
     provider_tag_filter: str | None = None
+    # Set from a `[!FAST]` directive (agent.fast_mode): this turn values speed over
+    # thoroughness (default reasoning effort, no research rules).
+    fast: bool = False
     # Set from a `[!DEBUG]` directive (agent.debug_timing): records where the
     # turn's time goes and posts a breakdown in the thread after the reply.
     debug_timer: object | None = None
