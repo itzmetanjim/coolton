@@ -107,7 +107,7 @@ MCP_GROUP_TOOLS: dict[str, frozenset[str]] = {
 ALWAYS_PRELOADED_MCP_TOOLS = frozenset({
     "slack_read_channel", "slack_read_thread", "slack_read_file", "slack_read_user_profile",
     "slack_list_channel_members", "slack_list_user_channels", "slack_get_reactions",
-    "slack_search_public", "slack_search_channels", "slack_search_users", "slack_search_emojis",
+    "slack_search_channels", "slack_search_users", "slack_search_emojis",
     "slack_send_message_draft", "slack_schedule_message", "slack_create_conversation",
     "slack_add_reaction", "slack_get_file_upload_url", "slack_complete_file_upload",
 })

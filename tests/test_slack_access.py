@@ -321,7 +321,7 @@ def _deps(channel_id="C1", user_id=ASKER, on_behalf_of=""):
     return SimpleNamespace(channel_id=channel_id, user_id=user_id, on_behalf_of=on_behalf_of)
 
 
-@pytest.mark.parametrize("name", ["slack_send_message", "slack_search_public_and_private"])
+@pytest.mark.parametrize("name", ["slack_send_message", "slack_search_public_and_private", "slack_search_public"])
 def test_blocked_mcp_tools_are_refused(name):
     args, error = guard_args(name, {}, _deps())
     assert args is None and "isn't available" in error
@@ -352,15 +352,6 @@ def test_mcp_file_reads_are_checked(monkeypatch):
 def test_mcp_list_read_by_title_only_is_refused():
     _, error = guard_args("slack_read_list", {"list_title": "salaries"}, _deps())
     assert "explicit list_id" in error
-
-
-def test_mcp_message_search_defaults_to_concise_results():
-    """A default slack_search_public result was ~40k tokens: each hit comes with its
-    surrounding messages. Concise unless the model explicitly asks for detail."""
-    args, _ = guard_args("slack_search_public", {"query": "coolton"}, SimpleNamespace(channel_id="C1"))
-    assert args["response_format"] == "concise"
-    args, _ = guard_args("slack_search_public", {"query": "x", "response_format": "detailed"}, SimpleNamespace(channel_id="C1"))
-    assert args["response_format"] == "detailed"
 
 
 def test_mcp_scheduled_message_is_footed():

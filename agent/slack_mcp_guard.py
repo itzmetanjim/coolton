@@ -28,7 +28,9 @@ from pydantic_ai.toolsets import WrapperToolset
 
 from agent.attribution import attribute_text, attribution_user_id
 
-BLOCKED_SLACK_MCP_TOOLS = {"slack_send_message", "slack_search_public_and_private"}
+# slack_search_public is the same keyword search as coolton's own search_slack_tool (no
+# semantic search on this workspace), so it's off: one message search, the cheaper one.
+BLOCKED_SLACK_MCP_TOOLS = {"slack_send_message", "slack_search_public_and_private", "slack_search_public"}
 
 # Tool -> the arg naming the channel it reads.
 _CHANNEL_READ_TOOLS = {
@@ -73,10 +75,6 @@ def guard_args(name: str, args: dict[str, Any], deps: Any) -> tuple[dict[str, An
         args["description"] = attribute_text(str(args.get("description") or ""), credited).strip()
     elif name == "slack_complete_file_upload" and args.get("channel_id"):
         args["initial_comment"] = attribute_text(str(args.get("initial_comment") or ""), credited).strip()
-    elif name == "slack_search_public":
-        # By default every result comes with its surrounding messages: ~40k tokens for one
-        # search, vs ~2k concise. Detail only when the model explicitly asks for it.
-        args.setdefault("response_format", "concise")
     return args, None
 
 
