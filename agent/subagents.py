@@ -9,7 +9,8 @@ is its own pydantic-ai run through the same provider fallback chain as the turn
   through search_tools/call_tool, exactly like the main agent, and skills), minus
   SUBAGENT_EXCLUDED_TOOLS: delegating (no recursion), and what only the turn itself
   does: reacting to and messaging the user, ending or leaving the turn, abuse
-  reports. "research" and "explore" get read-only sets; "summarizer" gets none.
+  reports. "research" and "explore" get read-only sets (plus the sandbox, where they
+  clone git repos to read them); "summarizer" gets none.
 - its own copy of the turn's AgentDeps (subagent_deps), so parallel runs don't
   share per-run state; the turn's per-turn limits (the Slack call budget) still count
   on the turn's deps (AgentDeps.parent_deps), and anything that has to outlive the
@@ -68,6 +69,10 @@ and use `search_slack_tool` for messages. Start with the key term on its own and
 to narrow it down. A task with several parts may be several unrelated questions, search each \
 separately.
 
+Git repos: to see inside one (GitHub, GitLab, Codeberg, any git URL), clone it into the sandbox \
+(`git clone --depth 1 <url> /home/user/repos/<name>`) and read it there with the sandbox tools, \
+instead of fetching its web pages. Fall back to fetching only if cloning fails.
+
 Slack access: reading only works for the conversation coolton is in, or public channels (and \
 files shared in one); tools refuse anything else, don't try to work around it. Messages you post \
 anywhere are automatically credited to the person who asked.
@@ -86,8 +91,9 @@ SUBAGENT_PROMPTS = {
     ),
     "research": _SUBAGENT_BASE + (
         "\n\nYou are Research: gather facts from Slack, the web, users, channels, threads, "
-        "canvases and library docs. Don't change anything: you only have reading tools. Prefer "
-        "compact sourced findings over raw dumps."
+        "canvases, library docs and git repos (cloned into the sandbox). Don't change anything "
+        "outside the sandbox: you only have reading tools there. Prefer compact sourced "
+        "findings over raw dumps."
     ),
     "explore": _SUBAGENT_BASE + (
         "\n\nYou are Explore: inspect the sandbox workspace (read, list, grep, read-only "
@@ -128,7 +134,7 @@ _ALL = "*"
 # Function tools each subagent gets (before SUBAGENT_EXCLUDED_TOOLS); _ALL is every one.
 SUBAGENT_TOOLS: dict[str, tuple[str, ...] | str] = {
     "general": _ALL,
-    "research": _READ_TOOLS,
+    "research": _READ_TOOLS + _SANDBOX_READ_TOOLS,  # the sandbox, to clone and read git repos
     "explore": _READ_TOOLS + _SANDBOX_READ_TOOLS,
     "summarizer": (),
 }

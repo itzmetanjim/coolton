@@ -57,13 +57,13 @@ def test_general_subagent_gets_every_tool_but_the_turns_own():
     assert "agentmail_send_email" not in _core_names(core) and "agentmail_send_email" in reachable
 
 
-def test_research_subagent_only_reads():
+def test_research_subagent_only_reads_and_clones_repos():
     sub = subagents.subagent_deps(_deps(platform=_mcp_platform()))
     core, _ = subagents._build_tools("research", sub, is_vision=False)
     reachable = _core_names(core) | _hidden_names(sub)
 
-    assert {"search_slack_tool", "fetch_url_tool", "slack_read_canvas"} <= reachable
-    assert not reachable & {"run_linux_command", "post_message_tool", "slack_send_message", "run_custom_thing"}
+    assert {"search_slack_tool", "fetch_url_tool", "slack_read_canvas", "run_linux_command"} <= reachable  # clones repos
+    assert not reachable & {"post_message_tool", "write_sandbox_file_tool", "slack_send_message", "run_custom_thing"}
 
 
 @pytest.mark.parametrize("tasks,expected", [
