@@ -730,14 +730,21 @@ def upload_file_from_sandbox(
 @agent.tool
 def search_web_tool(ctx: RunContext[AgentDeps], query: str, num_results: int = 8) -> str:
     """Search the web using Exa. Returns results with titles, URLs, and snippets.
-    
-    Use for: current events, research, finding resources, verifying facts.
-    
+
+    Use for: current events, research, finding resources, verifying facts. NOT for reading a
+    page whose URL you have (or one you can tell from a link): use fetch_url_tool for that.
+
     Args:
         query: The search query string.
         num_results: Number of results (1-20, default 8).
     """
-    from agent.tools.web_search import search_web
+    from agent.tools.web_search import search_web, specific_page_url
+
+    page = specific_page_url(query)
+    if page:
+        return (f"Not searched: this query is after one specific page. Read it directly with "
+                f"fetch_url_tool(url={page!r}). To search within a whole site, use site:<domain> "
+                "without a path.")
     return search_web(query, num_results)
 
 
@@ -1304,8 +1311,9 @@ def delete_scheduled_task_tool(ctx: RunContext[AgentDeps], task_id: str) -> str:
 def fetch_url_tool(ctx: RunContext[AgentDeps], url: str, max_characters: int = 8000) -> str:
     """Fetch the readable text content of a specific URL (like web_search but for a known link).
 
-    Use when the user shares a URL and wants its content summarized or read,
-    or when you need the full text of a page found via search_web.
+    Use whenever you want what's on a particular page: the user shares a URL, a message or
+    search result links one, or you need the full text of a page found via search_web.
+    Always fetch a page you have the URL for, never search_web for it.
 
     Args:
         url: The full URL to fetch.

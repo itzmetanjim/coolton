@@ -1,5 +1,24 @@
 import os
+import re
+
 import requests
+
+# A URL, or a site: filter narrowed to one page ("site:example.com/some/page"), in a query.
+_URL_RE = re.compile(r"https?://\S+")
+_SITE_PAGE_RE = re.compile(r"\bsite:([\w.-]+\.[a-z]{2,}/\S+)", re.I)
+_TRAILING = ").,?!;:'\">"  # sentence punctuation after a URL in prose
+
+
+def specific_page_url(query: str) -> str | None:
+    """The URL of the one page a search query is really after (a URL in it, or a
+    site: filter with a path), or None for an actual search. A site: filter on a
+    whole domain ("site:docs.python.org") is a search, not a page."""
+    match = _URL_RE.search(query or "")
+    if match:
+        return match.group(0).rstrip(_TRAILING)
+    match = _SITE_PAGE_RE.search(query or "")
+    return f"https://{match.group(1).rstrip(_TRAILING)}" if match else None
+
 
 EXA_API_URL = "https://api.exa.ai/search"
 EXA_API_KEY_ENV = "EXA_API_KEY"

@@ -2336,3 +2336,18 @@ def test_get_datetime_returns_the_current_utc_time(monkeypatch):
     monkeypatch.setattr(datetime, "datetime", FakeDatetime)
     result = agent_mod.get_datetime(_run_ctx(Mock()))
     assert result == "Monday, 2026-09-28 14:05:09 UTC (ISO 8601: 2026-09-28T14:05:09+00:00)"
+
+
+@pytest.mark.parametrize("query,page", [
+    ("site:news.example.org/opinion/some-article author", "https://news.example.org/opinion/some-article"),
+    ("who wrote https://blog.example.com/post/1?", "https://blog.example.com/post/1"),
+    ("site:docs.python.org asyncio timeout", None),  # a whole site: that's a search
+    ("latest AI news 2026", None),
+])
+def test_web_search_for_one_specific_page_says_to_fetch_it(monkeypatch, query, page):
+    monkeypatch.setattr("agent.tools.web_search.search_web", lambda q, n: "SEARCHED")
+    result = agent_mod.search_web_tool(_run_ctx(Mock()), query)
+    if page:
+        assert result.startswith("Not searched") and f"fetch_url_tool(url={page!r})" in result
+    else:
+        assert result == "SEARCHED"

@@ -440,6 +440,11 @@ Upload a file from the sandbox to Bucky (bucky.hackclub.com, Hack Club's file ho
 
 ## WEB SEARCH (search_web)
 Use `search_web` to search the internet via Exa. Returns titles, URLs, snippets, and dates.
+- **Have a URL? Fetch it, don't search for it.** To read a specific page (one someone linked,
+  one in a message or a search result, or one whose address you can tell), use `fetch_url` on
+  it. Never run `search_web` on its URL or a `site:` filter narrowed to that page to learn
+  what's on it: search snippets are fragments, the page itself has everything. `site:` is
+  for searching across a whole site (`site:docs.python.org asyncio timeout`).
 - A result that's a git repo you need to look inside: clone it in your sandbox (see "Git repos"
   under LINUX SANDBOX), don't search or fetch your way through its web pages.
 - Best for: current events, research, finding resources, verifying facts
@@ -472,6 +477,9 @@ Use `search_web` to search the internet via Exa. Returns titles, URLs, snippets,
 ## FETCH URL (fetch_url)
 Use `fetch_url` to fetch the readable text of a specific known URL (Exa).
 - Best for: summarizing a shared article/link, reading a specific page, getting past a snippet
+- Whenever you want what's on a particular page, this is the tool, not `search_web`. That
+  includes details about the page (its author, date, what it says about something): fetch it
+  and read them there.
 - Args: url, max_characters (default 8000)
 - Not for the contents of a git repo (a repo page, a file or folder in one): clone the repo in
   your sandbox instead (see "Git repos" under LINUX SANDBOX)
