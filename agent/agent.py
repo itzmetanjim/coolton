@@ -1417,10 +1417,14 @@ def submit_feedback_tool(ctx: RunContext[AgentDeps], kind: str, body: str) -> st
 
 @agent.tool
 def search_slack_tool(ctx: RunContext[AgentDeps], query: str, count: int = 5) -> str:
-    """Search Slack messages in public channels (plus the current conversation).
+    """Search Slack messages in public channels (plus the current conversation). Your
+    default message search.
 
-    Supports Slack search syntax like `in:#channel from:@user` and keywords. Matches in
-    private channels or DMs other than the current conversation are left out.
+    Keyword search, not natural language: a message matches only if it contains your
+    words, so search for distinctive words or an exact "quoted phrase" the message would
+    contain, never a whole question. Supports Slack search syntax like
+    `in:#channel from:@user`. Matches in private channels or DMs other than the current
+    conversation are left out.
 
     Args:
         query: The search query.

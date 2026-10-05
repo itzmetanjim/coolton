@@ -62,8 +62,11 @@ assumption and say which.
 Other subagents may be working in parallel on related tasks, in the same sandbox: don't undo or \
 overwrite their work, and use your own directory or git branch when you change files.
 
-Searching: start with the key term on its own and add keywords only to narrow it down. A task \
-with several parts may be several unrelated questions, search each separately.
+Searching: Slack search is keyword search, never natural language (no tool understands a \
+question), so search for distinctive words or an exact "quoted phrase" the message would contain, \
+and use `search_slack_tool` for messages. Start with the key term on its own and add keywords only \
+to narrow it down. A task with several parts may be several unrelated questions, search each \
+separately.
 
 Slack access: reading only works for the conversation coolton is in, or public channels (and \
 files shared in one); tools refuse anything else, don't try to work around it. Messages you post \
