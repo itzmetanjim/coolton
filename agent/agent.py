@@ -3053,7 +3053,8 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
     jev_picks = collect_preloads(getattr(deps, "tool_preload", None))
     # One Jev call answers both: which tool groups to load, and abuse checks (agent.abuse_report).
     deps.abuse_flags = {k.removeprefix("abuse_") for k in jev_picks if k.startswith("abuse_")}
-    deps.preloaded_tool_groups = {k for k in jev_picks if not k.startswith("abuse_")}
+    from agent.tool_preload import groups_from_text
+    deps.preloaded_tool_groups = {k for k in jev_picks if not k.startswith("abuse_")} | groups_from_text(deps.request_text)
     if getattr(deps, "debug_timer", None) is not None and getattr(deps, "tool_preload", None) is not None:
         loaded = ", ".join(sorted(deps.preloaded_tool_groups)) or "nothing"
         deps.debug_timer.record("jev", "waiting on Jev tool preload", preload_started, time.perf_counter(), f"loaded {loaded}")
@@ -3114,7 +3115,9 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
     # which the run executes first — exactly what coolton's own search would
     # do, so the tool list (and the cached prefix) never changes.
     run_history, run_prompt = message_history, user_prompt
-    preload = None if resume_from else _preload_search_call(deps.preloaded_tool_groups, message_history)
+    from agent.slack_mcp_guard import GuardedSlackMCPToolset
+    slack_mcp = any(isinstance(getattr(t, "wrapped", None), GuardedSlackMCPToolset) for t in toolsets)
+    preload = None if resume_from else _preload_search_call(deps.preloaded_tool_groups, message_history, slack_mcp)
     if preload:
         # pydantic-ai only adds the system prompt itself when the history is empty.
         system = [SystemPromptPart(full_prompt)] if not message_history else []
@@ -3223,19 +3226,21 @@ DEFERRED_TOOLS = frozenset({
 })
 
 
-def _preload_search_call(groups: set[str], history=None) -> list | None:
-    """A pending search_tools call for the tools Jev preloaded (agent.tool_preload),
-    or None if there's nothing new to load. The run executes it before the first
+def _preload_search_call(groups: set[str], history=None, slack_mcp: bool = False) -> list | None:
+    """A pending search_tools call for the tools Jev preloaded plus, when the turn has the
+    Slack MCP (`slack_mcp`), the Slack MCP tools every turn gets (agent.tool_preload), or
+    None if there's nothing new to load. The run executes it before the first
     model request (exactly as if the model had searched), so MCP tools get their
     real schemas. Tools an earlier search in this thread already returned are
     skipped: their definitions are still in the history."""
     from uuid import uuid4
 
     from agent.deferred_tools import PRELOAD_CALL_ID_PREFIX, SEARCH_TOOL, found_in
-    from agent.tool_preload import mcp_tools_for, tools_for
+    from agent.tool_preload import ALWAYS_PRELOADED_MCP_TOOLS, mcp_tools_for, tools_for
 
     already = found_in(history)
-    names = [n for n in sorted(tools_for(groups)) + sorted(mcp_tools_for(groups)) if n not in already]
+    mcp_names = mcp_tools_for(groups) | (ALWAYS_PRELOADED_MCP_TOOLS if slack_mcp else frozenset())
+    names = [n for n in sorted(tools_for(groups)) + sorted(mcp_names) if n not in already]
     if not names:
         return None
     call = ToolCallPart(SEARCH_TOOL, {"queries": names}, tool_call_id=f"{PRELOAD_CALL_ID_PREFIX}{uuid4().hex[:12]}")

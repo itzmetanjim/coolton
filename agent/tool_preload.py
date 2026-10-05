@@ -26,6 +26,7 @@ Never allowed to slow a turn down or break it:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -71,12 +72,11 @@ TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
         "set_sandbox_keepalive_tool", "computer_stream_tool", "agent_browser_stream_tool"})),
     "slack_admin": ("Does this involve managing Slack channels or acting as coolton's bot: inviting coolton's helper account to a channel, removing a reaction, leaving a channel, or calling the Slack API as the bot (posting as the bot, topics, bookmarks, invites, creating channels)?", frozenset({
         "invite_coolton_user_to_channel", "remove_reaction_tool", "leave_channel_tool", "slack_api_call_as_bot_tool"})),
-    # The Slack MCP tools are split small: their definitions are large (~11k tokens for all
-    # twelve, ~5.6k for the canvas ones alone).
-    "slack_canvases": ("Does this involve a Slack canvas in any way: creating, opening, reading, viewing, summarizing, editing or updating one, or a link to one (slack.com/docs/...)?", frozenset()),
-    "slack_lists": ("Does this involve a Slack list (Slack's spreadsheet-like lists with items and columns, not a bullet list) in any way: creating, reading, viewing, editing, or adding or changing its items, or a link to one?", frozenset()),
-    "slack_drafts_scheduling": ("Does this ask coolton to draft a Slack message for the user, or to send a message later at a set time?", frozenset()),
-    "slack_people": ("Does this involve looking up Slack people: someone's profile, title, timezone, pronouns or status, or who is in a channel?", frozenset()),
+    # The Slack MCP list and canvas tools are big (~10k tokens of definitions together), so
+    # they load only when needed; every other Slack MCP tool is preloaded on every turn
+    # (ALWAYS_PRELOADED_MCP_TOOLS). Any message with a Slack file id or file, canvas or
+    # list link loads this group too, whatever Jev says (groups_from_text).
+    "slack_lists_canvases_files": ("Does the message contain a Slack file ID (an ID starting with F, like F0123ABC4D5) or a link to a Slack file, canvas or list, or does it involve Slack canvases or Slack lists (Slack's spreadsheet-like lists, not a bullet list) in any way: creating, reading, viewing, summarizing, editing, or their items?", frozenset()),
     "library_docs": ("Is this about using a programming library, framework, SDK, CLI or API: how to call it, its docs or versions, or code that uses it?", frozenset()),
 }
 LIBRARY_DOCS_GROUP = "library_docs"
@@ -94,14 +94,33 @@ ABUSE_THRESHOLD = 0.7
 # Deferred MCP tools each MCP group loads (names as the servers publish them).
 # A name a server doesn't have this turn (e.g. Context7 down) is just ignored.
 MCP_GROUP_TOOLS: dict[str, frozenset[str]] = {
-    "slack_canvases": frozenset({"slack_create_canvas", "slack_read_canvas", "slack_update_canvas"}),
-    "slack_lists": frozenset({
+    "slack_lists_canvases_files": frozenset({
+        "slack_create_canvas", "slack_read_canvas", "slack_update_canvas",
         "slack_create_list", "slack_read_list", "slack_update_list",
         "slack_add_list_record", "slack_update_list_record"}),
-    "slack_drafts_scheduling": frozenset({"slack_send_message_draft", "slack_schedule_message"}),
-    "slack_people": frozenset({"slack_read_user_profile", "slack_list_channel_members"}),
     LIBRARY_DOCS_GROUP: frozenset({"resolve-library-id", "query-docs"}),
 }
+
+# Slack MCP tools preloaded on every turn, Jev or not (~7.8k tokens, once per thread:
+# agent.agent._preload_search_call skips tools the thread already has): every Slack MCP
+# tool except the list and canvas ones (slack_lists_canvases_files).
+ALWAYS_PRELOADED_MCP_TOOLS = frozenset({
+    "slack_read_channel", "slack_read_thread", "slack_read_file", "slack_read_user_profile",
+    "slack_list_channel_members", "slack_list_user_channels", "slack_get_reactions",
+    "slack_search_public", "slack_search_channels", "slack_search_users", "slack_search_emojis",
+    "slack_send_message_draft", "slack_schedule_message", "slack_create_conversation",
+    "slack_add_reaction", "slack_get_file_upload_url", "slack_complete_file_upload",
+})
+
+# A Slack file id (canvases and lists are files too), or a link to a file, canvas or list.
+_SLACK_FILE_RE = re.compile(r"\bF(?=[A-Z0-9]*\d)[A-Z0-9]{8,12}\b|slack\.com/(?:docs|lists|files)/")
+
+
+def groups_from_text(text: str) -> set[str]:
+    """Groups to load whatever Jev says: slack_lists_canvases_files for a message with
+    a Slack file id or a file, canvas or list link."""
+    return {"slack_lists_canvases_files"} if _SLACK_FILE_RE.search(text or "") else set()
+
 
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="jev-preload")
 

@@ -53,6 +53,16 @@ def captured_runs(monkeypatch, clean_env):
     return captured
 
 
+def _user_prompt(run_kwargs) -> str:
+    """The turn's user prompt: passed directly, or (when the turn starts with a preload
+    search_tools call) as the last user message in the history."""
+    if run_kwargs["user_prompt"] is not None:
+        return run_kwargs["user_prompt"]
+    from pydantic_ai.messages import UserPromptPart
+    return [p.content for m in run_kwargs["message_history"] for p in getattr(m, "parts", [])
+            if isinstance(p, UserPromptPart)][-1]
+
+
 def _deps(message_ts: str):
     from agent.deps import AgentDeps
     return AgentDeps(
@@ -78,8 +88,8 @@ def test_message_ts_and_model_appear_in_user_prompt_instead(captured_runs):
     agent_mod.run_agent("hello", _deps("100.100"))
     agent_mod.run_agent("hello", _deps("200.200"))
 
-    user_prompt_1 = captured_runs[0][1]["user_prompt"]
-    user_prompt_2 = captured_runs[1][1]["user_prompt"]
+    user_prompt_1 = _user_prompt(captured_runs[0][1])
+    user_prompt_2 = _user_prompt(captured_runs[1][1])
 
     assert "100.100" in user_prompt_1
     assert "200.200" in user_prompt_2
@@ -127,8 +137,8 @@ def test_system_prompt_is_identical_across_threads_and_users(captured_runs):
     system_b = captured_runs[1][0]._system_prompts[0]
     assert system_a == system_b
     assert "stable context for" not in system_a
-    assert "stable context for C1" in captured_runs[0][1]["user_prompt"]
-    assert "stable context for C2" in captured_runs[1][1]["user_prompt"]
+    assert "stable context for C1" in _user_prompt(captured_runs[0][1])
+    assert "stable context for C2" in _user_prompt(captured_runs[1][1])
 
 
 def test_custom_instructions_go_in_the_user_prompt_not_the_system_prompt(captured_runs, monkeypatch):
@@ -138,7 +148,7 @@ def test_custom_instructions_go_in_the_user_prompt_not_the_system_prompt(capture
     agent_mod.run_agent("hello", _deps("100.100"))
 
     assert "Be extra concise." not in captured_runs[0][0]._system_prompts[0]
-    assert "Be extra concise." in captured_runs[0][1]["user_prompt"]
+    assert "Be extra concise." in _user_prompt(captured_runs[0][1])
 
 
 def test_system_prompt_ends_with_the_current_year(captured_runs):

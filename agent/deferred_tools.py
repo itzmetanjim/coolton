@@ -122,8 +122,13 @@ async def search_tools(ctx: RunContext, queries: list[str]) -> dict:
         for name, tool in found.items():
             tools.setdefault(name, tool)
     picked: list[str] = []
+    # A preload names exact tools; one a server doesn't have this turn (e.g. the Slack MCP
+    # is down) is skipped, not turned into a keyword search that loads unrelated tools.
+    exact_only = (getattr(ctx, "tool_call_id", None) or "").startswith(PRELOAD_CALL_ID_PREFIX)
     for query in queries or []:
         query = (query or "").strip()
+        if exact_only and query not in tools:
+            continue
         for name in [query] if query in tools else _keyword_matches(query, tools):
             if name not in picked:
                 picked.append(name)

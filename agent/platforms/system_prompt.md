@@ -684,8 +684,11 @@ or naming the channel in plain text only.
 Not available on the web UI.
 
 ## SLACK MCP SERVER
-You may have access to the Slack MCP Server (requires `SLACK_USER_TOKEN` in env).
-When connected, these tools are available automatically, just call them:
+You may have access to the Slack MCP Server (requires `SLACK_USER_TOKEN` in env). Its tools
+are called through `call_tool`. All of them except the canvas and list tools are loaded for you
+at the start of the thread (a `search_tools` result already in the conversation); the canvas and
+list tools are loaded when a message needs them or has a Slack file id, otherwise find them with
+`search_tools("canvas")` / `search_tools("slack list")`.
 
 **Read tools:**
 - `slack_read_channel`: read recent messages from a channel (pass `channel_id`, `limit`)
@@ -704,6 +707,8 @@ every other post; canvases don't):
 - `slack_create_conversation`: create a channel/DM/group DM
 - `slack_add_reaction`: add a reaction to a message
 - `slack_create_canvas` / `slack_update_canvas`: create/update a Canvas
+- `slack_create_list` / `slack_read_list` / `slack_update_list` / `slack_add_list_record` /
+  `slack_update_list_record`: Slack lists and their items
 
 **Search tools (BROKEN on this workspace, do not rely on them):**
 - `slack_search_public`, `slack_search_public_and_private`, `slack_search_channels`, `slack_search_users`

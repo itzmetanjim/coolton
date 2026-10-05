@@ -1,11 +1,15 @@
 """agent.tool_preload: Jev picks which deferred tool groups to load up front.
 It must never slow a turn past JEV_TIMEOUT_SECONDS or break it, and a Jev
 that's down must be skipped outright (tracked in agent.fallback_cache)."""
+import asyncio
 import importlib
 import time
 from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import Mock
+
+import pytest
+from pydantic_ai import RunContext
 
 from agent import fallback_cache, provider_config
 from agent import tool_preload as tp
@@ -224,18 +228,50 @@ def test_tools_already_defined_in_the_thread_are_not_loaded_again():
         # From before call_tool: no parameters, so the model doesn't actually have it.
         search_result({"name": "slack_read_canvas", "description": ""}),
     ]
-    [response] = agent_mod._preload_search_call({"slack_canvases"}, history)
-    assert response.parts[0].args == {"queries": ["slack_read_canvas", "slack_update_canvas"]}
+    [response] = agent_mod._preload_search_call({"slack_lists_canvases_files"}, history, slack_mcp=True)
+    queries = response.parts[0].args["queries"]
+    assert "slack_create_canvas" not in queries and {"slack_read_canvas", "slack_update_canvas"} <= set(queries)
 
-    history.append(search_result(*({"name": n, "description": "", "parameters": {}}
-                                   for n in ("slack_read_canvas", "slack_update_canvas"))))
-    assert agent_mod._preload_search_call({"slack_canvases"}, history) is None
+    history.append(search_result(*({"name": n, "description": "", "parameters": {}} for n in queries)))
+    assert agent_mod._preload_search_call({"slack_lists_canvases_files"}, history, slack_mcp=True) is None
 
 
-def test_mcp_groups_search_for_their_mcp_tools():
+def test_every_turn_preloads_the_slack_tools_but_lists_and_canvases():
+    from agent.tool_preload import ALWAYS_PRELOADED_MCP_TOOLS
+
+    [response] = agent_mod._preload_search_call(set(), slack_mcp=True)
+    queries = set(response.parts[0].args["queries"])
+    assert queries == ALWAYS_PRELOADED_MCP_TOOLS
+    assert not any(q.endswith(("_list", "_list_record", "_canvas")) for q in queries)
+    assert agent_mod._preload_search_call(set(), slack_mcp=False) is None  # no Slack MCP this turn
+
     [response] = agent_mod._preload_search_call({"library_docs"})
-    assert response.parts[0].args == {"queries": ["query-docs", "resolve-library-id"]}
-    assert agent_mod._preload_search_call(set()) is None
+    assert set(response.parts[0].args["queries"]) == {"query-docs", "resolve-library-id"}
+
+
+@pytest.mark.parametrize("text,loads", [
+    ("what does F0BQMKLK5MJ say", True),
+    ("https://hackclub.enterprise.slack.com/docs/T0266FRGM/F0BQMKLK5MJ", True),
+    ("this is FRUSTRATING", False),
+])
+def test_a_slack_file_id_or_link_always_loads_lists_and_canvases(text, loads):
+    from agent.tool_preload import groups_from_text
+
+    assert (groups_from_text(text) == {"slack_lists_canvases_files"}) is loads
+
+
+def test_a_preloaded_tool_a_server_doesnt_have_is_skipped_not_keyword_searched():
+    from pydantic_ai.toolsets import FunctionToolset
+
+    from agent.deferred_tools import HiddenToolset, search_tools
+
+    def read_conversation_history_tool() -> str:
+        return ""
+
+    deps = SimpleNamespace(hidden_toolsets=[HiddenToolset(FunctionToolset([read_conversation_history_tool]))])
+    ctx = RunContext(model=None, usage=None, prompt="", deps=deps, tool_call_id="preload_x")
+    result = asyncio.run(search_tools(ctx, ["slack_read_channel"]))  # Slack MCP down this turn
+    assert result["discovered_tools"] == []
 
 
 def test_jev_is_never_a_chat_model(isolated_config, monkeypatch):
