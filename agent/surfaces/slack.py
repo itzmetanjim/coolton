@@ -27,11 +27,12 @@ class SlackSurface:
         self.user_token = user_token
 
     def post_text(self, text: str) -> None:
+        from agent.mentions import defuse_mass_mentions
         from agent.message_split import split_markdown
 
         try:
             # Split into parts that each fit one message (markdown_text caps at 12,000 chars).
-            for part in split_markdown(_redact(text, context="send_message")):
+            for part in split_markdown(defuse_mass_mentions(_redact(text, context="send_message"))):
                 self.client.chat_postMessage(
                     channel=self.channel_id,
                     # thread_ts="" is a code channel's channel-level conversation

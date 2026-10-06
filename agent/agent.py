@@ -220,7 +220,9 @@ def _redact_output(ctx, *, output_context, output):
     if isinstance(output, str):
         from agent.writing_style import strip_em_dashes
 
-        return strip_em_dashes(_redact(output, context="final response"))
+        from agent.mentions import defuse_mass_mentions
+
+        return defuse_mass_mentions(strip_em_dashes(_redact(output, context="final response")))
     return output
 
 
@@ -245,6 +247,11 @@ async def _enforce_slack_budget(ctx, *, call, tool_def, args, handler):
     # the server's environment, never from arguments): the tool gets the redacted value,
     # not just the logs and plan block.
     args = _redact_args(args, f"tool input {tool_name}")
+    # Nothing coolton posts may ping a group (@here, @channel, a user group...).
+    from agent.mentions import defuse_args
+    from agent.slack_budget import posts_to_slack
+    if posts_to_slack(tool_name):
+        args = defuse_args(args)
     # A request reported as abuse is stopped: nothing but declining is allowed after it.
     stopped = stopped_tool_call(ctx.deps, tool_name)
     if stopped:

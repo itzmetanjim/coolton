@@ -128,6 +128,11 @@ class _Handler(BaseHTTPRequestHandler):
         over = spend(reg["deps"], tool_name)
         if over:
             return self._send_json(200, {"ok": False, "error": over})
+        from agent.mentions import defuse_args
+        from agent.slack_budget import posts_to_slack
+
+        if posts_to_slack(tool_name):
+            args, kwargs = defuse_args(args), defuse_args(kwargs)
         try:
             result = func(RunContext(deps=reg["deps"], model=None, usage=RunUsage()), *args, **kwargs)
             if result is None:

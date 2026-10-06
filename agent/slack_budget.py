@@ -31,6 +31,17 @@ OVER_BUDGET_ERROR = (
 _lock = threading.Lock()
 
 
+# Tools whose arguments can end up in a Slack message without being a "Slack tool" above.
+_OTHER_POSTING_TOOLS = frozenset({"send_message", "text_only_response", "upload_file_from_sandbox",
+                                  "send_html_embed_tool", "send_whiteboard_embed_tool", "generate_image_tool",
+                                  "render_mermaid_tool"})
+
+
+def posts_to_slack(name: str) -> bool:
+    """Whether `name`'s arguments can end up in a Slack message (agent.mentions)."""
+    return is_slack_tool(name) or name in _OTHER_POSTING_TOOLS
+
+
 def is_slack_tool(name: str) -> bool:
     # Slack MCP server tools are all slack_*-prefixed.
     return name in SLACK_TOOLS or name.startswith("slack_")

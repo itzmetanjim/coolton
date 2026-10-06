@@ -3,11 +3,19 @@ import re
 import time
 
 from agent.deferred_tools import is_preload_call, shown_call
-from agent.redact import redact as _redact
+from agent.mentions import defuse_mass_mentions
+from agent.redact import redact
 from agent.steering_store import clear_steering_messages, peek_steering_messages
 from agent.stop_store import HaltRun, ended_turn_on_purpose, stop_requested_for
 
 logger = logging.getLogger(__name__)
+
+
+def _redact(text: str, context: str = "") -> str:
+    """Secrets redacted and group pings defused (agent.mentions): everything the plan
+    block and status updates show goes through here."""
+    return defuse_mass_mentions(redact(text, context=context))
+
 
 # Some unreliable models (observed live: a free MiniMax model served via
 # kilocode/OpenRouter) fail to convert their own multi-tool-call attempt into
