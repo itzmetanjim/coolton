@@ -83,6 +83,21 @@ def test_from_a_dm_it_creates_without_an_origin_and_invites_the_requester(monkey
     app.conversations_invite.assert_called_once_with(channel="C9", users="UBOT,UHELPER,U1", force=True)
 
 
+def test_a_private_channel_from_an_origin_the_app_cant_see_yet_invites_its_bot_and_retries(monkeypatch):
+    """Slack only accepts an origin the code channel app's bot can see; linking one is
+    what gets the join card put on the request's message."""
+    monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: None)
+    client, app, calls = _slack({"ok": False, "error": "invalid_origin_link"},
+                                {"ok": True, "channel_id": "C9"}, monkeypatch=monkeypatch)
+
+    result = _create(client, private=True)
+
+    client.conversations_invite.assert_called_once_with(channel="C0", users="U0C848QS7GU")
+    assert calls[0][1] == calls[1][1] and calls[1][1]["origin_message_ts"] == "1.2"
+    assert calls[1][1]["is_private"] is True
+    assert "private" in result and "join card" in result
+
+
 def test_a_refusal_is_explained_and_nothing_is_registered(monkeypatch):
     registered = []
     monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: registered.append(a))

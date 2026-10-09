@@ -2121,7 +2121,7 @@ def join_thread_tool(ctx: RunContext[AgentDeps]) -> str:
 
 
 @agent.tool
-def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = "") -> str:
+def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = "", private: bool = False) -> str:
     """Create a Slack "code channel" and move this whole conversation into it as
     its own single coolton conversation.
 
@@ -2135,7 +2135,8 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
     unicode are all fine, and duplicate names are fine too, don't invent
     uniqueness suffixes.
 
-    Slack adds you and the person who asked to the new channel. A few seconds after
+    Slack adds you and the person who asked to the new channel, and (outside DMs) puts a
+    join card on their message that people in this channel can join from. A few seconds after
     this returns, you pick up `task` there on your own, with this conversation's
     context carried over. Every message sent directly in that channel (not in a
     thread inside it) is then addressed to you and answered at channel level, as if
@@ -2150,6 +2151,8 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
         name: The code channel's display name (see above, a real sentence,
             not a slug).
         task: What you'll be doing there, used to seed the handoff. Optional.
+        private: Make the channel private (people join from the card) when asked to.
+            Otherwise it gets this conversation's privacy.
     """
     surface = _surface(ctx.deps)
     if getattr(surface, "name", "slack") != "slack":
@@ -2157,7 +2160,7 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
     from agent.tools.code_channel import create_code_channel
     return create_code_channel(
         ctx.deps.client, name, task, ctx.deps.user_id,
-        ctx.deps.channel_id, ctx.deps.thread_ts, ctx.deps.message_ts,
+        ctx.deps.channel_id, ctx.deps.thread_ts, ctx.deps.message_ts, private=private,
     )
 
 

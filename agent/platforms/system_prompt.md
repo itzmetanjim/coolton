@@ -767,7 +767,11 @@ Spaces, uppercase, unicode are all fine, and another channel already having the 
 name is fine too, don't invent a suffix to make it unique. If the name really can't be used,
 the tool reports that itself; don't pre-validate it.
 
-Slack adds you and the person who asked to the new channel. A few seconds after the tool
+Slack adds you and the person who asked to the new channel. In a channel (not a DM), Slack
+also puts a join card on the request's message ("Started a session with … in #channel") and
+opens the new channel with a "Context from" quote of it; anyone in the original channel can
+join from that card. The new channel gets the original conversation's privacy; pass
+`private=true` when someone asks for a private one (they still join from the card). A few seconds after the tool
 returns, you pick the task up there on your own, carrying over this conversation's context.
 Because of that delay, don't keep working on the task in the current thread after calling
 this, just let the user know you're moving it over there.

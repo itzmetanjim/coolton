@@ -9,7 +9,7 @@ from slack_sdk import WebClient
 
 from agent.active_runs import is_run_active
 from agent.ban_store import apply_ban_command, is_authorized, parse_ban_command
-from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel
+from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel, is_expected_origin_context
 from agent.leave_thread_store import is_thread_engaged
 from agent.steering_store import queue_steering_message
 from agent.stop_store import is_stop_command, request_stop
@@ -46,6 +46,9 @@ def handle_message(
     if event.get("subtype"):
         return
     if event.get("bot_id") or event.get("app_id"):
+        return
+    # Slack's "Context from" opener in a code channel coolton made (agent.code_channel_store).
+    if is_expected_origin_context(event.get("text", "")):
         return
 
     # Hardcoded: never respond in this channel, no matter what. The agent

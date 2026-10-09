@@ -32,7 +32,7 @@ def test_allowed_with_no_surface_set_default_slack(monkeypatch):
     called = {}
     monkeypatch.setattr(
         "agent.tools.code_channel.create_code_channel",
-        lambda client, name, task, owner_id, source_channel_id, source_thread_ts, source_message_ts: called.update(
+        lambda client, name, task, owner_id, source_channel_id, source_thread_ts, source_message_ts, private: called.update(
             client=client, name=name, task=task, owner_id=owner_id, source_channel_id=source_channel_id,
             source_thread_ts=source_thread_ts, source_message_ts=source_message_ts,
         ) or "Created code channel <#C1>.",

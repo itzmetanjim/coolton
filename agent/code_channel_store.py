@@ -17,6 +17,7 @@ degrade to "no code channels" instead of raising), and an atomic write.
 
 import json
 import os
+import re
 import threading
 import time
 
@@ -24,6 +25,13 @@ CODE_CHANNEL_STORE_FILE = "code_channels.json"
 CODE_CHANNEL_THREAD_TS = ""
 
 _lock = threading.Lock()
+
+# Origins (channel, ts) of code channels coolton created herself. Slack opens such a
+# channel with a "Context from #origin" message quoting the origin, posted as the
+# origin's author; coolton's handoff turn already carries that context, so the quote
+# isn't answered (a channel someone made from Slack's UI still starts from it).
+_linked_origins: set[tuple[str, str]] = set()
+_ORIGIN_CONTEXT_RE = re.compile(r"^<https?://[^|>]+/archives/([A-Z0-9]+)/p(\d+)(\d{6})[^|>]*\|Context> from <#")
 
 
 def _load() -> dict:
@@ -95,3 +103,15 @@ def canvas_views(channel_id: str) -> dict:
     """view_key -> {"canvas_id", "view_id", "name"} for the canvas tabs coolton added here."""
     with _lock:
         return dict((_load().get(channel_id) or {}).get("canvas_views") or {})
+
+
+def expect_origin_context(channel_id: str, message_ts: str) -> None:
+    """Note that coolton is creating a code channel linked to this message."""
+    _linked_origins.add((channel_id, message_ts))
+
+
+def is_expected_origin_context(text: str) -> bool:
+    """Whether `text` is Slack's "Context from" message for a code channel coolton
+    created herself (see _linked_origins)."""
+    match = _ORIGIN_CONTEXT_RE.match(text or "")
+    return bool(match) and (match[1], f"{match[2]}.{match[3]}") in _linked_origins

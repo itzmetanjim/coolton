@@ -6,7 +6,7 @@ from slack_sdk import WebClient
 
 from agent.active_runs import is_run_active
 from agent.ban_store import apply_ban_command, is_authorized, parse_ban_command
-from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel
+from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel, is_expected_origin_context
 from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import join_thread
 from agent.steering_store import queue_steering_message
@@ -37,6 +37,10 @@ def handle_app_mentioned(
         # Never reply to bot messages, not even @mentions from other bots, nor to messages an
         # app posted with a user token (an app_id but no bot_id).
         if event.get("bot_id") or event.get("app_id"):
+            return
+        # Slack's "Context from" opener in a code channel coolton made quotes the request,
+        # mention included (agent.code_channel_store); the handoff turn already covers it.
+        if is_expected_origin_context(event.get("text", "")):
             return
 
         # One answer per message: coolton's app_mention and message events and the code

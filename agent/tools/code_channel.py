@@ -6,12 +6,18 @@ Code channels are created with Slack's documented agents.conversations.create by
 separate Slack app (its bot token in SLACK_CODE_CHANNEL_BOT_TOKEN; manifest in
 manifests/code_channel_app.json), since coolton's own app can't get the
 code_channels:manage scope. That app's bot becomes the channel's agent, and it invites
-coolton's bot and cooltonUser so coolton can work there. Linking the message the
-request came from (an "origin") also gets its author added by Slack, gives the
-channel the origin's privacy, and records the link on the channel. Slack refuses an
-origin in a DM, a group DM or a Slack Connect channel, so there the channel is
-created without one (its workspace given explicitly, since coolton is an org-wide
-install) and the requester is invited too.
+coolton's bot and cooltonUser so coolton can work there.
+
+Linking the message the request came from (an "origin") makes Slack add its author
+to the channel, give the channel the origin's privacy (or private, when asked), and
+put a join card ("Started a session with ... in #channel") on that message, which
+the origin channel's members can join a private channel from. Slack also posts a
+"Context from #origin" message in the new channel. Slack only accepts an origin the
+code channel app's bot can see, so the first time coolton links one in a channel,
+her bot invites that bot in. Slack refuses an origin in a DM, a group DM or a Slack
+Connect channel, and bots can't post the join card themselves, so there the channel
+is created without one (its workspace given explicitly, since coolton is an org-wide
+install, and private when the conversation is), and the requester is invited too.
 """
 
 from __future__ import annotations
@@ -38,15 +44,33 @@ _ERROR_HELP = {
 }
 
 
-def _team_id(client, channel_id: str) -> str | None:
-    """The workspace `channel_id` belongs to (needed without an origin, as coolton's
-    token is org-wide)."""
+def _conversation(client, channel_id: str) -> dict:
     try:
-        channel = client.conversations_info(channel=channel_id).get("channel") or {}
+        return client.conversations_info(channel=channel_id).get("channel") or {}
     except Exception:
-        logger.exception("Couldn't look up the workspace of %s", channel_id)
-        return None
+        logger.exception("Couldn't look up %s", channel_id)
+        return {}
+
+
+def _team_id(channel: dict) -> str | None:
+    """The workspace a conversation belongs to (needed without an origin, as coolton's
+    token is org-wide)."""
     return channel.get("context_team_id") or (channel.get("shared_team_ids") or [None])[0]
+
+
+def _add_code_channel_bot(client, channel_id: str) -> bool:
+    """Invite the code channel app's bot to `channel_id` so Slack accepts an origin
+    there. False if it can't be (a DM, or invites are restricted)."""
+    from agent.mention_ids import CODE_CHANNEL_BOT_ID
+
+    try:
+        client.conversations_invite(channel=channel_id, users=CODE_CHANNEL_BOT_ID)
+    except Exception as e:
+        data = getattr(getattr(e, "response", None), "data", None) or {}
+        if data.get("error") != "already_in_channel":
+            logger.info("Couldn't add the code channel bot to %s: %s", channel_id, data.get("error") or e)
+            return False
+    return True
 
 
 def _code_channel_app():
@@ -66,23 +90,35 @@ def _create(app, params: dict) -> dict:
 def create_code_channel(
     client, name: str, task: str, owner_id: str,
     source_channel_id: str, source_thread_ts: str, source_message_ts: str = "",
+    private: bool = False,
 ) -> str:
     """Create a code channel and, on success, schedule coolton picking up `task` there
     as its own conversation. Returns a message for the model to relay. `client` is
-    coolton's own bot client; the channel is created by the code channel app."""
+    coolton's own bot client; the channel is created by the code channel app.
+    `private` makes it private; otherwise it has the origin's privacy."""
     app = _code_channel_app()
     if app is None:
         return "Error: code channels aren't set up (no SLACK_CODE_CHANNEL_BOT_TOKEN configured)."
-    params = {"name": name}
+    from agent.code_channel_store import expect_origin_context
+
+    params = {"name": name, **({"is_private": True} if private else {})}
     if source_message_ts:
         # The request's own message: retries of it return the same channel.
         params["session_id"] = f"coolton:{source_channel_id}:{source_message_ts}"
     linked = bool(source_channel_id and source_message_ts)
-    response = _create(app, {**params, "origin_channel_id": source_channel_id,
-                             "origin_message_ts": source_message_ts}) if linked else None
+    response = None
+    if linked:
+        expect_origin_context(source_channel_id, source_message_ts)
+        origin = {**params, "origin_channel_id": source_channel_id, "origin_message_ts": source_message_ts}
+        response = _create(app, origin)
+        if response.get("error") == "invalid_origin_link" and _add_code_channel_bot(client, source_channel_id):
+            response = _create(app, origin)
     if response is None or (not response.get("ok") and response.get("error") in _NO_ORIGIN_ERRORS):
         linked = False
-        team_id = _team_id(client, source_channel_id)
+        source = _conversation(client, source_channel_id)
+        team_id = _team_id(source)
+        if source.get("is_im") or source.get("is_mpim") or source.get("is_private"):
+            params["is_private"] = True
         response = _create(app, {**params, **({"team_id": team_id} if team_id else {})})
 
     if not response.get("ok"):
@@ -115,9 +151,13 @@ def create_code_channel(
     )
     t.start()
 
+    privacy = "private" if params.get("is_private") else "with the same privacy as this channel" if linked else "public"
+    joining = (" Slack put a join card on the request's message; people in this channel can join from it."
+               if linked else " Only the people added to it are in it; there's no join card outside a channel."
+               if params.get("is_private") else "")
     return (
-        f"Created code channel <#{channel_id}>. I'm picking up the work there in a few seconds, "
-        f"so this thread doesn't need to continue it."
+        f"Created code channel <#{channel_id}> ({privacy}).{joining} I'm picking up the work there in a "
+        f"few seconds, so this thread doesn't need to continue it."
     )
 
 

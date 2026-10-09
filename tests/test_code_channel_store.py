@@ -53,3 +53,14 @@ def test_register_multiple_channels_independent(tmp_file):
     assert store.is_code_channel("C2") is True
     assert store.get_code_channel("C1")["name"] == "First"
     assert store.get_code_channel("C2")["name"] == "Second"
+
+
+def test_only_the_context_opener_of_a_channel_coolton_made_is_recognized():
+    """Slack opens a code channel with "Context from #origin" quoting the request; coolton's
+    handoff covers it when she made the channel, while one made from Slack's UI starts from it."""
+    opener = ("<https://hackclub.slack.com/archives/C0BSF4XM3KJ/p1791549628540459|Context> from "
+              "<#C0BSF4XM3KJ>:\n> <@UCOOLTON> make a code channel")
+    assert not store.is_expected_origin_context(opener)
+    store.expect_origin_context("C0BSF4XM3KJ", "1791549628.540459")
+    assert store.is_expected_origin_context(opener)
+    assert not store.is_expected_origin_context("> " + opener)
