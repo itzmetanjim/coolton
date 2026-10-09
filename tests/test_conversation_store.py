@@ -265,6 +265,22 @@ def test_conversation_trace_contains_thread_metadata_and_all_trace_parts(tmp_pat
     assert next(part for part in parts if part["type"] == "tool_call")["tool_name"] == "read_file"
 
 
+def test_a_code_channel_trace_is_the_channels_own_messages_in_order(tmp_path):
+    """A code channel's conversation has thread_ts "" (agent.code_channel_store), which
+    conversations.replies refuses with thread_not_found."""
+    from unittest.mock import Mock
+
+    from thread_context.training_log import ConversationTraceStore
+
+    client = Mock()
+    client.conversations_history.return_value = {"messages": [{"ts": "2.0"}, {"ts": "1.0"}]}
+
+    path = ConversationTraceStore(str(tmp_path / "logs")).write_from_slack(client, "CCODE", "", [])
+
+    client.conversations_replies.assert_not_called()
+    assert [m["ts"] for m in json.loads(path.read_text())["slack_messages"]] == ["1.0", "2.0"]
+
+
 def test_last_seen_ts_only_moves_forward_and_survives_a_restart(tmp_path):
     path = str(tmp_path / "conversations.json")
     store = ConversationStore(file_path=path)

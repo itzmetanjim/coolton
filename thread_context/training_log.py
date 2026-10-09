@@ -70,19 +70,18 @@ class ConversationTraceStore:
         thread_ts: str,
         messages: list[ModelMessage],
     ) -> Path:
-        """Fetch the complete Slack thread and persist it beside the model trace."""
-        response = client.conversations_replies(
-            channel=channel_id, ts=thread_ts, limit=200
-        )
+        """Fetch the complete Slack thread and persist it beside the model trace. A code
+        channel's conversation (thread_ts "", agent.code_channel_store) is the channel's
+        own top-level messages."""
+        fetch = (client.conversations_replies if thread_ts else client.conversations_history)
+        params = {"channel": channel_id, "limit": 200, **({"ts": thread_ts} if thread_ts else {})}
+        response = fetch(**params)
         slack_messages = response.get("messages", [])
         while response.get("has_more") and response.get("response_metadata", {}).get("next_cursor"):
-            response = client.conversations_replies(
-                channel=channel_id,
-                ts=thread_ts,
-                limit=200,
-                cursor=response["response_metadata"]["next_cursor"],
-            )
+            response = fetch(**params, cursor=response["response_metadata"]["next_cursor"])
             slack_messages.extend(response.get("messages", []))
+        if not thread_ts:
+            slack_messages.reverse()  # history is newest first; replies are oldest first
         return self.write(channel_id, thread_ts, messages, slack_messages)
 
 
