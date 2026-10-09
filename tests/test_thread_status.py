@@ -68,12 +68,18 @@ def test_titles_are_cropped_to_slacks_200_character_limit():
     assert len(calls(client)[0][1]["title"]) == 200
 
 
-def test_nothing_is_sent_outside_a_turn_or_for_a_code_channel_conversation():
+def test_a_code_channel_turn_is_never_titled_after_the_request(monkeypatch):
+    """A code channel's session title is the channel's name: titling it after each
+    message renamed the channel to the latest prompt."""
+    sent = []
+    monkeypatch.setattr("agent.code_channel_api.call", lambda method, **p: sent.append((method, p)) or {"ok": True})
     client = Mock()
     ts.stop("C1", "1.1")  # never started
     ts.start(client, "C1", "", request_text="hi")  # channel-level code channel: no thread
     ts.stop("C1", "")
-    assert client.api_call.call_count == 0
+    assert client.api_call.call_count == 0  # its session is the code channels app's
+    assert sent == [("agents.sessions.setStatus", {"channel_id": "C1", "status": "processing"}),
+                    ("agents.sessions.setStatus", {"channel_id": "C1", "status": "active"})]
 
 
 def test_a_failing_status_api_never_breaks_the_turn():

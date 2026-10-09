@@ -3,7 +3,8 @@
   - start() puts the thread's session in `processing`: Slack's standard "is working"
     loading UI plus, since coolton subscribes to agent_session_stopped, a stop button
     (see listeners.events.agent_session_stopped). The session is titled after the
-    request, which is what the sessions list shows for recall.
+    request, which is what the sessions list shows for recall (except a code channel's,
+    whose title is the channel's name).
   - stop() sets it `active`. Slack no longer clears the loading UI when a message is
     posted, so a turn that never reached stop() would stay "working" until Slack's
     one-hour timeout.
@@ -81,6 +82,11 @@ def start(client, channel_id: str, thread_ts: str, request_text: str = "") -> No
             old["timer"].cancel()
         _state[key] = {"client": client, "timer": None}
         _arm_refresh(key)
+    if not thread_ts:
+        # A code channel's session title is the channel's name, so it's left alone (renaming
+        # it is code_channel_rename_tool's job, when someone asks).
+        _call(client, "agents.sessions.setStatus", channel_id, thread_ts, status="processing")
+        return
     # `title` only applies when this creates the session, so rename too for an existing one.
     _call(client, "agents.sessions.setStatus", channel_id, thread_ts, status="processing", title=title)
     _call(client, "agents.sessions.rename", channel_id, thread_ts, title=title)
