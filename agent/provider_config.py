@@ -309,6 +309,8 @@ def build_provider_order(user_id: str | None = None, tag: str | None = None) -> 
             "display": get_provider_display(model_entry, pmap),
             "context_window": model_entry.get("context_window"),
         }
+        if model_entry.get("compact_at"):
+            config["compact_at"] = model_entry["compact_at"]
         if pconf.get("max_retries"):
             config["max_retries"] = pconf["max_retries"]
         provider_order.append((name, config))

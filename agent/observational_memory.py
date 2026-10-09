@@ -125,6 +125,22 @@ def _budget(context_window: int) -> tuple[int, int]:
     return max(observe_at, 4_000), max(keep, 1_000)
 
 
+# model name -> tokens its last request carried beyond its messages (tool definitions and
+# the like), measured from what the provider reported (record_request_size).
+_request_overheads: dict[str, int] = {}
+
+
+def record_request_size(model_name: str, messages: list[ModelMessage], input_tokens: int) -> None:
+    """Note how much of a request's reported `input_tokens` wasn't its messages."""
+    if model_name and input_tokens:
+        _request_overheads[model_name] = max(0, input_tokens - _estimate_tokens(messages))
+
+
+def request_overhead(model_name: str) -> int:
+    """The last measured overhead of a request to `model_name` (0 before its first)."""
+    return _request_overheads.get(model_name, 0)
+
+
 def _first_user_text(message: ModelMessage) -> str | None:
     if not isinstance(message, ModelRequest):
         return None
@@ -244,22 +260,35 @@ def reflect(log: str, deps) -> str:
 
 def maybe_observe(
     messages: list[ModelMessage], deps, context_window: int | None = None, keep_from: int | None = None,
+    compact_at: int | None = None, overhead: int | None = None,
 ) -> list[ModelMessage]:
     """`messages` unchanged if the raw history since the last observation is small
     enough; otherwise [observation log, recent raw messages]. Thresholds come from
     `context_window` if given (the model about to be tried), else the model this turn
-    used, else the smallest window in the fallback chain. `keep_from` is an index into
+    used, else the smallest window in the fallback chain. A model's own `compact_at`
+    (providers.json; passed, else the model this turn used's) caps the WHOLE request
+    instead, for one that costs more past some size (Claude Haiku 5.5 at 100k+ tokens):
+    system prompt, observation log, tool definitions and history together. `overhead` is
+    those tool definitions and the like (request_overhead). `keep_from` is an index into
     `messages` from which everything stays raw however big it is: the turn's own request
     and what follows, when the history being fitted already holds them. Never raises."""
     try:
         log, raw = split_log(messages)
         if not context_window:
             context_window = getattr(deps, "model_context_window", 0) or 0
+            if context_window and compact_at is None:
+                compact_at = getattr(deps, "model_compact_at", 0)
+                overhead = getattr(deps, "model_request_overhead", 0)
         if not context_window:
             from agent.provider_config import get_min_context_window
             context_window = get_min_context_window(getattr(deps, "provider_tag_filter", None))
         observe_at, keep = _budget(context_window)
         raw_tokens = _estimate_tokens(raw)
+        if compact_at:
+            # Everything else in the request counts against the cap too.
+            fixed = _estimate_tokens(messages) - raw_tokens + (overhead or 0)
+            observe_at = max(compact_at - fixed, 4_000)
+            keep = min(keep, max(observe_at // 4, 1_000))
         if raw_tokens <= observe_at:
             return messages
         split = _safe_split_index(raw, keep)

@@ -50,6 +50,12 @@ class AgentDeps:
     # Declared context_window of the model the provider chain is using this
     # turn (0 if unknown, e.g. BYOK) — history compaction sizes itself by it.
     model_context_window: int = 0
+    # That model's own `compact_at` from providers.json (0 if none): compact history
+    # past this many tokens instead of the usual share of the window.
+    model_compact_at: int = 0
+    # Tokens that model's requests carry beyond their messages (tool definitions etc.),
+    # as last measured (agent.observational_memory.request_overhead).
+    model_request_overhead: int = 0
     # Slack tool calls made this turn (agent.slack_budget caps them).
     slack_calls: int = 0
     # What this turn reacted to its message with; set once, so it never reacts twice

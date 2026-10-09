@@ -490,6 +490,12 @@ def build_plan_hooks():
     @hooks.on.after_model_request
     async def after_model(ctx, *, request_context, response):
         deps = ctx.deps
+        try:  # how big this model's requests are beyond their messages (agent.observational_memory)
+            from agent.observational_memory import record_request_size
+            record_request_size(request_context.model.model_name, request_context.messages,
+                                response.usage.input_tokens)
+        except Exception:
+            logger.debug("Couldn't record the request size", exc_info=True)
         # A response that still has tool calls attached isn't the final answer —
         # any text alongside those calls is the model's own mid-turn status
         # narration (see the STATUS UPDATES system prompt section), so post it

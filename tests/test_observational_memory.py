@@ -48,6 +48,21 @@ def test_a_short_thread_is_left_alone(monkeypatch):
     assert tasks == []
 
 
+def test_a_models_compact_at_caps_the_whole_request_including_tool_definitions(monkeypatch):
+    """Claude Haiku 5.5 costs 5x past 100k input tokens, so providers.json compacts it before
+    a request would pass 95k, although 20% of its 1M window is 200k. Most of a request
+    can be tool definitions, which aren't in the history: measured from real requests."""
+    _observer(monkeypatch)
+    history = _history(20)  # ~40k tokens
+    om.record_request_size("haiku", history[:2], om._estimate_tokens(history[:2]) + 63_000)
+    deps = SimpleNamespace(model_context_window=1_000_000, model_compact_at=0, provider_tag_filter=None,
+                           model_request_overhead=om.request_overhead("haiku"))
+
+    assert om.maybe_observe(history, deps) is history
+    deps.model_compact_at = 95_000  # 40k history + 63k of tool definitions: over
+    assert len(om.maybe_observe(history, deps)) < len(history)
+
+
 def test_a_long_thread_becomes_an_observation_log_plus_recent_raw_messages(monkeypatch):
     tasks = _observer(monkeypatch)
     history = _history(20)  # ~40k tokens

@@ -3595,6 +3595,9 @@ def _fit_history_to_model(run_kwargs: dict, deps, prov_config: dict) -> None:
     agent.observational_memory)."""
     window = prov_config.get("context_window") or 0
     deps.model_context_window = window
+    deps.model_compact_at = prov_config.get("compact_at") or 0
+    from agent.observational_memory import request_overhead
+    deps.model_request_overhead = request_overhead(prov_config.get("model") or "")
     history = run_kwargs.get("message_history")
     if not window or not history:
         return
@@ -3603,7 +3606,8 @@ def _fit_history_to_model(run_kwargs: dict, deps, prov_config: dict) -> None:
     # No user_prompt means the turn's own request is already in the history (Jev's
     # preload, or a resumed turn): it must reach the model as itself, not as notes.
     keep_from = _turn_request_index(history) if run_kwargs.get("user_prompt") is None else None
-    compacted = maybe_observe(history, deps, context_window=window, keep_from=keep_from)
+    compacted = maybe_observe(history, deps, context_window=window, keep_from=keep_from,
+                              compact_at=deps.model_compact_at, overhead=deps.model_request_overhead)
     if compacted is not history:
         logger.info(f"Observed history to fit {prov_config.get('model')} ({window:,}-token window) before trying it")
         run_kwargs["message_history"] = compacted
