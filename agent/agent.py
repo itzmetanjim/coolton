@@ -2152,7 +2152,8 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
             not a slug).
         task: What you'll be doing there, used to seed the handoff. Optional.
         private: Make the channel private (people join from the card) when asked to.
-            Otherwise it gets this conversation's privacy.
+            Otherwise it gets this conversation's privacy: public from a public channel,
+            private from anything else. It can't be made public from a private one.
     """
     surface = _surface(ctx.deps)
     if getattr(surface, "name", "slack") != "slack":

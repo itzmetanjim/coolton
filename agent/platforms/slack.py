@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,20 @@ from agent.deferred_tools import HiddenToolset
 from agent.platform import PlatformAdapter
 
 logger = logging.getLogger(__name__)
+
+# channel_id -> (looked up at, description); a channel's name and privacy rarely change.
+_CHANNEL_DESCRIPTIONS: dict[str, tuple[float, str]] = {}
+_CHANNEL_DESCRIPTION_TTL = 600
+
+
+def describe_conversation(channel: dict) -> str:
+    """What kind of conversation a conversations.info `channel` is, with its name."""
+    if channel.get("is_im"):
+        return "a DM"
+    if channel.get("is_mpim"):
+        return "a group DM"
+    kind = "private" if channel.get("is_private") else "public"
+    return f"a {kind} channel" + (f" (#{channel['name']})" if channel.get("name") else "")
 
 # The prompt itself lives in system_prompt.md (next to this file) rather than as an
 # inline f-string — kept as one plain markdown document instead of fragmented across
@@ -122,6 +137,17 @@ class SlackPlatform(PlatformAdapter):
             pass
         return user_id
 
+    def _conversation_description(self, channel_id: str) -> str:
+        cached = _CHANNEL_DESCRIPTIONS.get(channel_id)
+        if cached and time.time() - cached[0] < _CHANNEL_DESCRIPTION_TTL:
+            return cached[1]
+        try:
+            description = describe_conversation(self.client.conversations_info(channel=channel_id)["channel"])
+        except Exception:
+            return ""
+        _CHANNEL_DESCRIPTIONS[channel_id] = (time.time(), description)
+        return description
+
     def build_context_prompt(self, deps: Any) -> str:
         # Varies by thread and sender, so run_agent puts it in the user prompt,
         # never the system prompt (which must be identical for every request
@@ -141,8 +167,10 @@ class SlackPlatform(PlatformAdapter):
                     "channel is a separate, normal conversation — mention-gated like any "
                     "other Slack thread."
                 )
+        description = self._conversation_description(deps.channel_id) if self.client else ""
+        kind = f"\n- This conversation is {description}" if description else ""
         return f"""\n## CURRENT CONTEXT
-- You are in channel_id: `{deps.channel_id}` (thread_ts: `{deps.thread_ts}` if in thread, else DM)
+- You are in channel_id: `{deps.channel_id}` (thread_ts: `{deps.thread_ts}` if in thread, else DM){kind}
 - Use this channel_id for operations in the current channel unless user specifies otherwise
 - Your user_id (the HUMAN who messaged you): `{deps.user_id}`
 - Your own bot user id (this is YOU, not a third party): `{os.environ.get("COOLTON_BOT_ID", "")}`

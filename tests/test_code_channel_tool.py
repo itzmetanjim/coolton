@@ -67,7 +67,8 @@ def test_it_creates_the_channel_linked_to_the_request_and_registers_it(monkeypat
     [(method, params)] = calls
     assert method == "agents.conversations.create"
     assert params == {"name": "Code audit and bug detection in Coolton", "session_id": "coolton:C0:1.2",
-                      "origin_channel_id": "C0", "origin_message_ts": "1.2"}
+                      "is_private": False, "origin_channel_id": "C0", "origin_message_ts": "1.2"}
+    assert "(public)" in result  # what Slack made it, so coolton can say so
     # coolton's bot and cooltonUser are added; Slack adds the origin's author itself.
     app.conversations_invite.assert_called_once_with(channel="C0C12EVC656", users="UBOT,UHELPER", force=True)
     assert registered == [("C0C12EVC656", "Code audit and bug detection in Coolton", "U1", "C0", "1.1")]

@@ -101,7 +101,13 @@ def create_code_channel(
         return "Error: code channels aren't set up (no SLACK_CODE_CHANNEL_BOT_TOKEN configured)."
     from agent.code_channel_store import expect_origin_context
 
-    params = {"name": name, **({"is_private": True} if private else {})}
+    # The origin's privacy, made explicit so coolton can say what the channel is; if it
+    # can't be looked up, Slack still matches a linked origin's privacy itself.
+    source = _conversation(client, source_channel_id)
+    source_private = any(source.get(k) for k in ("is_im", "is_mpim", "is_private")) if source else None
+    params = {"name": name}
+    if private or source_private is not None:
+        params["is_private"] = bool(private or source_private)
     if source_message_ts:
         # The request's own message: retries of it return the same channel.
         params["session_id"] = f"coolton:{source_channel_id}:{source_message_ts}"
@@ -115,10 +121,8 @@ def create_code_channel(
             response = _create(app, origin)
     if response is None or (not response.get("ok") and response.get("error") in _NO_ORIGIN_ERRORS):
         linked = False
-        source = _conversation(client, source_channel_id)
+        params.setdefault("is_private", True)  # privacy unknown: don't expose it
         team_id = _team_id(source)
-        if source.get("is_im") or source.get("is_mpim") or source.get("is_private"):
-            params["is_private"] = True
         response = _create(app, {**params, **({"team_id": team_id} if team_id else {})})
 
     if not response.get("ok"):
@@ -151,7 +155,7 @@ def create_code_channel(
     )
     t.start()
 
-    privacy = "private" if params.get("is_private") else "with the same privacy as this channel" if linked else "public"
+    privacy = {True: "private", False: "public"}.get(params.get("is_private"), "with the same privacy as this channel")
     joining = (" Slack put a join card on the request's message; people in this channel can join from it."
                if linked else f" <@{owner_id}> was added to it (there's no join card outside a channel).")
     return (

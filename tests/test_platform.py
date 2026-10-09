@@ -20,6 +20,16 @@ def test_slack_adapter_context_contains_legacy_fields():
     assert "Your user_id (the HUMAN who messaged you): `U123`" in context
 
 
+def test_slack_context_says_whether_the_conversation_is_private():
+    """Seen live: coolton told someone a code channel was public "because this channel is
+    public" when the channel she was in was private."""
+    client = Mock()
+    client.conversations_info.return_value = {"channel": {"name": "lilytest", "is_private": True}}
+    deps = SimpleNamespace(user_id="U123", channel_id="CPRIVATE", thread_ts="1.2", message_ts="1.3", user_token=None)
+
+    assert "This conversation is a private channel (#lilytest)" in SlackPlatform(client).build_context_prompt(deps)
+
+
 def test_build_turn_context_contains_volatile_fields():
     deps = SimpleNamespace(user_id="U123", channel_id="C123", thread_ts="1.2", message_ts="1.3")
     context = SlackPlatform().build_turn_context(deps, "anthropic:claude-sonnet-4-6", True)
