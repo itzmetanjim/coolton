@@ -496,10 +496,10 @@ def build_plan_hooks():
         # as a real thread message right away instead of holding it until the
         # turn ends. A text-only response (no tool calls) is always the final
         # answer, which run_agent_turn posts separately — never repost that here.
-        has_tool_calls = any(
-            getattr(part, "part_kind", None) == "tool-call" for part in response.parts
-        )
-        if has_tool_calls:
+        tool_names = [part.tool_name for part in response.parts if getattr(part, "part_kind", None) == "tool-call"]
+        # text_only_response is the final reply itself (agent.agent.OUTPUT_TYPE), so text
+        # beside it is the model talking about the call, not a status update.
+        if tool_names and "text_only_response" not in tool_names:
             status_text = "\n\n".join(
                 part.content
                 for part in response.parts

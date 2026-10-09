@@ -51,16 +51,15 @@ def test_plain_text_is_still_a_valid_final_answer(monkeypatch):
     assert surface.reactions == []
 
 
-def test_a_tool_call_written_out_as_text_is_sent_back_to_be_made_properly(monkeypatch):
+def test_a_text_only_response_written_out_as_text_still_only_sends_the_reply(monkeypatch):
     """Seen live: a reply of `text_only_response(emoji_name="tada", response="...")` as
-    plain text, which was posted as-is."""
-    replies = iter([TextPart('text_only_response(emoji_name="tada", response="all set")'),
-                    ToolCallPart("text_only_response", {"emoji_name": "tada", "response": "all set"})])
+    plain text, which was posted parameters and all."""
+    reply = TextPart('text_only_response(emoji_name="tada", response="all set, it\'s done")')
 
-    result, surface, calls = _run(lambda messages, info: ModelResponse(parts=[next(replies)]), monkeypatch)
+    result, surface, calls = _run(lambda messages, info: ModelResponse(parts=[reply]), monkeypatch)
 
-    assert result.output == "all set" and surface.reactions == ["tada"]
-    assert len(calls) == 2
+    assert result.output == "all set, it's done" and surface.reactions == ["tada"]
+    assert len(calls) == 1
 
 
 def test_a_failed_reaction_still_sends_the_reply(monkeypatch):
@@ -90,3 +89,25 @@ def test_a_turn_reacts_to_its_message_only_once(monkeypatch):
                               tools=[add_emoji_reaction])
     assert result.output == "done"
     assert surface.reactions == ["brain"]
+
+
+def test_text_beside_a_text_only_response_call_is_not_posted_as_a_status_update(monkeypatch):
+    """Text beside a normal tool call is mid-turn narration, posted right away; beside
+    text_only_response it's the model talking about its reply (seen live: "text_only_response
+    can't add a reaction and a reply in one step here, so I'll just reply.")."""
+    from unittest.mock import Mock
+
+    from agent.plan_block import build_plan_hooks
+
+    monkeypatch.setattr("agent.tools.emoji_reaction._surface", lambda deps: _Surface())
+    monkeypatch.setattr("agent.tools.emoji_reaction.random.random", lambda: 1.0)
+    deps = SimpleNamespace(client=Mock(), channel_id="C1", thread_ts="1.1", plan_ts=None)
+    test_agent = Agent(
+        FunctionModel(lambda m, i: ModelResponse(parts=[
+            TextPart("text_only_response can't do both, so I'll just reply."),
+            ToolCallPart("text_only_response", {"emoji_name": "tada", "response": "done"})])),
+        deps_type=SimpleNamespace, output_type=agent_mod.OUTPUT_TYPE, capabilities=[build_plan_hooks()],
+    )
+
+    assert test_agent.run_sync("hi", deps=deps).output == "done"
+    deps.client.chat_postMessage.assert_not_called()

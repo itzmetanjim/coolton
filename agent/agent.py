@@ -9,7 +9,7 @@ import shutil
 import threading
 import requests
 from pydantic_ai import RunContext
-from pydantic_ai import Agent, ModelRetry, TextOutput, ToolOutput
+from pydantic_ai import Agent, TextOutput, ToolOutput
 from pydantic_ai.messages import (
     BinaryContent, ModelRequest, ModelResponse, SystemPromptPart, ToolCallPart, ToolReturn, UserPromptPart,
 )
@@ -2386,21 +2386,38 @@ async def text_only_response(ctx: RunContext[AgentDeps], emoji_name: str, respon
     return response
 
 
-# A whole reply that's just a call like `text_only_response(emoji_name="tada", ...)`
-# written out as text (seen live from Claude Haiku 5.5 on HCAI), not made as a call.
-_WRITTEN_OUT_CALL_RE = re.compile(r"\s*[a-z]+(?:_[a-z0-9]+)+\s*\(.*\)\s*", re.DOTALL)
+def _written_out_text_only_response(text: str) -> dict | None:
+    """The arguments of a text_only_response call the model wrote out as its reply's text
+    (seen live from Claude Haiku 5.5 on HCAI) instead of making it, or None."""
+    import ast
+
+    try:
+        call = ast.parse(text.strip(), mode="eval").body
+    except (SyntaxError, ValueError):
+        return None
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == "text_only_response"):
+        return None
+    try:
+        args = {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords if kw.arg}
+        for positional in call.args:  # text_only_response({"emoji_name": ..., "response": ...})
+            value = ast.literal_eval(positional)
+            if isinstance(value, dict):
+                args.update(value)
+    except (ValueError, SyntaxError):
+        return None
+    return args if isinstance(args.get("response"), str) else None
 
 
-def plain_text_reply(text: str) -> str:
-    """A plain-text final answer, unless it's a tool call written out as text: that would
-    be posted as-is, so the model is asked to make the call or answer properly instead."""
-    if _WRITTEN_OUT_CALL_RE.fullmatch(text):
-        raise ModelRetry(
-            "Your reply was a tool call written out as text, which would be posted to the user "
-            "as-is. Make it as a real tool call, or reply in plain text (put it in a code block "
-            "if that text really is what you mean to send)."
-        )
-    return text
+async def plain_text_reply(ctx: RunContext[AgentDeps], text: str) -> str:
+    """A plain-text final answer. One that's a text_only_response call written out as
+    text is treated as that call, so its parameters never reach the user."""
+    written = _written_out_text_only_response(text)
+    if written is None:
+        return text
+    if not written.get("emoji_name"):
+        return written["response"]
+    return await text_only_response(ctx, str(written["emoji_name"]), written["response"])
 
 
 # `text_only_response` is an output function, not a regular tool: calling it ends the
