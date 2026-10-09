@@ -19,8 +19,12 @@ def slack(monkeypatch):
         calls.append((method, params))
         return responses.get(method, {"ok": True})
 
+    canvases = {}
     monkeypatch.setattr(tools, "call", call)
     monkeypatch.setattr(tools, "is_code_channel", lambda c: c == "CCODE")
+    monkeypatch.setattr(tools, "canvas_views", lambda c: dict(canvases))
+    monkeypatch.setattr(tools, "remember_canvas_view",
+                        lambda c, key, canvas_id, view_id, name="": canvases.update({key: {"canvas_id": canvas_id, "view_id": view_id}}))
     return calls, responses
 
 
@@ -44,16 +48,17 @@ def test_an_html_tab_is_an_upsert_by_view_key_with_its_allowed_origins(slack):
 
 
 def test_a_new_canvas_tab_is_created_then_later_updated_in_place(slack):
+    """Slack keeps no view_key for canvas tabs (and listViews leaves them out), so
+    coolton remembers which canvas a key is to update it rather than add a second tab."""
     calls, responses = slack
-    responses["agents.conversations.listViews"] = {"ok": True, "views": []}
     responses["canvases.create"] = {"ok": True, "canvas_id": "F1"}
+    responses["agents.conversations.setView"] = {"ok": True, "view_id": "Ct1"}
 
     tools.set_view("CCODE", "canvas", "plan", "Plan", markdown="# Plan")
-    assert [m for m, _ in calls] == ["agents.conversations.listViews", "canvases.create", "agents.conversations.setView"]
+    assert [m for m, _ in calls] == ["canvases.create", "agents.conversations.setView"]
     assert calls[-1][1]["canvas_id"] == "F1" and calls[-1][1]["access_level"] == "comment"
 
     calls.clear()
-    responses["agents.conversations.listViews"] = {"ok": True, "views": [{"view_key": "plan", "file_id": "F1"}]}
     tools.set_view("CCODE", "canvas", "plan", markdown="# Plan v2")
     assert calls[-1] == ("agents.conversations.setCanvasContent",
                          {"channel": "CCODE", "canvas_id": "F1", "content": "# Plan v2"})
@@ -61,7 +66,7 @@ def test_a_new_canvas_tab_is_created_then_later_updated_in_place(slack):
 
 def test_reading_a_canvas_includes_its_comments(slack):
     _, responses = slack
-    responses["agents.conversations.listViews"] = {"ok": True, "views": [{"view_key": "plan", "file_id": "F1"}]}
+    tools.remember_canvas_view("CCODE", "plan", "F1", "Ct1")
     responses["agents.conversations.getCanvas"] = {"ok": True, "title": "Plan", "content": "1. Inventory", "comments": [
         {"user_id": "U1", "quoted_text": "1. Inventory", "text": "billing last?", "replies": [{"user_id": "U2", "text": "+1"}]}]}
 

@@ -10,7 +10,7 @@ import json
 import re
 
 from agent.code_channel_api import call, error_text
-from agent.code_channel_store import is_code_channel
+from agent.code_channel_store import canvas_views, is_code_channel, remember_canvas_view
 
 VIEW_TYPES = ("html", "diff", "block_kit", "canvas", "pull_request")
 CONTEXT_BAR_ICONS = ("branch", "folder", "hierarchy", "life-ring", "link", "globe", "terminal", "code", "search", "lock")
@@ -32,13 +32,10 @@ def _json(value, what: str):
         return None, f"Error: {what} must be JSON ({e})."
 
 
-def _views(channel_id: str) -> list[dict]:
-    return call("agents.conversations.listViews", channel_id=channel_id).get("views") or []
-
-
 def _canvas_id(channel_id: str, view_key: str) -> str | None:
-    view = next((v for v in _views(channel_id) if v.get("view_key") == view_key), None)
-    return (view or {}).get("file_id")
+    """The canvas behind a canvas tab coolton added (Slack itself keeps no view_key for
+    canvas tabs; agent.code_channel_store.remember_canvas_view)."""
+    return (canvas_views(channel_id).get(view_key) or {}).get("canvas_id")
 
 
 def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = "", content: str = "",
@@ -95,6 +92,8 @@ def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = ""
     response = call("agents.conversations.setView", **params)
     if not response.get("ok"):
         return error_text(response)
+    if view_type == "canvas":
+        remember_canvas_view(channel_id, view_key, params["canvas_id"], response.get("view_id", ""), name)
     return (f"Tab {'updated' if (response.get('content_version') or 1) > 1 else 'added'}: view_id "
             f"{response.get('view_id')} (link to it in a message with a rich_text channel element whose "
             f"tab_id is that view_id).")
@@ -107,12 +106,11 @@ def list_views(channel_id: str) -> str:
     response = call("agents.conversations.listViews", channel_id=channel_id)
     if not response.get("ok"):
         return error_text(response)
-    views = response.get("views") or []
-    if not views:
-        return "This code channel has no tabs yet."
-    return "\n".join(
-        f"- {v.get('label') or v.get('name') or '(unnamed)'}: view_key={v.get('view_key', '(diff)')}, "
-        f"view_id={v.get('view_id')}, version {v.get('content_version')}" for v in views)
+    lines = [f"- {v.get('label') or v.get('name') or '(unnamed)'}: view_key={v.get('view_key', '(diff)')}, "
+             f"view_id={v.get('view_id')}, version {v.get('content_version')}" for v in response.get("views") or []]
+    lines += [f"- {c.get('name') or key} (canvas): view_key={key}, view_id={c.get('view_id')}"
+              for key, c in canvas_views(channel_id).items()]
+    return "\n".join(lines) if lines else "This code channel has no tabs yet."
 
 
 def remove_view(channel_id: str, view_key: str = "", view_id: str = "") -> str:
@@ -121,6 +119,9 @@ def remove_view(channel_id: str, view_key: str = "", view_id: str = "") -> str:
         return denied
     if bool(view_key) == bool(view_id):
         return "Error: give exactly one of view_key or view_id."
+    if view_key in canvas_views(channel_id):
+        return ("Error: Slack can't remove canvas tabs through its API yet. Ask someone to remove it from the "
+                "channel's tabs in Slack, or keep it and update it instead.")
     response = call("agents.conversations.removeView", channel_id=channel_id,
                     **({"view_key": view_key} if view_key else {"view_id": view_id}))
     return "Tab removed." if response.get("ok") else error_text(response)
@@ -132,7 +133,8 @@ def read_canvas(channel_id: str, view_key: str, include_resolved: bool = False) 
         return denied
     canvas_id = _canvas_id(channel_id, view_key)
     if not canvas_id:
-        return f"Error: no canvas tab with view_key {view_key!r} in this channel."
+        known = ", ".join(canvas_views(channel_id)) or "none"
+        return f"Error: no canvas tab with view_key {view_key!r} here (canvas tabs: {known})."
     response = call("agents.conversations.getCanvas", channel=channel_id, canvas_id=canvas_id,
                     include_resolved=include_resolved)
     if not response.get("ok"):

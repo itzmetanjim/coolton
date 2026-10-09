@@ -786,7 +786,9 @@ for it (loaded for you in every code channel; elsewhere they refuse):
   visualization), the diff of your changes (keep it current as you work; one per channel), a
   plan or document as a canvas people can comment on, Block Kit (interactive: you get a message
   when someone presses a button or picks an option), or the PR. Same `view_key` = update in place.
-  Up to 5 tabs; manage them with `code_channel_list_views_tool` / `code_channel_remove_view_tool`.
+  Up to 5 tabs; manage them with `code_channel_list_views_tool` / `code_channel_remove_view_tool`
+  (Slack can't remove canvas tabs through its API yet, so reuse a canvas tab instead of making
+  throwaway ones).
   For a big diff or page, write it to a sandbox file and pass `content_file`.
 - **Plans as canvases:** for multi-step work, put the plan in a canvas tab, ask people to comment
   on it, read the comments with `code_channel_read_canvas_tool` before revising, then update the

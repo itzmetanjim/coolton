@@ -76,3 +76,22 @@ def unregister_code_channel(channel_id: str) -> None:
         data = _load()
         if data.pop(channel_id, None) is not None:
             _save(data)
+
+
+def remember_canvas_view(channel_id: str, view_key: str, canvas_id: str, view_id: str, name: str = "") -> None:
+    """Record a canvas tab coolton added. Slack keeps no view_key for canvas tabs and
+    leaves them out of agents.conversations.listViews, so this is how coolton finds one
+    again to update or read it (agent.tools.code_channel_tools)."""
+    with _lock:
+        data = _load()
+        entry = data.get(channel_id)
+        if entry is None:
+            return
+        entry.setdefault("canvas_views", {})[view_key] = {"canvas_id": canvas_id, "view_id": view_id, "name": name}
+        _save(data)
+
+
+def canvas_views(channel_id: str) -> dict:
+    """view_key -> {"canvas_id", "view_id", "name"} for the canvas tabs coolton added here."""
+    with _lock:
+        return dict((_load().get(channel_id) or {}).get("canvas_views") or {})
