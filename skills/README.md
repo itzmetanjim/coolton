@@ -13,6 +13,10 @@ kevinton writes new skills into `skills/` after real conversation turns.
 | `manage-skills` | The single skill for the full skill lifecycle: **find** skills in the ecosystem, **install** them, and **create/edit/rename/delete** coolton's own catalog. **Merged** from the old `find-skills` (discovery) and `fusion-skill-authoring` (authoring craft) skills. |
 | `summarize-channel` | Summarize a Slack channel or thread. |
 | `compare-ai-models` | Compare two+ AI models with a use-case verdict (auto-captured by kevinton). |
+| `coolton-research` | How to answer anything that has to be looked up. Moved out of the system prompt, which now just says to load it. |
+| `code-channels` | Creating and working in Slack code channels. Moved out of the system prompt. |
+| `computer-use` | The XFCE desktop and live agent-browser sessions. The system prompt keeps only when to use which. |
+| `huddlefm-dj` | DJing a HuddleFM session. Moved out of the system prompt. |
 
 ## Merged overlaps (history)
 

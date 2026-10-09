@@ -1,7 +1,7 @@
 """`[!FAST]`: answer quickly for one turn instead of researching carefully.
 
 By default coolton (and her subagents) ask for high reasoning effort and follow the
-system prompt's RESEARCH rules: careful answers over fast ones. A message containing
+coolton-research skill (skills/coolton-research): careful answers over fast ones. A message containing
 `[!FAST]` (escape it as `\\[!FAST]` to send it literally) turns that off for its turn:
 the model runs at its default reasoning effort and is told the thoroughness rules
 don't apply (FAST_NOTE), like coolton was before.
@@ -12,9 +12,9 @@ _FAST_DIRECTIVE_RE = re.compile(r"(\\)?\[!FAST\]", re.IGNORECASE)
 
 FAST_NOTE = (
     "[Fast mode: the user sent [!FAST], so this turn values speed over thoroughness. Answer "
-    "quickly with the few tool calls that are clearly needed; the RESEARCH section's rules on "
-    "searching wide, reading deep and not giving up early don't apply. Still cite what you "
-    "found and never make things up.]\n\n"
+    "quickly with the few tool calls that are clearly needed; the coolton-research skill's rules on "
+    "searching wide, reading deep and not giving up early don't apply, so don't load it. Still "
+    "cite what you found and never make things up.]\n\n"
 )
 
 

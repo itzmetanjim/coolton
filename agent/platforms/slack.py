@@ -165,7 +165,9 @@ class SlackPlatform(PlatformAdapter):
                     "thread) is addressed to you — reply at channel level (thread_ts \"\"), "
                     "never start a thread for your reply. A thread started inside this "
                     "channel is a separate, normal conversation — mention-gated like any "
-                    "other Slack thread."
+                    "other Slack thread. Load the `code-channels` skill before using this "
+                    "channel's tools (tabs, canvas, context bar, slash commands) if you haven't "
+                    "in this conversation yet."
                 )
         description = self._conversation_description(deps.channel_id) if self.client else ""
         kind = f"\n- This conversation is {description}" if description else ""

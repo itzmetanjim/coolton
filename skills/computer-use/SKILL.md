@@ -1,6 +1,6 @@
 ---
 name: computer-use
-description: 'Playbook for driving the XFCE desktop inside your sandbox with computer_use / computer_stream_tool — waiting for windows to paint, dismissing first-run dialogs, staying in the right focus, when a GUI action is worth it over run_linux_command, and when agent-browser should be used instead. USE FOR: using a native GUI app, visually verifying a rendered page. DO NOT USE FOR: websites or Electron apps (use agent-browser), or anything a shell command or API call can do faster.'
+description: 'Drive the XFCE desktop in your sandbox (computer_use, computer_stream_tool), or a watchable agent-browser session (agent_browser_stream_tool): native GUI apps, checking what a page really looks like. Load before using any of them.'
 ---
 
 # Computer Use
@@ -13,6 +13,21 @@ see screenshots; there's no way to act correctly blind.
 Ask yourself first: does this actually need a screen? `run_linux_command` (curl, a CLI, a script)
 is faster and more reliable for anything it can do. Reach for the desktop only when the task is
 inherently visual or GUI-only.
+
+## The desktop and the tools
+Your sandbox has a real XFCE desktop with a mouse, a keyboard, and apps (Firefox, Chromium,
+LibreOffice, GIMP, a file manager, a text editor, a calculator). If the current turn isn't on a
+vision model, `computer_use` returns an error: tell the user to re-send their message starting
+with `[!WITH:vision]`.
+
+`computer_use` is in your tool list. `computer_stream_tool`, `agent_browser_stream_tool` and
+`set_sandbox_keepalive_tool` aren't: call them with `call_tool`, after `search_tools("computer
+stream")` if a `search_tools` result with them isn't already in the conversation.
+
+`computer_use` actions: `screenshot`, `click`/`right_click`/`middle_click`/`double_click` (x, y;
+omit them to click at the current position), `move_mouse`, `scroll` (direction, amount), `drag`
+(x, y, x2, y2), `type` (text), `key` (a key name like "enter", or a combo like `["ctrl", "c"]`),
+`wait` (milliseconds), `open_url`, `launch_app`.
 
 ## computer_use vs agent-browser
 These overlap on "things with a screen" but are not interchangeable — pick wrong and you'll either
@@ -39,7 +54,9 @@ watch even if you post a stream link. If the session is nontrivial and worth let
 watch live: call `agent_browser_stream_tool()` once first (it's the exact same view-only desktop
 stream `computer_stream_tool` posts — agent-browser doesn't get its own separate viewer), then run
 agent-browser itself with `--headed` and `DISPLAY=:0` so its Chrome window actually renders into
-that desktop instead of staying invisible:
+that desktop instead of staying invisible. Don't skip this because the task looks quick: a session
+that turns out slow (a cold browser start, a page that hangs) is exactly when the user benefits
+most from seeing what's happening instead of just waiting:
 ```
 DISPLAY=:0 agent-browser open --headed https://example.com
 ```

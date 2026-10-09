@@ -214,7 +214,7 @@ def _activate_code_channel(
         "Nobody sent this message — it's the handoff. The history above is the thread "
         "this came from. This whole channel is ONE conversation: reply at channel level, "
         f"not in a thread. {next_step}. This handoff is addressed to you, so it shouldn't end "
-        "in skip(preserve=False).]"
+        "in skip(preserve=False). Load the `code-channels` skill before using this channel's tools.]"
     )
 
     try:
