@@ -73,13 +73,19 @@ def test_it_creates_the_channel_linked_to_the_request_and_registers_it(monkeypat
     assert registered == [("C0C12EVC656", "Code audit and bug detection in Coolton", "U1", "C0", "1.1")]
 
 
-def test_from_a_dm_it_creates_without_an_origin_and_invites_the_requester(monkeypatch):
+def test_from_a_dm_it_creates_a_private_channel_without_an_origin_and_adds_the_requester(monkeypatch):
+    """Slack refuses an origin in a DM, so there's no join card to join from."""
     monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: None)
-    client, app, calls = _slack({"ok": False, "error": "origin_channel_externally_shared"},
+    client, app, calls = _slack({"ok": False, "error": "invalid_origin_link"},
                                 {"ok": True, "channel_id": "C9"}, monkeypatch=monkeypatch)
+    client.conversations_info.return_value = {"channel": {"context_team_id": "T0266FRGM", "is_im": True}}
+    client.conversations_invite.side_effect = SlackApiError("no", Mock(data={"error": "method_not_supported_for_channel_type"}))
 
-    assert "<#C9>" in _create(client, source_channel_id="D0")
-    assert "origin_channel_id" not in calls[1][1] and calls[1][1]["team_id"] == "T0266FRGM"
+    result = _create(client, source_channel_id="D0")
+
+    assert "<#C9>" in result and "<@U1> was added" in result
+    assert "origin_channel_id" not in calls[1][1]
+    assert calls[1][1]["team_id"] == "T0266FRGM" and calls[1][1]["is_private"] is True
     app.conversations_invite.assert_called_once_with(channel="C9", users="UBOT,UHELPER,U1", force=True)
 
 

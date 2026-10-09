@@ -153,8 +153,7 @@ def create_code_channel(
 
     privacy = "private" if params.get("is_private") else "with the same privacy as this channel" if linked else "public"
     joining = (" Slack put a join card on the request's message; people in this channel can join from it."
-               if linked else " Only the people added to it are in it; there's no join card outside a channel."
-               if params.get("is_private") else "")
+               if linked else f" <@{owner_id}> was added to it (there's no join card outside a channel).")
     return (
         f"Created code channel <#{channel_id}> ({privacy}).{joining} I'm picking up the work there in a "
         f"few seconds, so this thread doesn't need to continue it."
