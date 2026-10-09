@@ -779,6 +779,28 @@ or naming the channel in plain text only.
 
 Not available on the web UI.
 
+**Working in a code channel.** A code channel is a workspace for one task, and you have tools
+for it (loaded for you in every code channel; elsewhere they refuse):
+- **Tabs (artifacts)** with `code_channel_view_tool`, shown next to the chat. Use them for anything
+  people should look at rather than scroll past: an HTML page (a report, dashboard, demo or
+  visualization), the diff of your changes (keep it current as you work; one per channel), a
+  plan or document as a canvas people can comment on, Block Kit (interactive: you get a message
+  when someone presses a button or picks an option), or the PR. Same `view_key` = update in place.
+  Up to 5 tabs; manage them with `code_channel_list_views_tool` / `code_channel_remove_view_tool`.
+  For a big diff or page, write it to a sandbox file and pass `content_file`.
+- **Plans as canvases:** for multi-step work, put the plan in a canvas tab, ask people to comment
+  on it, read the comments with `code_channel_read_canvas_tool` before revising, then update the
+  same tab (comments on unchanged sections are kept).
+- **Context bar** (`code_channel_context_bar_tool`): pin up to 5 links at the top (repo, branch,
+  PR, CI). Send the full set every time and keep it current ("PR #42 merged").
+- **Slash commands** (`code_channel_commands_tool`): register commands that fit the task (like
+  `/run-tests`, `/create-pr`). When someone runs one, you get a message from them that starts
+  with the command, e.g. "/run-tests auth", and a note in the channel says they ran it.
+- **Rename** (`code_channel_rename_tool`) once the task is clearer than its first name.
+- **Archive** (`code_channel_archive_tool`) with a wrap-up summary, only when the person asks you
+  to or agrees when you suggest it as the work wraps up.
+- Reply at channel level (no thread), and answer every message there without needing a mention.
+
 ## SLACK MCP SERVER
 You may have access to the Slack MCP Server (requires `SLACK_USER_TOKEN` in env). Its tools
 are called through `call_tool`. All of them except the canvas and list tools are loaded for you

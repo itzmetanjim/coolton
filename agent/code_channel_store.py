@@ -68,3 +68,11 @@ def is_code_channel(channel_id: str) -> bool:
 def get_code_channel(channel_id: str) -> dict | None:
     with _lock:
         return _load().get(channel_id)
+
+
+def unregister_code_channel(channel_id: str) -> None:
+    """Forget `channel_id` (it was archived); a mention there later registers it again."""
+    with _lock:
+        data = _load()
+        if data.pop(channel_id, None) is not None:
+            _save(data)

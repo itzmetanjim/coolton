@@ -21,17 +21,24 @@
     "scopes": {
       "bot": [
         "code_channels:manage",
+        "app_mentions:read",
+        "chat:write",
+        "canvases:read",
+        "canvases:write",
         "channels:write.invites",
-        "groups:write.invites",
-        "app_mentions:read"
+        "groups:write.invites"
       ]
     }
   },
   "settings": {
     "org_deploy_enabled": true,
     "socket_mode_enabled": true,
+    "interactivity": {
+      "is_enabled": true
+    },
     "event_subscriptions": {
       "bot_events": [
+        "agent_session_stopped",
         "app_mention"
       ]
     },

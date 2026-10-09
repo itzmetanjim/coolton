@@ -9,11 +9,18 @@ adds coolton's bot and cooltonUser to the channel, registers a code channel cool
 doesn't know yet as one (agent.code_channel_store), and hands the event to coolton's
 own mention handler, text unchanged (the prompt tells coolton this bot is hers),
 answered once (agent.mention_ids).
+
+As the agent, this app also gets what happens in its code channels: Slack's stop button
+(agent_session_stopped, halting coolton's run there), its per-channel slash commands
+(agent.tools.code_channel_tools.set_commands) and the Block Kit tabs' buttons and selects
+(block_actions). Each command or interaction is posted in the channel by coolton, saying
+who did what, and handed to coolton as that person's message.
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 
 from slack_bolt import App, BoltContext, Say, SayStream
@@ -72,6 +79,84 @@ def handle_code_channel_app_mention(event: dict, app_client: WebClient, coolton:
     )
 
 
+def handle_session_stopped(event: dict, coolton: WebClient) -> None:
+    """Slack's stop button in a code channel: halt coolton's run there like !stop. Slack
+    updates the session status itself."""
+    from agent.active_runs import is_run_active
+    from agent.code_channel_store import CODE_CHANNEL_THREAD_TS
+    from agent.stop_store import request_stop
+
+    channel_id = event.get("channel", "")
+    thread_ts = event.get("thread_ts") or CODE_CHANNEL_THREAD_TS
+    if not channel_id or not is_run_active(channel_id, thread_ts):
+        return
+    request_stop(channel_id, thread_ts)
+    try:
+        coolton.chat_postMessage(channel=channel_id, thread_ts=thread_ts or None, text="⏹️ stopping…")
+    except Exception:
+        logger.exception("Code channels app: couldn't confirm the stop in %s", channel_id)
+
+
+def _hand_to_coolton(coolton: WebClient, app_client: WebClient, channel_id: str, user_id: str,
+                     notice: str, text: str, team_id: str | None = None) -> None:
+    """Post `notice` in the channel as coolton, then answer `text` as `user_id`'s message there."""
+    try:
+        ts = coolton.chat_postMessage(channel=channel_id, text=notice)["ts"]
+    except Exception:
+        logger.exception("Code channels app: couldn't post in %s", channel_id)
+        return
+    handle_code_channel_app_mention(
+        {"channel": channel_id, "user": user_id, "ts": ts, "text": text, "team": team_id},
+        app_client, coolton,
+    )
+
+
+def handle_command(body: dict, app_client: WebClient, coolton: WebClient) -> None:
+    """Someone ran one of coolton's slash commands in a code channel."""
+    command, text = body.get("command", ""), (body.get("text") or "").strip()
+    channel_id, user_id = body.get("channel_id", ""), body.get("user_id", "")
+    if not channel_id or not user_id:
+        return
+    invocation = f"{command} {text}".strip()
+    _hand_to_coolton(coolton, app_client, channel_id, user_id, f"<@{user_id}> ran `{invocation}`",
+                     invocation, body.get("team_id"))
+
+
+def _describe_action(action: dict) -> str:
+    what = action.get("type", "action")
+    label = ((action.get("text") or {}).get("text")) or action.get("action_id", "")
+    value = (action.get("value") or (action.get("selected_option") or {}).get("value")
+             or ", ".join(o.get("value", "") for o in action.get("selected_options") or [])
+             or action.get("selected_date") or action.get("selected_user") or "")
+    return f"{what} \"{label}\"" + (f" (value: {value})" if value else "") + f" [action_id: {action.get('action_id')}]"
+
+
+def handle_block_action(body: dict, app_client: WebClient, coolton: WebClient) -> None:
+    """Someone used a button or select in one of coolton's Block Kit tabs."""
+    channel_id = ((body.get("channel") or {}).get("id") or (body.get("container") or {}).get("channel_id") or "")
+    user_id = (body.get("user") or {}).get("id", "")
+    actions = body.get("actions") or []
+    if not channel_id or not user_id or not actions:
+        logger.info("Code channels app: block action without a channel or user: %s", list(body))
+        return
+    described = "; ".join(_describe_action(a) for a in actions)
+    _hand_to_coolton(coolton, app_client, channel_id, user_id, f"<@{user_id}> used {described} in a tab",
+                     f"[used {described} in one of your Block Kit tabs]", (body.get("team") or {}).get("id"))
+
+
+def handle_context_bar_action(event: dict, app_client: WebClient, coolton: WebClient) -> None:
+    """Someone clicked an "action" item in a code channel's context bar. Slack documents
+    this event but its manifest validator doesn't accept a subscription to it yet, so it
+    may never arrive; handled in case Slack delivers it anyway."""
+    channel_id = event.get("channel") or event.get("channel_id") or ""
+    user_id = event.get("user") or event.get("user_id") or ""
+    key = event.get("key") or (event.get("item") or {}).get("key") or "?"
+    if channel_id and user_id:
+        _hand_to_coolton(coolton, app_client, channel_id, user_id,
+                         f"<@{user_id}> clicked `{key}` in the context bar",
+                         f"[clicked the context bar item {key}]", event.get("team"))
+
+
 def start_code_channel_app(coolton: WebClient) -> bool:
     """Connect the code channels app over Socket Mode in the background. Returns
     whether it started (it needs both of its tokens)."""
@@ -89,6 +174,24 @@ def start_code_channel_app(coolton: WebClient) -> bool:
     @app.event("message")
     def _ignore_messages():
         pass
+
+    @app.event("agent_session_stopped")
+    def _on_stop(event):
+        handle_session_stopped(event, coolton)
+
+    @app.event("code_channel_action")
+    def _on_context_bar_action(event, client):
+        handle_context_bar_action(event, client, coolton)
+
+    @app.command(re.compile(r".*"))
+    def _on_command(ack, body, client):
+        ack()
+        threading.Thread(target=handle_command, args=(body, client, coolton), daemon=True).start()
+
+    @app.action(re.compile(r".*"))
+    def _on_action(ack, body, client):
+        ack()
+        threading.Thread(target=handle_block_action, args=(body, client, coolton), daemon=True).start()
 
     def _run():
         try:

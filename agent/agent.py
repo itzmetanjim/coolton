@@ -2162,6 +2162,151 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
 
 
 @agent.tool
+def code_channel_view_tool(
+    ctx: RunContext[AgentDeps], view_type: str, view_key: str = "", name: str = "", content: str = "",
+    content_file: str = "", blocks: str = "", markdown: str = "", pr_url: str = "", base_branch: str = "",
+    head_branch: str = "", access_level: str = "comment", resource_domains: str = "",
+) -> str:
+    """Add or update a tab (an artifact) in this code channel, shown next to the chat.
+    Calling again with the same view_key updates that tab in place. Up to 5 tabs per
+    channel, at most one diff.
+
+    view_type:
+    - "html": a full, self-contained HTML document (a report, a dashboard, a demo, a
+      rendered page). Needs view_key and content (or content_file). Allow outside https
+      origins for scripts/styles/images with resource_domains.
+    - "diff": the work's changes as a unified diff (`git diff` output). Needs content (or
+      content_file); base_branch and head_branch label it. One per channel.
+    - "block_kit": Block Kit blocks (a JSON array as a string). Buttons and selects work:
+      when someone uses one, you get a message saying what they did. Needs view_key.
+    - "canvas": a plan or document as markdown, which channel members can comment on
+      (access_level "comment", the default) while only you edit it. Updating an existing
+      canvas tab keeps comments on unchanged sections. Needs view_key and markdown. Read
+      its comments with code_channel_read_canvas_tool.
+    - "pull_request": a pull request, by pr_url.
+
+    Args:
+        view_type: One of "html", "diff", "block_kit", "canvas", "pull_request".
+        view_key: The tab's stable id (e.g. "plan", "reports/coverage.html"); reuse it to update.
+        name: The tab's label.
+        content: The HTML document or diff text.
+        content_file: A sandbox file to read content from instead (e.g. a big diff or page).
+        blocks: Block Kit blocks as a JSON array string, for block_kit.
+        markdown: The canvas content, for canvas.
+        pr_url: The pull request's https URL, for pull_request.
+        base_branch: Base branch label, for diff.
+        head_branch: Head branch label, for diff.
+        access_level: Canvas only: "comment" (default), "read" or "write".
+        resource_domains: HTML only: comma-separated https origins the page may load from.
+    """
+    from agent.tools.code_channel_tools import set_view
+
+    if content_file and not content:
+        try:
+            with sandbox_use(ctx.deps.channel_id, ctx.deps.thread_ts) as use:
+                use.sandbox, _ = get_or_create_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
+                content = use.sandbox.files.read(content_file)
+        except Exception as e:
+            return f"Error: couldn't read {content_file} from the sandbox: {e}"
+    return set_view(ctx.deps.channel_id, view_type, view_key, name, content, blocks, markdown, pr_url,
+                    base_branch, head_branch, access_level, resource_domains)
+
+
+@agent.tool
+def code_channel_list_views_tool(ctx: RunContext[AgentDeps]) -> str:
+    """List this code channel's tabs (their view_key, view_id and version)."""
+    from agent.tools.code_channel_tools import list_views
+
+    return list_views(ctx.deps.channel_id)
+
+
+@agent.tool
+def code_channel_remove_view_tool(ctx: RunContext[AgentDeps], view_key: str = "", view_id: str = "") -> str:
+    """Remove one of this code channel's tabs, by view_key or (for the diff tab) view_id.
+
+    Args:
+        view_key: The tab's view_key.
+        view_id: The tab's view_id, from code_channel_list_views_tool.
+    """
+    from agent.tools.code_channel_tools import remove_view
+
+    return remove_view(ctx.deps.channel_id, view_key, view_id)
+
+
+@agent.tool
+def code_channel_read_canvas_tool(ctx: RunContext[AgentDeps], view_key: str, include_resolved: bool = False) -> str:
+    """Read a canvas tab in this code channel: its markdown and the comment threads people
+    left on it (with the text each is anchored to). Check it before revising a plan.
+
+    Args:
+        view_key: The canvas tab's view_key.
+        include_resolved: Also include resolved comment threads.
+    """
+    from agent.tools.code_channel_tools import read_canvas
+
+    return read_canvas(ctx.deps.channel_id, view_key, include_resolved)
+
+
+@agent.tool
+def code_channel_context_bar_tool(ctx: RunContext[AgentDeps], items: str) -> str:
+    """Set this code channel's context bar: up to 5 items pinned at the top (the repo, the
+    branch, the PR, CI status...). Each call replaces all of them, so send the full set,
+    and keep it current as things change ("PR #42 merged").
+
+    Args:
+        items: JSON array string of {"key", "label", "icon"?, "url"?}. key is a unique id
+            (max 64 chars), label the text (max 128); icon is one of branch, folder,
+            hierarchy, life-ring, link, globe, terminal, code, search, lock.
+    """
+    from agent.tools.code_channel_tools import set_context_bar
+
+    return set_context_bar(ctx.deps.channel_id, items)
+
+
+@agent.tool
+def code_channel_commands_tool(ctx: RunContext[AgentDeps], commands: str) -> str:
+    """Register slash commands for this code channel (like /run-tests or /create-pr), shown
+    when someone types / here. When someone runs one, you get a message saying so, with
+    its text. Each call replaces your whole set (max 10); send [] to clear them.
+
+    Args:
+        commands: JSON array string of {"name", "description", "argument_hint"?}. name has
+            no leading slash: 1-31 lowercase letters, digits, - or _, not a built-in Slack
+            command.
+    """
+    from agent.tools.code_channel_tools import set_commands
+
+    return set_commands(ctx.deps.channel_id, commands)
+
+
+@agent.tool
+def code_channel_rename_tool(ctx: RunContext[AgentDeps], title: str) -> str:
+    """Rename this code channel (its name and its session title), e.g. once the task is clearer.
+
+    Args:
+        title: The new name, a readable title (max 200 characters).
+    """
+    from agent.tools.code_channel_tools import rename
+
+    return rename(ctx.deps.channel_id, title)
+
+
+@agent.tool
+def code_channel_archive_tool(ctx: RunContext[AgentDeps], summary: str) -> str:
+    """Archive this code channel when the work is done: posts `summary` here, then archives
+    the channel with it as the summary (also shared on the message the work started from).
+    The history and tabs stay readable. ONLY when the person asks you to archive it or
+    agrees to your suggestion; never on your own.
+
+    Args:
+        summary: A wrap-up of what was done, with links (Markdown).
+    """
+    from agent.tools.code_channel_tools import archive
+
+    return archive(ctx.deps.client, ctx.deps.channel_id, summary)
+
+
+@agent.tool
 def send_message(ctx: RunContext[AgentDeps], text: str) -> str:
     """Send a message to the current Slack thread mid-turn. Use this to post progress updates,
     intermediate results, or messages that don't wait for the final response.
@@ -3069,8 +3214,9 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
     jev_picks = collect_preloads(getattr(deps, "tool_preload", None))
     # One Jev call answers both: which tool groups to load, and abuse checks (agent.abuse_report).
     deps.abuse_flags = {k.removeprefix("abuse_") for k in jev_picks if k.startswith("abuse_")}
-    from agent.tool_preload import groups_from_text
-    deps.preloaded_tool_groups = {k for k in jev_picks if not k.startswith("abuse_")} | groups_from_text(deps.request_text)
+    from agent.tool_preload import groups_for_channel, groups_from_text
+    deps.preloaded_tool_groups = ({k for k in jev_picks if not k.startswith("abuse_")}
+                                  | groups_from_text(deps.request_text) | groups_for_channel(deps.channel_id))
     if getattr(deps, "debug_timer", None) is not None and getattr(deps, "tool_preload", None) is not None:
         loaded = ", ".join(sorted(deps.preloaded_tool_groups)) or "nothing"
         deps.debug_timer.record("jev", "waiting on Jev tool preload", preload_started, time.perf_counter(), f"loaded {loaded}")
@@ -3236,7 +3382,9 @@ DEFERRED_TOOLS = frozenset({
     "update_slack_bot_manifest_tool", "wrangler_bot_deploy_tool",
     "create_scheduled_task_tool", "list_scheduled_tasks_tool", "pause_scheduled_task_tool",
     "resume_scheduled_task_tool", "delete_scheduled_task_tool",
-    "create_code_channel_tool",
+    "create_code_channel_tool", "code_channel_view_tool", "code_channel_list_views_tool",
+    "code_channel_remove_view_tool", "code_channel_read_canvas_tool", "code_channel_context_bar_tool",
+    "code_channel_commands_tool", "code_channel_rename_tool", "code_channel_archive_tool",
     "analyze_csv_tool", "run_sql_on_csv_tool", "run_python_data_analysis_tool", "extract_tar_gz_tool",
     "install_opencode_tool", "run_opencode_tool",
     "send_html_embed_tool", "send_whiteboard_embed_tool", "render_mermaid_tool",

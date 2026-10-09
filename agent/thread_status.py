@@ -37,7 +37,13 @@ def _title(text: str) -> str:
 def _call(client, method: str, channel_id: str, thread_ts: str, **fields) -> None:
     if not thread_ts:
         # thread_ts="" is a code channel's channel-level conversation (see
-        # agent.code_channel_store): there's no real Slack thread for a session.
+        # agent.code_channel_store): the whole channel is one session, which belongs to
+        # its agent bot, the code channels app (agent.code_channel_api), not coolton's.
+        from agent.code_channel_api import call
+
+        response = call(method, channel_id=channel_id, **fields)
+        if not response.get("ok") and response.get("error") != "not_configured":
+            logger.warning(f"{method} failed for code channel {channel_id}: {response.get('error')}")
         return
     try:
         client.api_call(method, json={"channel_id": channel_id, "thread_ts": thread_ts, **fields})

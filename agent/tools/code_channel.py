@@ -21,7 +21,6 @@ import os
 import threading
 import time
 
-from slack_sdk import WebClient
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +49,13 @@ def _team_id(client, channel_id: str) -> str | None:
     return channel.get("context_team_id") or (channel.get("shared_team_ids") or [None])[0]
 
 
-def _code_channel_app() -> WebClient | None:
-    """The code channel app's bot client, or None if its token isn't configured."""
-    token = os.environ.get("SLACK_CODE_CHANNEL_BOT_TOKEN")
-    return WebClient(token=token) if token else None
+def _code_channel_app():
+    from agent.code_channel_api import app_client
+
+    return app_client()
 
 
-def _create(app: WebClient, params: dict) -> dict:
+def _create(app, params: dict) -> dict:
     try:
         return app.api_call("agents.conversations.create", json=params).data
     except Exception as e:
