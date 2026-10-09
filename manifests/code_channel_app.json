@@ -1,0 +1,31 @@
+{
+  "_metadata": {
+    "major_version": 1,
+    "minor_version": 1
+  },
+  "display_information": {
+    "name": "coolton code channels",
+    "description": "Creates Slack code channels for coolton.",
+    "background_color": "#083927"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "coolton code channels",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "code_channels:manage",
+        "channels:write.invites",
+        "groups:write.invites"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": true,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

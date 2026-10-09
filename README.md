@@ -254,6 +254,7 @@ everything else in `.env.sample` is optional and additive.
 | `SLACK_CONFIG_TOKEN` | creating/deploying other Slack bots (`create_slack_bot_tool`). |
 | `BYOK_ENCRYPTION_KEY` | encrypts per-user BYOK endpoints (auto-generated to `byok_key.bin` if unset). |
 | `COOLTON_USER_ID` / `SLACK_USER_TOKEN` | the "cooltonUser" helper account, used for user-token Slack API calls. |
+| `SLACK_CODE_CHANNEL_BOT_TOKEN` | bot token of the separate app that creates code channels (manifest in `manifests/code_channel_app.json`). Without it, code channels are off. |
 | `COOLTON_BOT_ID` | coolton's own bot user id, so it recognizes self-mentions. |
 | `HUDDLEFM_USER_ID` | HuddleFM's Slack user id — DJ tools DM it directly (`agent/tools/huddlefm.py`). coolton's bot id must be allowlisted on HuddleFM's side (`INTEGRATION_USER_IDS`). |
 | `KEVINTON_ENABLED` | set to `false` to disable kevinton entirely (default: on). |

@@ -1,6 +1,7 @@
 """agent.tools.code_channel: creates a Slack code channel with
-agents.conversations.create and, on success, schedules coolton picking up work
-there as its own single conversation (thread_ts="", agent.code_channel_store)."""
+agents.conversations.create (as the separate code channel app), adds coolton to it,
+and schedules coolton picking up work there as its own single conversation
+(thread_ts="", agent.code_channel_store)."""
 
 from unittest.mock import Mock
 
@@ -22,11 +23,19 @@ def no_background_activation(monkeypatch):
     monkeypatch.setattr(code_channel.threading, "Thread", lambda target, args, daemon: Mock(start=lambda: None))
 
 
-def _slack(*responses):
-    """A client whose agents.conversations.create calls return `responses` in turn
-    (an {"ok": False} one raised as Slack's SDK does)."""
+@pytest.fixture(autouse=True)
+def ids(monkeypatch):
+    monkeypatch.setenv("COOLTON_BOT_ID", "UBOT")
+    monkeypatch.setenv("COOLTON_USER_ID", "UHELPER")
+
+
+def _slack(*responses, monkeypatch=None):
+    """(coolton's client, the code channel app's client, its create calls). The app's
+    agents.conversations.create calls return `responses` in turn (an {"ok": False}
+    one raised as Slack's SDK does)."""
     client = Mock()
     client.conversations_info.return_value = {"channel": {"context_team_id": "T0266FRGM"}}
+    app = Mock()
     calls = []
 
     def api_call(method, json):
@@ -36,8 +45,9 @@ def _slack(*responses):
             raise SlackApiError("refused", Mock(data=data))
         return Mock(data=data)
 
-    client.api_call.side_effect = api_call
-    return client, calls
+    app.api_call.side_effect = api_call
+    monkeypatch.setattr(code_channel, "_code_channel_app", lambda: app)
+    return client, app, calls
 
 
 def _create(client, **kw):
@@ -49,7 +59,7 @@ def _create(client, **kw):
 def test_it_creates_the_channel_linked_to_the_request_and_registers_it(monkeypatch):
     registered = []
     monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: registered.append(a))
-    client, calls = _slack({"ok": True, "channel_id": "C0C12EVC656"})
+    client, app, calls = _slack({"ok": True, "channel_id": "C0C12EVC656"}, monkeypatch=monkeypatch)
 
     result = _create(client)
 
@@ -58,29 +68,35 @@ def test_it_creates_the_channel_linked_to_the_request_and_registers_it(monkeypat
     assert method == "agents.conversations.create"
     assert params == {"name": "Code audit and bug detection in Coolton", "session_id": "coolton:C0:1.2",
                       "origin_channel_id": "C0", "origin_message_ts": "1.2"}
-    client.conversations_invite.assert_not_called()  # Slack adds the origin's author itself
+    # coolton's bot and cooltonUser are added; Slack adds the origin's author itself.
+    app.conversations_invite.assert_called_once_with(channel="C0C12EVC656", users="UBOT,UHELPER", force=True)
     assert registered == [("C0C12EVC656", "Code audit and bug detection in Coolton", "U1", "C0", "1.1")]
 
 
 def test_from_a_dm_it_creates_without_an_origin_and_invites_the_requester(monkeypatch):
     monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: None)
-    client, calls = _slack({"ok": False, "error": "origin_channel_externally_shared"},
-                           {"ok": True, "channel_id": "C9"})
+    client, app, calls = _slack({"ok": False, "error": "origin_channel_externally_shared"},
+                                {"ok": True, "channel_id": "C9"}, monkeypatch=monkeypatch)
 
     assert "<#C9>" in _create(client, source_channel_id="D0")
     assert "origin_channel_id" not in calls[1][1] and calls[1][1]["team_id"] == "T0266FRGM"
-    client.conversations_invite.assert_called_once_with(channel="C9", users="U1")
+    app.conversations_invite.assert_called_once_with(channel="C9", users="UBOT,UHELPER,U1", force=True)
 
 
 def test_a_refusal_is_explained_and_nothing_is_registered(monkeypatch):
     registered = []
     monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: registered.append(a))
-    client, _ = _slack({"ok": False, "error": "missing_scope"})
+    client, _, _ = _slack({"ok": False, "error": "missing_scope"}, monkeypatch=monkeypatch)
 
     result = _create(client)
 
-    assert "missing_scope" in result and "code_channels:manage" in result
+    assert "missing_scope" in result
     assert registered == []
+
+
+def test_without_the_code_channel_app_nothing_is_attempted(monkeypatch):
+    monkeypatch.setattr(code_channel, "_code_channel_app", lambda: None)
+    assert "SLACK_CODE_CHANNEL_BOT_TOKEN" in _create(Mock())
 
 
 def test_success_schedules_the_handoff(monkeypatch):
@@ -88,7 +104,7 @@ def test_success_schedules_the_handoff(monkeypatch):
     started = []
     monkeypatch.setattr(code_channel.threading, "Thread",
                         lambda target, args, daemon: Mock(start=lambda: started.append((target, args))))
-    client, _ = _slack({"ok": True, "channel_id": "C1"})
+    client, _, _ = _slack({"ok": True, "channel_id": "C1"}, monkeypatch=monkeypatch)
 
     _create(client, task="do the thing")
 

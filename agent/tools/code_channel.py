@@ -2,14 +2,16 @@
 conversation. See agent.code_channel_store for the (channel_id, thread_ts="")
 conversation-identity trick this relies on.
 
-Code channels are created with Slack's documented agents.conversations.create
-(bot token, code_channels:manage scope): coolton's bot becomes the channel's agent
-and is added on creation. Linking the message the request came from (an "origin")
-also gets its author added by Slack, gives the channel the origin's privacy, and
-records the link on the channel. Slack refuses an origin in a DM, a group DM or a
-Slack Connect channel, so there the channel is created without one (its workspace
-given explicitly, since coolton is an org-wide install) and the requester is
-invited by coolton instead.
+Code channels are created with Slack's documented agents.conversations.create by a
+separate Slack app (its bot token in SLACK_CODE_CHANNEL_BOT_TOKEN; manifest in
+manifests/code_channel_app.json), since coolton's own app can't get the
+code_channels:manage scope. That app's bot becomes the channel's agent, and it invites
+coolton's bot and cooltonUser so coolton can work there. Linking the message the
+request came from (an "origin") also gets its author added by Slack, gives the
+channel the origin's privacy, and records the link on the channel. Slack refuses an
+origin in a DM, a group DM or a Slack Connect channel, so there the channel is
+created without one (its workspace given explicitly, since coolton is an org-wide
+install) and the requester is invited too.
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ import os
 import threading
 import time
 
+from slack_sdk import WebClient
+
 logger = logging.getLogger(__name__)
 
 _ACTIVATE_DELAY_SECONDS = 3
@@ -27,9 +31,9 @@ _MAX_WAIT_FOR_ORIGIN_TURN_SECONDS = 10 * 60
 # Errors meaning the origin message can't be linked; the channel is created without it.
 _NO_ORIGIN_ERRORS = {"origin_channel_externally_shared", "invalid_origin_link", "origin_channel_is_file_channel"}
 _ERROR_HELP = {
-    "missing_scope": "coolton's Slack app doesn't have the code_channels:manage scope yet; its maintainer needs "
-                     "to reinstall it with the updated manifest.",
-    "feature_disabled": "Slack hasn't enabled code channels for coolton's app on this workspace.",
+    "missing_scope": "the code channel app is missing a scope (code_channels:manage, or the invite scopes); its "
+                     "maintainer needs to fix that app's install.",
+    "feature_disabled": "Slack hasn't enabled code channels for the code channel app on this workspace.",
     "user_not_enabled": "you don't have Slack's code channels feature enabled.",
     "restricted_action": "you're not allowed to create this kind of channel in this workspace.",
 }
@@ -46,9 +50,15 @@ def _team_id(client, channel_id: str) -> str | None:
     return channel.get("context_team_id") or (channel.get("shared_team_ids") or [None])[0]
 
 
-def _create(client, params: dict) -> dict:
+def _code_channel_app() -> WebClient | None:
+    """The code channel app's bot client, or None if its token isn't configured."""
+    token = os.environ.get("SLACK_CODE_CHANNEL_BOT_TOKEN")
+    return WebClient(token=token) if token else None
+
+
+def _create(app: WebClient, params: dict) -> dict:
     try:
-        return client.api_call("agents.conversations.create", json=params).data
+        return app.api_call("agents.conversations.create", json=params).data
     except Exception as e:
         data = getattr(getattr(e, "response", None), "data", None)
         return data if isinstance(data, dict) else {"ok": False, "error": str(e)}
@@ -59,18 +69,22 @@ def create_code_channel(
     source_channel_id: str, source_thread_ts: str, source_message_ts: str = "",
 ) -> str:
     """Create a code channel and, on success, schedule coolton picking up `task` there
-    as its own conversation. Returns a message for the model to relay."""
+    as its own conversation. Returns a message for the model to relay. `client` is
+    coolton's own bot client; the channel is created by the code channel app."""
+    app = _code_channel_app()
+    if app is None:
+        return "Error: code channels aren't set up (no SLACK_CODE_CHANNEL_BOT_TOKEN configured)."
     params = {"name": name}
     if source_message_ts:
         # The request's own message: retries of it return the same channel.
         params["session_id"] = f"coolton:{source_channel_id}:{source_message_ts}"
     linked = bool(source_channel_id and source_message_ts)
-    response = _create(client, {**params, "origin_channel_id": source_channel_id,
-                                "origin_message_ts": source_message_ts}) if linked else None
+    response = _create(app, {**params, "origin_channel_id": source_channel_id,
+                             "origin_message_ts": source_message_ts}) if linked else None
     if response is None or (not response.get("ok") and response.get("error") in _NO_ORIGIN_ERRORS):
         linked = False
         team_id = _team_id(client, source_channel_id)
-        response = _create(client, {**params, **({"team_id": team_id} if team_id else {})})
+        response = _create(app, {**params, **({"team_id": team_id} if team_id else {})})
 
     if not response.get("ok"):
         error = response.get("error") or "unknown_error"
@@ -78,11 +92,19 @@ def create_code_channel(
     channel_id = response.get("channel_id") or ""
     if not channel_id:
         return "Error: Slack reported success but returned no channel id."
-    if not linked:
-        try:
-            client.conversations_invite(channel=channel_id, users=owner_id)
-        except Exception as e:
-            logger.info("Inviting %s to code channel %s: %s", owner_id, channel_id, e)
+    # The code channel app's bot is the agent; coolton's bot and cooltonUser do the
+    # work, and the requester is only added by Slack when the origin is linked.
+    members = [os.environ.get("COOLTON_BOT_ID", ""), os.environ.get("COOLTON_USER_ID", "")]
+    members = [u for u in members + ([] if linked else [owner_id]) if u]
+    try:
+        # force: invite everyone who can be, even if one of them can't.
+        app.conversations_invite(channel=channel_id, users=",".join(members), force=True)
+    except Exception as e:
+        data = getattr(getattr(e, "response", None), "data", None) or {}
+        if data.get("error") != "already_in_channel":
+            logger.warning("Inviting %s to code channel %s: %s", members, channel_id, e)
+            return (f"Created code channel <#{channel_id}>, but couldn't add coolton to it "
+                    f"({data.get('error') or e}), so I can't work there.")
 
     from agent.code_channel_store import register_code_channel
     register_code_channel(channel_id, name, owner_id, source_channel_id, source_thread_ts)
