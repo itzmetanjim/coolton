@@ -197,15 +197,20 @@ def _activate_code_channel(
     from thread_context import conversation_store
     history = conversation_store.get_history(source_channel_id, source_thread_ts)
 
+    # The handoff is addressed to her, so it normally ends in a reply (or skip(preserve=True)),
+    # not skip(preserve=False), which would erase the turn as if it weren't.
+    next_step = (
+        f"Continue with: {task}" if task else
+        "Usually that means carrying on with what the person asked for in it. If all they asked "
+        "for was the channel, just say briefly that it's set up (text_only_response is fine) or "
+        "skip(preserve=True)"
+    )
     prompt = (
         f'[SYSTEM: you just created the code channel "{name}" and you\'re in it now. '
         "Nobody sent this message — it's the handoff. The history above is the thread "
         "this came from. This whole channel is ONE conversation: reply at channel level, "
-        f"not in a thread. Continue with: {task}]" if task else
-        f'[SYSTEM: you just created the code channel "{name}" and you\'re in it now. '
-        "Nobody sent this message — it's the handoff. The history above is the thread "
-        "this came from. This whole channel is ONE conversation: reply at channel level, "
-        "not in a thread.]"
+        f"not in a thread. {next_step}. This handoff is addressed to you, so it shouldn't end "
+        "in skip(preserve=False).]"
     )
 
     try:
