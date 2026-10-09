@@ -3783,10 +3783,18 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
                 # execute. Forcing one tool call per turn for these models avoids the
                 # batching path that triggers it; the model still gets to call every
                 # tool it needs, just across separate turns instead of one batch.
+                settings = base_model_settings
                 if "minimax" in model_name.lower():
-                    run_kwargs["model_settings"] = {**base_model_settings, "parallel_tool_calls": False}
-                else:
-                    run_kwargs["model_settings"] = base_model_settings
+                    settings = {**settings, "parallel_tool_calls": False}
+                # A Claude model through an OpenAI-compatible gateway (HCAI, OpenRouter) is
+                # only prompt-cached when the request asks for it: without this every call
+                # paid full price for the whole ~60k-token prefix (checked live 2026-10-09:
+                # cache_read 0 on every Claude Haiku 5.5 request). The top-level marker
+                # caches up to the end of each request, so a turn's later steps reuse it all.
+                if model_name.lower().startswith("anthropic/"):
+                    settings = {**settings, "extra_body": {**(settings.get("extra_body") or {}),
+                                                           "cache_control": {"type": "ephemeral"}}}
+                run_kwargs["model_settings"] = settings
                 result = agent_dynamic.run_sync(**run_kwargs)
                 if timer:
                     timer.record("attempt", attempt_label, attempt_started, time.perf_counter())

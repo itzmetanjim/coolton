@@ -987,6 +987,27 @@ def test_run_with_provider_chain_forces_single_tool_call_for_minimax(monkeypatch
     assert seen_settings == [{"temperature": 0.5, "parallel_tool_calls": False}]
 
 
+def test_claude_through_an_openai_compatible_gateway_asks_to_be_prompt_cached(monkeypatch, clean_env):
+    """Seen live: every Claude Haiku 5.5 request through HCAI (OpenRouter) reported
+    cache_read 0, paying full price for its ~60k-token prefix on every call. OpenRouter
+    only caches a Claude model when the request carries a cache_control marker."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        agent_mod, "_resolve_provider_order",
+        lambda user_id, tag=None: [("hcai_0", {"model": "anthropic/claude-haiku-5.5", "api_key": "k"})],
+    )
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+    seen_settings = []
+    fake_agent = SimpleNamespace(run_sync=lambda **kw: seen_settings.append(kw.get("model_settings")) or SimpleNamespace(output="ok"))
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
+
+    agent_mod._run_with_provider_chain(fake_agent, {"model_settings": {"temperature": 0.5}}, deps)
+
+    assert seen_settings == [{"temperature": 0.5, "extra_body": {"cache_control": {"type": "ephemeral"}}}]
+
+
 def test_run_with_provider_chain_leaves_other_models_settings_untouched(monkeypatch, clean_env):
     from types import SimpleNamespace
 
