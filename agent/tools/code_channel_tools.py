@@ -8,12 +8,25 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 
 from agent.code_channel_api import call, error_text
 from agent.code_channel_store import canvas_views, is_code_channel, remember_canvas_view
 
 VIEW_TYPES = ("html", "diff", "block_kit", "canvas", "pull_request")
 CONTEXT_BAR_ICONS = ("branch", "folder", "hierarchy", "life-ring", "link", "globe", "terminal", "code", "search", "lock")
+# One setView at a time per channel: Slack fails tab creations that race each other in
+# the same channel with view_creation_failed (seen live when coolton made several tabs
+# with parallel tool calls).
+_view_locks: dict[str, threading.Lock] = {}
+_view_locks_guard = threading.Lock()
+
+
+def _view_lock(channel_id: str) -> threading.Lock:
+    with _view_locks_guard:
+        return _view_locks.setdefault(channel_id, threading.Lock())
+
+
 _COMMAND_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 
 
@@ -89,7 +102,11 @@ def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = ""
         if not created.get("ok"):
             return error_text(created)
         params.update(canvas_id=created["canvas_id"], access_level=access_level or "comment")
-    response = call("agents.conversations.setView", **params)
+    with _view_lock(channel_id):
+        response = call("agents.conversations.setView", **params)
+    if response.get("error") == "view_creation_failed":
+        return (error_text(response) + ". Slack couldn't add it as a tab; if it keeps failing for this "
+                "view_key, try a new view_key.")
     if not response.get("ok"):
         return error_text(response)
     if view_type == "canvas":

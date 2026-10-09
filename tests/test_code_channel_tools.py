@@ -47,6 +47,32 @@ def test_an_html_tab_is_an_upsert_by_view_key_with_its_allowed_origins(slack):
         "content": "<!doctype html>", "csp": {"resource_domains": ["https://cdn.jsdelivr.net"]}})]
 
 
+def test_tabs_are_sent_to_slack_one_at_a_time_per_channel(slack, monkeypatch):
+    """Slack fails tab creations that race in one channel (view_creation_failed), and
+    coolton makes several tabs with parallel tool calls."""
+    import threading
+    import time
+
+    active, overlaps = [], []
+
+    def call(method, **params):
+        active.append(1)
+        overlaps.append(len(active))
+        time.sleep(0.05)
+        active.pop()
+        return {"ok": True, "view_id": params["view_key"]}
+
+    monkeypatch.setattr(tools, "call", call)
+    threads = [threading.Thread(target=tools.set_view, args=("CCODE", "html", f"t{i}", "", "<html></html>"))
+               for i in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert overlaps == [1, 1, 1]
+
+
 def test_a_new_canvas_tab_is_created_then_later_updated_in_place(slack):
     """Slack keeps no view_key for canvas tabs (and listViews leaves them out), so
     coolton remembers which canvas a key is to update it rather than add a second tab."""
