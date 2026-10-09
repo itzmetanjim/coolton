@@ -12,6 +12,9 @@
     "bot_user": {
       "display_name": "coolton code channels",
       "always_online": false
+    },
+    "code_channels": {
+      "enabled": true
     }
   },
   "oauth_config": {
