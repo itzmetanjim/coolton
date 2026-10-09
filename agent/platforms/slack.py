@@ -36,6 +36,8 @@ def _load_system_prompt() -> str:
     text = _SYSTEM_PROMPT_PATH.read_text()
     text = text.replace("${COOLTON_BOT_ID}", os.environ.get("COOLTON_BOT_ID", ""))
     text = text.replace("${COOLTON_USER_ID}", os.environ.get("COOLTON_USER_ID", ""))
+    from agent.mention_ids import CODE_CHANNEL_BOT_ID
+    text = text.replace("${COOLTON_CODE_CHANNEL_BOT_ID}", CODE_CHANNEL_BOT_ID)
     return text
 
 
@@ -124,6 +126,8 @@ class SlackPlatform(PlatformAdapter):
         # Varies by thread and sender, so run_agent puts it in the user prompt,
         # never the system prompt (which must be identical for every request
         # to share one cached prefix across all threads).
+        from agent.mention_ids import CODE_CHANNEL_BOT_ID
+
         code_channel_note = ""
         if not deps.thread_ts:
             from agent.code_channel_store import is_code_channel
@@ -142,6 +146,7 @@ class SlackPlatform(PlatformAdapter):
 - Use this channel_id for operations in the current channel unless user specifies otherwise
 - Your user_id (the HUMAN who messaged you): `{deps.user_id}`
 - Your own bot user id (this is YOU, not a third party): `{os.environ.get("COOLTON_BOT_ID", "")}`
+- Your code channel bot's user id (also YOU; a mention of it is a mention of you): `{CODE_CHANNEL_BOT_ID}`
 - Your cooltonUser helper account id (acts on your behalf): `{os.environ.get("COOLTON_USER_ID", "")}`{code_channel_note}
 """
 

@@ -37,6 +37,17 @@ def _isolated_leave_thread_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_mention_claims():
+    """Mentions are answered once per message (agent.mention_ids), and tests reuse
+    the same message timestamps."""
+    from agent import mention_ids
+
+    mention_ids._claimed.clear()
+    yield
+    mention_ids._claimed.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolated_fallback_cache(tmp_path, monkeypatch):
     """Provider tests, the fallback chain, and image generation all write the
     fallback cache as a side effect — never let a test touch the real

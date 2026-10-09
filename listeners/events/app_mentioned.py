@@ -39,6 +39,12 @@ def handle_app_mentioned(
         if event.get("bot_id") or event.get("app_id"):
             return
 
+        # One answer per message: coolton's app_mention and message events and the code
+        # channels app's app_mention can all deliver the same mention (agent.mention_ids).
+        from agent.mention_ids import claim_mention
+        if event.get("ts") and not claim_mention(channel_id, event["ts"]):
+            return
+
         # Banned users get nothing at all — not even !stop or a steering
         # fold-in into someone else's active run (both live further down this
         # function). This must run before either of those, since neither path
@@ -66,12 +72,16 @@ def handle_app_mentioned(
         thread_ts = CODE_CHANNEL_THREAD_TS if at_channel_level else (event.get("thread_ts") or event["ts"])
         user_id = context.user_id
         bot_id = os.environ.get("COOLTON_BOT_ID", "")
+        # Commands work after a mention of either of coolton's bots (agent.mention_ids);
+        # the model still gets the message exactly as written.
+        from agent.mention_ids import as_coolton_mention
+        command_text = as_coolton_mention(text)
 
         # !stop: immediately halt every coolton run in this thread. Must be the
         # message's entire content aside from the mention (see is_stop_command) —
         # a normal prompt that merely contains the word "!stop" must not halt
         # anything.
-        if is_stop_command(text, bot_id):
+        if is_stop_command(command_text, bot_id):
             request_stop(channel_id, thread_ts)
             say(
                 text="⏹️ stopping all your running coolton instances…",
@@ -80,7 +90,7 @@ def handle_app_mentioned(
             return
 
         # !help / !connections: answered ephemerally, no turn started.
-        command = parse_command(text, bot_id)
+        command = parse_command(command_text, bot_id)
         if command:
             respond(client, command, channel_id, context.user_id, thread_ts)
             return
@@ -88,7 +98,7 @@ def handle_app_mentioned(
         # !ban / !unban: silently ignored (not even a "not authorized" reply)
         # for anyone but ban_store.BAN_ADMIN_USER_ID, so the mechanism isn't
         # exposed to random users typing the syntax.
-        ban_command = parse_ban_command(text, bot_id)
+        ban_command = parse_ban_command(command_text, bot_id)
         if ban_command:
             if not is_authorized(user_id):
                 return

@@ -22,13 +22,19 @@
       "bot": [
         "code_channels:manage",
         "channels:write.invites",
-        "groups:write.invites"
+        "groups:write.invites",
+        "app_mentions:read"
       ]
     }
   },
   "settings": {
     "org_deploy_enabled": true,
-    "socket_mode_enabled": false,
+    "socket_mode_enabled": true,
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention"
+      ]
+    },
     "token_rotation_enabled": false
   }
 }

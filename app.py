@@ -75,6 +75,9 @@ set_notifier(_notify_token_leak)
 
 start_token_rotation()
 register_listeners(app)
+from listeners.code_channel_app import start_code_channel_app  # noqa: E402
+
+start_code_channel_app(app.client)
 start_scheduler(app)
 
 

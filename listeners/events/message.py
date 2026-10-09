@@ -80,6 +80,16 @@ def handle_message(
     if not is_dm and bot_id and f"<@{bot_id}>" in text:
         return
 
+    # A mention of the code channels bot is a mention of coolton (agent.mention_ids).
+    # The code channels app's own listener gets it too when it's in the channel; the
+    # first to claim it answers, so it's answered once whichever arrives first.
+    from agent.mention_ids import mentions_code_channel_bot
+    if not is_dm and bot_id and mentions_code_channel_bot(text):
+        from listeners.events.app_mentioned import handle_app_mentioned
+        handle_app_mentioned(client=client, context=context, event=event, logger=logger,
+                             say=say, say_stream=say_stream, set_status=set_status)
+        return
+
     # ## double-hash: never process or respond to a message starting with "##",
     # not even commands like !stop. Checked before !stop so "## !stop" is
     # ignored rather than halting runs.
