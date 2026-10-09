@@ -1,77 +1,88 @@
 """Create a Slack "code channel" and turn it into its own single coolton
 conversation. See agent.code_channel_store for the (channel_id, thread_ts="")
-conversation-identity trick this relies on, and ./codechannel.sh for the
-actual channel-creation call (deliberately kept in bash — do NOT reimplement
-its logic here, and NEVER read or commit ./codechannelinternal.sh, which
-holds tokens and is gitignored for exactly that reason).
+conversation-identity trick this relies on.
 
-This whole feature is explicitly cursed/buggy per the person who asked for
-it — the tool wrapping this (create_code_channel_tool in agent.agent) is
-documented to only ever fire on an explicit user request for a code channel.
+Code channels are created with Slack's documented agents.conversations.create
+(bot token, code_channels:manage scope): coolton's bot becomes the channel's agent
+and is added on creation. Linking the message the request came from (an "origin")
+also gets its author added by Slack, gives the channel the origin's privacy, and
+records the link on the channel. Slack refuses an origin in a DM, a group DM or a
+Slack Connect channel, so there the channel is created without one (its workspace
+given explicitly, since coolton is an org-wide install) and the requester is
+invited by coolton instead.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import threading
 import time
 
-from slack_sdk import WebClient
-
 logger = logging.getLogger(__name__)
-
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_SCRIPT_PATH = os.path.join(_REPO_ROOT, "codechannel.sh")
 
 _ACTIVATE_DELAY_SECONDS = 3
 _MAX_WAIT_FOR_ORIGIN_TURN_SECONDS = 10 * 60
 
+# Errors meaning the origin message can't be linked; the channel is created without it.
+_NO_ORIGIN_ERRORS = {"origin_channel_externally_shared", "invalid_origin_link", "origin_channel_is_file_channel"}
+_ERROR_HELP = {
+    "missing_scope": "coolton's Slack app doesn't have the code_channels:manage scope yet; its maintainer needs "
+                     "to reinstall it with the updated manifest.",
+    "feature_disabled": "Slack hasn't enabled code channels for coolton's app on this workspace.",
+    "user_not_enabled": "you don't have Slack's code channels feature enabled.",
+    "restricted_action": "you're not allowed to create this kind of channel in this workspace.",
+}
+
+
+def _team_id(client, channel_id: str) -> str | None:
+    """The workspace `channel_id` belongs to (needed without an origin, as coolton's
+    token is org-wide)."""
+    try:
+        channel = client.conversations_info(channel=channel_id).get("channel") or {}
+    except Exception:
+        logger.exception("Couldn't look up the workspace of %s", channel_id)
+        return None
+    return channel.get("context_team_id") or (channel.get("shared_team_ids") or [None])[0]
+
+
+def _create(client, params: dict) -> dict:
+    try:
+        return client.api_call("agents.conversations.create", json=params).data
+    except Exception as e:
+        data = getattr(getattr(e, "response", None), "data", None)
+        return data if isinstance(data, dict) else {"ok": False, "error": str(e)}
+
 
 def create_code_channel(
     client, name: str, task: str, owner_id: str,
-    source_channel_id: str, source_thread_ts: str,
+    source_channel_id: str, source_thread_ts: str, source_message_ts: str = "",
 ) -> str:
-    """Create a code channel via ./codechannel.sh and, on success, schedule
-    coolton joining it and picking up `task` there as its own conversation.
+    """Create a code channel and, on success, schedule coolton picking up `task` there
+    as its own conversation. Returns a message for the model to relay."""
+    params = {"name": name}
+    if source_message_ts:
+        # The request's own message: retries of it return the same channel.
+        params["session_id"] = f"coolton:{source_channel_id}:{source_message_ts}"
+    linked = bool(source_channel_id and source_message_ts)
+    response = _create(client, {**params, "origin_channel_id": source_channel_id,
+                                "origin_message_ts": source_message_ts}) if linked else None
+    if response is None or (not response.get("ok") and response.get("error") in _NO_ORIGIN_ERRORS):
+        linked = False
+        team_id = _team_id(client, source_channel_id)
+        response = _create(client, {**params, **({"team_id": team_id} if team_id else {})})
 
-    Returns a message for the model to relay, or the script's own error text
-    forwarded verbatim.
-    """
-    try:
-        result = subprocess.run(
-            [_SCRIPT_PATH, "a", name],
-            cwd=_REPO_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except FileNotFoundError:
-        return "Error: codechannel.sh not found."
-    except subprocess.TimeoutExpired:
-        return "Error: codechannel.sh timed out."
-    except Exception as e:
-        return f"Error running codechannel.sh: {e}"
-
-    stdout = result.stdout or ""
-    lines = stdout.split("\n", 1)
-    status = lines[0].strip() if lines else ""
-    rest = lines[1] if len(lines) > 1 else ""
-
-    if status == "error":
-        return f"Could not create the code channel: {rest.strip()}"
-
-    if status != "ok":
-        # Neither "ok" nor "error" on the first line — something unexpected
-        # (missing internal script, non-zero exit, empty output). Surface the
-        # raw output rather than silently swallowing it.
-        detail = stdout.strip() or (result.stderr or "").strip() or f"exit code {result.returncode}"
-        return f"Error: codechannel.sh gave an unexpected response: {detail}"
-
-    channel_id = rest.strip().splitlines()[0].strip() if rest.strip() else ""
+    if not response.get("ok"):
+        error = response.get("error") or "unknown_error"
+        return f"Could not create the code channel ({error}): {_ERROR_HELP.get(error, 'Slack refused it.')}"
+    channel_id = response.get("channel_id") or ""
     if not channel_id:
-        return "Error: codechannel.sh reported success but returned no channel id."
+        return "Error: Slack reported success but returned no channel id."
+    if not linked:
+        try:
+            client.conversations_invite(channel=channel_id, users=owner_id)
+        except Exception as e:
+            logger.info("Inviting %s to code channel %s: %s", owner_id, channel_id, e)
 
     from agent.code_channel_store import register_code_channel
     register_code_channel(channel_id, name, owner_id, source_channel_id, source_thread_ts)
@@ -84,44 +95,9 @@ def create_code_channel(
     t.start()
 
     return (
-        f"Created code channel <#{channel_id}>. I'm joining it in a few seconds "
-        f"and will pick up the work there — this thread doesn't need to continue it."
+        f"Created code channel <#{channel_id}>. I'm picking up the work there in a few seconds, "
+        f"so this thread doesn't need to continue it."
     )
-
-
-def _delete_cooltonuser_auto_message(channel_id: str) -> None:
-    """codechannelinternal.sh creates the channel using cooltonUser's own
-    Slack user token, and Slack auto-posts a message "as cooltonUser" the
-    moment a code channel is created (a Slack quirk, not anything
-    codechannelinternal.sh itself asks for). Find it and delete it.
-
-    Uses cooltonUser's own token (SLACK_USER_TOKEN) for both the lookup and
-    the delete — chat.delete can only remove a message on behalf of the user
-    who posted it (or a workspace admin), and the bot client this module
-    otherwise uses is neither.
-    """
-    user_token = os.environ.get("SLACK_USER_TOKEN")
-    coolton_user_id = os.environ.get("COOLTON_USER_ID", "")
-    if not user_token or not coolton_user_id:
-        return
-
-    user_client = WebClient(token=user_token)
-    try:
-        resp = user_client.conversations_history(channel=channel_id, limit=200)
-        messages = resp.get("messages", []) if resp.get("ok") else []
-    except Exception:
-        logger.exception("Failed to fetch history to find cooltonUser's auto message in %s", channel_id)
-        return
-
-    candidates = [m for m in messages if m.get("user") == coolton_user_id and m.get("ts")]
-    if not candidates:
-        return
-    oldest = min(candidates, key=lambda m: float(m["ts"]))
-    try:
-        user_client.chat_delete(channel=channel_id, ts=oldest["ts"])
-        logger.info("Deleted cooltonUser's auto-generated message in code channel %s (ts %s)", channel_id, oldest["ts"])
-    except Exception:
-        logger.exception("Failed to delete cooltonUser's auto message (ts %s) in %s", oldest["ts"], channel_id)
 
 
 def _activate_code_channel(
@@ -129,13 +105,6 @@ def _activate_code_channel(
     source_channel_id: str, source_thread_ts: str,
 ) -> None:
     time.sleep(_ACTIVATE_DELAY_SECONDS)
-
-    try:
-        client.conversations_join(channel=channel_id)
-    except Exception as e:
-        logger.info("conversations_join for code channel %s: %s", channel_id, e)
-
-    _delete_cooltonuser_auto_message(channel_id)
 
     try:
         from agent.ensure_coolton_user import ensure_coolton_user_in_channel

@@ -1,24 +1,13 @@
-"""agent.tools.code_channel — creates a Slack "code channel" via
-./codechannel.sh (never reimplemented in Python — see that module's own
-docstring for why codechannelinternal.sh must never be read) and, on
-success, schedules coolton joining it and picking up work there as its own
-single conversation (thread_ts="" — agent.code_channel_store).
-"""
+"""agent.tools.code_channel: creates a Slack code channel with
+agents.conversations.create and, on success, schedules coolton picking up work
+there as its own single conversation (thread_ts="", agent.code_channel_store)."""
 
-import subprocess
 from unittest.mock import Mock
 
 import pytest
+from slack_sdk.errors import SlackApiError
 
 from agent.tools import code_channel
-
-
-def _fake_run(stdout="", stderr="", returncode=0, raise_exc=None):
-    def _run(*a, **k):
-        if raise_exc:
-            raise raise_exc
-        return subprocess.CompletedProcess(args=a, returncode=returncode, stdout=stdout, stderr=stderr)
-    return _run
 
 
 @pytest.fixture(autouse=True)
@@ -28,223 +17,84 @@ def not_banned(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_background_activation(monkeypatch):
-    """By default don't actually spin up the activation thread — most tests
-    only care about create_code_channel's own return value / registration.
-    Tests that care about activation replace this with a synchronous stand-in.
-    """
+    """Don't actually spin up the activation thread: these tests only care about
+    create_code_channel's own result and what it asked Slack for."""
     monkeypatch.setattr(code_channel.threading, "Thread", lambda target, args, daemon: Mock(start=lambda: None))
 
 
-# ---------------------------------------------------------------------------
-# create_code_channel — talking to the script
-# ---------------------------------------------------------------------------
+def _slack(*responses):
+    """A client whose agents.conversations.create calls return `responses` in turn
+    (an {"ok": False} one raised as Slack's SDK does)."""
+    client = Mock()
+    client.conversations_info.return_value = {"channel": {"context_team_id": "T0266FRGM"}}
+    calls = []
+
+    def api_call(method, json):
+        calls.append((method, json))
+        data = responses[len(calls) - 1]
+        if not data.get("ok"):
+            raise SlackApiError("refused", Mock(data=data))
+        return Mock(data=data)
+
+    client.api_call.side_effect = api_call
+    return client, calls
 
 
-def test_ok_response_returns_channel_id_and_registers(monkeypatch, tmp_path):
-    monkeypatch.setattr(code_channel.subprocess, "run", _fake_run(stdout="ok\nC0C12EVC656\n"))
+def _create(client, **kw):
+    args = dict(name="Code audit and bug detection in Coolton", task="fix bug X", owner_id="U1",
+                source_channel_id="C0", source_thread_ts="1.1", source_message_ts="1.2")
+    return code_channel.create_code_channel(client, **{**args, **kw})
+
+
+def test_it_creates_the_channel_linked_to_the_request_and_registers_it(monkeypatch):
     registered = []
     monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: registered.append(a))
+    client, calls = _slack({"ok": True, "channel_id": "C0C12EVC656"})
 
-    result = code_channel.create_code_channel(
-        client=Mock(), name="Code audit and bug detection in Coolton", task="fix bug X",
-        owner_id="U1", source_channel_id="C0", source_thread_ts="1.1",
-    )
+    result = _create(client)
 
-    assert "C0C12EVC656" in result
+    assert "<#C0C12EVC656>" in result
+    [(method, params)] = calls
+    assert method == "agents.conversations.create"
+    assert params == {"name": "Code audit and bug detection in Coolton", "session_id": "coolton:C0:1.2",
+                      "origin_channel_id": "C0", "origin_message_ts": "1.2"}
+    client.conversations_invite.assert_not_called()  # Slack adds the origin's author itself
     assert registered == [("C0C12EVC656", "Code audit and bug detection in Coolton", "U1", "C0", "1.1")]
 
 
-def test_error_response_forwarded_verbatim_and_not_registered(monkeypatch):
-    monkeypatch.setattr(
-        code_channel.subprocess, "run",
-        _fake_run(stdout='error\n{"ok":false,"error":"invalid_name"}\n'),
-    )
+def test_from_a_dm_it_creates_without_an_origin_and_invites_the_requester(monkeypatch):
+    monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: None)
+    client, calls = _slack({"ok": False, "error": "origin_channel_externally_shared"},
+                           {"ok": True, "channel_id": "C9"})
+
+    assert "<#C9>" in _create(client, source_channel_id="D0")
+    assert "origin_channel_id" not in calls[1][1] and calls[1][1]["team_id"] == "T0266FRGM"
+    client.conversations_invite.assert_called_once_with(channel="C9", users="U1")
+
+
+def test_a_refusal_is_explained_and_nothing_is_registered(monkeypatch):
     registered = []
     monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: registered.append(a))
+    client, _ = _slack({"ok": False, "error": "missing_scope"})
 
-    result = code_channel.create_code_channel(
-        client=Mock(), name="", task="", owner_id="U1", source_channel_id="C0", source_thread_ts="1.1",
-    )
+    result = _create(client)
 
-    assert '{"ok":false,"error":"invalid_name"}' in result
+    assert "missing_scope" in result and "code_channels:manage" in result
     assert registered == []
 
 
-def test_display_name_reaches_the_script_as_a_single_unmodified_argv_entry(monkeypatch):
-    """The whole point of not validating the name ourselves: spaces, unicode,
-    uppercase, and quote characters must all survive as ONE argv element,
-    which only holds if this never goes through a shell string."""
-    captured = {}
-
-    def _run(args, **kwargs):
-        captured["args"] = args
-        return subprocess.CompletedProcess(args=args, returncode=0, stdout="ok\nC1\n", stderr="")
-
-    monkeypatch.setattr(code_channel.subprocess, "run", _run)
-    monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: None)
-
-    tricky_name = 'Code audit — "bug" detection 🐛 in Coolton'
-    code_channel.create_code_channel(
-        client=Mock(), name=tricky_name, task="", owner_id="U1",
-        source_channel_id="C0", source_thread_ts="1.1",
-    )
-
-    args = captured["args"]
-    assert args[-1] == tricky_name
-    assert args[-2] == "a"
-
-
-def test_missing_script_is_surfaced_not_swallowed(monkeypatch):
-    monkeypatch.setattr(code_channel.subprocess, "run", _fake_run(raise_exc=FileNotFoundError()))
-    result = code_channel.create_code_channel(
-        client=Mock(), name="x", task="", owner_id="U1", source_channel_id="C0", source_thread_ts="1.1",
-    )
-    assert "Error" in result
-
-
-def test_nonzero_exit_unexpected_output_is_surfaced(monkeypatch):
-    monkeypatch.setattr(code_channel.subprocess, "run", _fake_run(stdout="", stderr="boom", returncode=1))
-    result = code_channel.create_code_channel(
-        client=Mock(), name="x", task="", owner_id="U1", source_channel_id="C0", source_thread_ts="1.1",
-    )
-    assert "Error" in result
-    assert "boom" in result
-
-
-def test_timeout_is_surfaced(monkeypatch):
-    monkeypatch.setattr(
-        code_channel.subprocess, "run",
-        _fake_run(raise_exc=subprocess.TimeoutExpired(cmd="codechannel.sh", timeout=60)),
-    )
-    result = code_channel.create_code_channel(
-        client=Mock(), name="x", task="", owner_id="U1", source_channel_id="C0", source_thread_ts="1.1",
-    )
-    assert "Error" in result
-    assert "timed out" in result.lower()
-
-
-def test_ok_response_schedules_activation_thread(monkeypatch):
-    monkeypatch.setattr(code_channel.subprocess, "run", _fake_run(stdout="ok\nC1\n"))
+def test_success_schedules_the_handoff(monkeypatch):
     monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: None)
     started = []
-    monkeypatch.setattr(
-        code_channel.threading, "Thread",
-        lambda target, args, daemon: Mock(start=lambda: started.append((target, args, daemon))),
-    )
-    code_channel.create_code_channel(
-        client=Mock(), name="x", task="do the thing", owner_id="U1",
-        source_channel_id="C0", source_thread_ts="1.1",
-    )
-    assert len(started) == 1
-    target, args, daemon = started[0]
+    monkeypatch.setattr(code_channel.threading, "Thread",
+                        lambda target, args, daemon: Mock(start=lambda: started.append((target, args))))
+    client, _ = _slack({"ok": True, "channel_id": "C1"})
+
+    _create(client, task="do the thing")
+
+    [(target, args)] = started
     assert target is code_channel._activate_code_channel
-    assert daemon is True
-    assert args == (Mock, "C1", "x", "do the thing", "U1", "C0", "1.1") or (
-        args[1:] == ("C1", "x", "do the thing", "U1", "C0", "1.1")
-    )
-
-
-# ---------------------------------------------------------------------------
-# _delete_cooltonuser_auto_message
-# ---------------------------------------------------------------------------
-
-
-def test_delete_auto_message_finds_and_deletes_the_oldest_cooltonuser_message(monkeypatch):
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
-    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
-
-    user_client = Mock()
-    user_client.conversations_history.return_value = {
-        "ok": True,
-        "messages": [
-            # Slack returns newest-first — deliberately out of ts order here.
-            {"user": "UCOOLTON", "ts": "300.0", "text": "later"},
-            {"user": "UCOOLTON", "ts": "100.0", "text": "the auto message"},
-            {"user": "U_SOMEONE_ELSE", "ts": "50.0", "text": "not cooltonUser"},
-        ],
-    }
-    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
-
-    code_channel._delete_cooltonuser_auto_message("C1")
-
-    user_client.conversations_history.assert_called_once_with(channel="C1", limit=200)
-    user_client.chat_delete.assert_called_once_with(channel="C1", ts="100.0")
-
-
-def test_delete_auto_message_noop_when_no_cooltonuser_message(monkeypatch):
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
-    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
-
-    user_client = Mock()
-    user_client.conversations_history.return_value = {
-        "ok": True, "messages": [{"user": "U_SOMEONE_ELSE", "ts": "50.0"}],
-    }
-    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
-
-    code_channel._delete_cooltonuser_auto_message("C1")
-
-    user_client.chat_delete.assert_not_called()
-
-
-def test_delete_auto_message_noop_without_user_token(monkeypatch):
-    monkeypatch.delenv("SLACK_USER_TOKEN", raising=False)
-    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
-    called = []
-    monkeypatch.setattr(code_channel, "WebClient", lambda token: called.append(token))
-
-    code_channel._delete_cooltonuser_auto_message("C1")
-
-    assert called == []
-
-
-def test_delete_auto_message_noop_without_coolton_user_id(monkeypatch):
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
-    monkeypatch.delenv("COOLTON_USER_ID", raising=False)
-    called = []
-    monkeypatch.setattr(code_channel, "WebClient", lambda token: called.append(token))
-
-    code_channel._delete_cooltonuser_auto_message("C1")
-
-    assert called == []
-
-
-def test_delete_auto_message_history_failure_does_not_raise(monkeypatch):
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
-    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
-
-    user_client = Mock()
-    user_client.conversations_history.side_effect = Exception("boom")
-    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
-
-    code_channel._delete_cooltonuser_auto_message("C1")  # must not raise
-    user_client.chat_delete.assert_not_called()
-
-
-def test_delete_auto_message_delete_failure_does_not_raise(monkeypatch):
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
-    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
-
-    user_client = Mock()
-    user_client.conversations_history.return_value = {
-        "ok": True, "messages": [{"user": "UCOOLTON", "ts": "100.0"}],
-    }
-    user_client.chat_delete.side_effect = Exception("cant_delete_message")
-    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
-
-    code_channel._delete_cooltonuser_auto_message("C1")  # must not raise
-
-
-def test_delete_auto_message_not_ok_response_is_treated_as_no_messages(monkeypatch):
-    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-cooltonuser")
-    monkeypatch.setenv("COOLTON_USER_ID", "UCOOLTON")
-
-    user_client = Mock()
-    user_client.conversations_history.return_value = {"ok": False, "error": "not_in_channel"}
-    monkeypatch.setattr(code_channel, "WebClient", lambda token: user_client)
-
-    code_channel._delete_cooltonuser_auto_message("C1")
-
-    user_client.chat_delete.assert_not_called()
+    assert args[1:] == ("C1", "Code audit and bug detection in Coolton", "do the thing", "U1", "C0", "1.1")
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +107,7 @@ def no_sleep(monkeypatch):
     monkeypatch.setattr(code_channel.time, "sleep", lambda s: None)
 
 
-def test_activation_joins_invites_posts_banner_and_runs_a_turn(monkeypatch):
+def test_activation_invites_posts_banner_and_runs_a_turn(monkeypatch):
     client = Mock()
     client.chat_postMessage.return_value = {"ts": "999.1"}
     monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: False)
@@ -274,7 +124,6 @@ def test_activation_joins_invites_posts_banner_and_runs_a_turn(monkeypatch):
         client, "C1", "My Channel", "fix the bug", "U1", "C0", "1.1",
     )
 
-    client.conversations_join.assert_called_once_with(channel="C1")
     assert ensure_calls == ["C1"]
     assert client.chat_postMessage.call_count == 1
     assert client.chat_postMessage.call_args.kwargs["channel"] == "C1"
@@ -306,21 +155,6 @@ def test_activation_waits_for_the_origin_turn_to_finish_before_reading_history(m
     code_channel._activate_code_channel(client, "C1", "name", "task", "U1", "C0", "1.1")
 
     assert history_reads == [("C0", "1.1")]
-
-
-def test_activation_conversations_join_failure_does_not_abort(monkeypatch):
-    client = Mock()
-    client.conversations_join.side_effect = Exception("already_in_channel")
-    client.chat_postMessage.return_value = {"ts": "999.1"}
-    monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: False)
-    monkeypatch.setattr("thread_context.conversation_store.get_history", lambda c, t: None)
-    monkeypatch.setattr("agent.ensure_coolton_user.ensure_coolton_user_in_channel", lambda *a: None)
-    turn_calls = []
-    monkeypatch.setattr("listeners.events.turn.run_agent_turn", lambda **kwargs: turn_calls.append(kwargs))
-
-    code_channel._activate_code_channel(client, "C1", "name", "task", "U1", "C0", "1.1")
-
-    assert len(turn_calls) == 1
 
 
 def test_activation_skips_banner_and_turn_for_a_banned_owner(monkeypatch):

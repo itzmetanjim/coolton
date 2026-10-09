@@ -2125,26 +2125,23 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
     """Create a Slack "code channel" and move this whole conversation into it as
     its own single coolton conversation.
 
-    NEVER call this unless the user has EXPLICITLY asked to start/create a code
-    channel, this feature is buggy and cursed, do not reach for it on your own
-    initiative no matter how well it seems to fit the task.
+    Use it when the user asks for a code channel, or offer one (and create it once they
+    agree) when a request grows into long, multi-step work that deserves its own space,
+    like a coding project or a big investigation.
 
     `name` is a DISPLAY name, not a slug, write it like a sentence/title, e.g.
     "Code audit and bug detection in Coolton", never
     "code-audit-and-bug-detection-in-coolton". Spaces, uppercase letters, and
-    unicode are all fine, and duplicate names (another channel with the exact
-    same display name) are fine too, don't invent uniqueness suffixes. If the
-    name is truly unusable the underlying script reports that itself
-    (forwarded to you verbatim); don't pre-validate it yourself.
+    unicode are all fine, and duplicate names are fine too, don't invent
+    uniqueness suffixes.
 
-    On success, coolton joins the new channel a few seconds later and picks up
-    `task` there on its own, with the context of this conversation carried
-    over, every message sent directly in that channel (not in a thread inside
-    it) is then treated as addressed to coolton and answered at channel level,
-    as if the whole channel were one ongoing thread with coolton. A thread
-    started inside the channel behaves like a normal Slack thread instead,
-    separate conversation, mention required. Because activation happens after
-    this turn ends, just tell the user you're moving the work over; don't keep
+    Slack adds you and the person who asked to the new channel. A few seconds after
+    this returns, you pick up `task` there on your own, with this conversation's
+    context carried over. Every message sent directly in that channel (not in a
+    thread inside it) is then addressed to you and answered at channel level, as if
+    the whole channel were one ongoing thread with you. A thread started inside the
+    channel behaves like a normal Slack thread instead, separate conversation,
+    mention required. So just tell the user you're moving the work over; don't keep
     working on `task` in the current thread once you've called this.
 
     Only usable on Slack, not available on the web UI.
@@ -2160,7 +2157,7 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
     from agent.tools.code_channel import create_code_channel
     return create_code_channel(
         ctx.deps.client, name, task, ctx.deps.user_id,
-        ctx.deps.channel_id, ctx.deps.thread_ts,
+        ctx.deps.channel_id, ctx.deps.thread_ts, ctx.deps.message_ts,
     )
 
 
