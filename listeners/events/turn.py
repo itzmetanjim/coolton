@@ -29,6 +29,25 @@ from listeners.views.feedback_builder import build_feedback_blocks
 _MAX_STRANDED_RECURSION_DEPTH = 25
 
 
+def _stream_top_level(client: WebClient, logger: Logger, channel_id: str, user_id: str,
+                      output: str, feedback_blocks) -> bool:
+    """Send `output` as a top-level streamed message (with the feedback buttons), as a
+    code channel's channel-level conversation allows. Returns whether it was sent."""
+    try:
+        channel = client.conversations_info(channel=channel_id).get("channel") or {}
+        team_id = channel.get("context_team_id")
+        started = client.api_call("chat.startStream", json={
+            "channel": channel_id, "markdown_text": output,
+            **({"recipient_team_id": team_id, "recipient_user_id": user_id} if team_id else {}),
+        }).data
+        blocks = [b.to_dict() if hasattr(b, "to_dict") else b for b in feedback_blocks]
+        client.api_call("chat.stopStream", json={"channel": channel_id, "ts": started["ts"], "blocks": blocks})
+        return True
+    except Exception as e:
+        logger.warning(f"Top-level stream in {channel_id} failed ({e}); posting it instead")
+        return False
+
+
 def _post_fallback_response(
     *, client: WebClient, logger: Logger, channel_id: str, thread_ts: str,
     output: str, feedback_blocks,
@@ -237,18 +256,20 @@ def run_agent_turn(
                 feedback_blocks = build_feedback_blocks(_turn_footer(channel_id, thread_ts, turn_started))
                 if not thread_ts:
                     # A code channel's channel-level conversation (thread_ts=""
-                    # — see agent.code_channel_store) has no thread to stream
-                    # into: chat.startStream requires a real thread_ts. Post
-                    # the finished answer directly instead of even attempting
-                    # to stream.
-                    _post_fallback_response(
-                        client=client,
-                        logger=logger,
-                        channel_id=channel_id,
-                        thread_ts=thread_ts,
-                        output=output,
-                        feedback_blocks=feedback_blocks,
-                    )
+                    # — see agent.code_channel_store): stream at the top level,
+                    # which Slack allows in code channels (Bolt's say_stream
+                    # insists on a thread), else post it directly.
+                    if len(output) > MARKDOWN_LIMIT or not _stream_top_level(
+                        client, logger, channel_id, user_id, output, feedback_blocks,
+                    ):
+                        _post_fallback_response(
+                            client=client,
+                            logger=logger,
+                            channel_id=channel_id,
+                            thread_ts=thread_ts,
+                            output=output,
+                            feedback_blocks=feedback_blocks,
+                        )
                 elif len(output) > MARKDOWN_LIMIT:
                     # Too long for one message: a stream of it fails with msg_too_long.
                     _post_fallback_response(

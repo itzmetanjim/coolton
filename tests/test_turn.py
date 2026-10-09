@@ -259,18 +259,38 @@ def test_streaming_stop_failure_falls_back_to_chat_post_message(mocks):
     assert texts == ["Here is the answer."]
 
 
-def test_channel_level_reply_never_streams_and_posts_directly(mocks):
-    """thread_ts="" is a code channel's channel-level conversation (see
-    agent.code_channel_store) — chat.startStream requires a real thread_ts,
-    so this must go straight to chat.postMessage without even trying
-    say_stream()."""
-    import agent.plan_block as pb
-
+def _run_channel_level_turn(mocks):
     turn.run_agent_turn(
         client=mocks.client, say_stream=mocks.say_stream, say=mocks.say,
         logger=mocks.logger, channel_id="C1", thread_ts="", message_ts="111.111",
         user_id="U1", user_token="xoxp-user", text="hello", history=None,
     )
+
+
+def test_channel_level_reply_streams_at_the_top_level(mocks):
+    """thread_ts="" is a code channel's channel-level conversation (see
+    agent.code_channel_store): Bolt's say_stream needs a thread, so the reply is
+    streamed at the top level directly, with the feedback buttons."""
+    import agent.plan_block as pb
+
+    mocks.client.conversations_info.return_value = {"channel": {"context_team_id": "T1"}}
+    mocks.client.api_call.return_value = Mock(data={"ok": True, "ts": "222.2"})
+    _run_channel_level_turn(mocks)
+
+    mocks.say_stream.assert_not_called()
+    pb.complete_plan_message.assert_called_once()
+    (start, start_kw), (stop, stop_kw) = [(c.args[0], c.kwargs["json"]) for c in mocks.client.api_call.call_args_list
+                                          if c.args[0].startswith("chat.")]
+    assert (start, stop) == ("chat.startStream", "chat.stopStream")
+    assert "thread_ts" not in start_kw and start_kw["markdown_text"] == "Here is the answer."
+    assert start_kw["recipient_team_id"] == "T1" and stop_kw["ts"] == "222.2" and stop_kw["blocks"]
+
+
+def test_channel_level_reply_is_posted_when_it_cant_stream(mocks):
+    import agent.plan_block as pb
+
+    mocks.client.api_call.side_effect = Exception("stream refused")
+    _run_channel_level_turn(mocks)
 
     mocks.say_stream.assert_not_called()
     pb.complete_plan_message.assert_called_once()
