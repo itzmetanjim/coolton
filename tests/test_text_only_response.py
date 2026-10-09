@@ -51,6 +51,18 @@ def test_plain_text_is_still_a_valid_final_answer(monkeypatch):
     assert surface.reactions == []
 
 
+def test_a_tool_call_written_out_as_text_is_sent_back_to_be_made_properly(monkeypatch):
+    """Seen live: a reply of `text_only_response(emoji_name="tada", response="...")` as
+    plain text, which was posted as-is."""
+    replies = iter([TextPart('text_only_response(emoji_name="tada", response="all set")'),
+                    ToolCallPart("text_only_response", {"emoji_name": "tada", "response": "all set"})])
+
+    result, surface, calls = _run(lambda messages, info: ModelResponse(parts=[next(replies)]), monkeypatch)
+
+    assert result.output == "all set" and surface.reactions == ["tada"]
+    assert len(calls) == 2
+
+
 def test_a_failed_reaction_still_sends_the_reply(monkeypatch):
     class Broken(_Surface):
         def react(self, emoji_name):

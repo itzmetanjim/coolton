@@ -9,7 +9,7 @@ import shutil
 import threading
 import requests
 from pydantic_ai import RunContext
-from pydantic_ai import Agent, ToolOutput
+from pydantic_ai import Agent, ModelRetry, TextOutput, ToolOutput
 from pydantic_ai.messages import (
     BinaryContent, ModelRequest, ModelResponse, SystemPromptPart, ToolCallPart, ToolReturn, UserPromptPart,
 )
@@ -2385,10 +2385,27 @@ async def text_only_response(ctx: RunContext[AgentDeps], emoji_name: str, respon
     return response
 
 
+# A whole reply that's just a call like `text_only_response(emoji_name="tada", ...)`
+# written out as text (seen live from Claude Haiku 5.5 on HCAI), not made as a call.
+_WRITTEN_OUT_CALL_RE = re.compile(r"\s*[a-z]+(?:_[a-z0-9]+)+\s*\(.*\)\s*", re.DOTALL)
+
+
+def plain_text_reply(text: str) -> str:
+    """A plain-text final answer, unless it's a tool call written out as text: that would
+    be posted as-is, so the model is asked to make the call or answer properly instead."""
+    if _WRITTEN_OUT_CALL_RE.fullmatch(text):
+        raise ModelRetry(
+            "Your reply was a tool call written out as text, which would be posted to the user "
+            "as-is. Make it as a real tool call, or reply in plain text (put it in a code block "
+            "if that text really is what you mean to send)."
+        )
+    return text
+
+
 # `text_only_response` is an output function, not a regular tool: calling it ends the
 # run immediately with its return value as result.output, so run_agent_turn posts it
 # exactly like a plain-text final answer. Plain text stays a valid final answer too.
-OUTPUT_TYPE = [str, ToolOutput(text_only_response, name="text_only_response")]
+OUTPUT_TYPE = [TextOutput(plain_text_reply), ToolOutput(text_only_response, name="text_only_response")]
 
 
 @agent.tool
