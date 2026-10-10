@@ -121,6 +121,14 @@ def forget_view(channel_id: str, view_key: str) -> None:
             _save(data)
 
 
+def forget_canvas_view(channel_id: str, view_key: str) -> None:
+    with _lock:
+        data = _load()
+        canvases = (data.get(channel_id) or {}).get("canvas_views") or {}
+        if canvases.pop(view_key, None) is not None:
+            _save(data)
+
+
 def views(channel_id: str) -> dict:
     """view_key -> {"type", "view_id", "file_id", "name"} for the tabs coolton added here."""
     with _lock:

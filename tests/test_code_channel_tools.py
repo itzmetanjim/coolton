@@ -94,18 +94,32 @@ def test_a_new_canvas_tab_is_created_then_later_updated_in_place(slack):
                          {"channel": "CCODE", "canvas_id": "F1", "content": "# Plan v2"})
 
 
-def test_a_block_kit_tab_is_listed_and_readable_though_slack_leaves_it_out(slack, monkeypatch):
-    """listViews omits Block Kit (and canvas) tabs; each tab's content is a Slack file."""
-    _, responses = slack
-    responses["agents.conversations.setView"] = {"ok": True, "view_id": "Ct9", "file_id": "F9"}
-    responses["agents.conversations.listViews"] = {"ok": True, "views": []}
-    tools.set_view("CCODE", "block_kit", "actions", "Actions", blocks='[{"type": "divider"}]')
-    monkeypatch.setattr(tools, "_download", lambda client, file_id: f"content of {file_id}")
+def test_every_tab_is_listed_readable_and_deletable_including_block_kit_and_canvas(slack, monkeypatch):
+    """listViews leaves out Block Kit and canvas tabs; the channel's properties.tabs has
+    them all, each with the file holding its content. Deleting a canvas tab deletes its
+    canvas, which takes the tab with it (Slack's removeView can't remove canvas tabs)."""
+    calls, responses = slack
+    responses["agents.conversations.listViews"] = {"ok": True, "views": [
+        {"view_id": "Ct1", "view_key": "page", "label": "Page", "file_id": "F1"}]}
+    client = Mock()
+    client.conversations_info.return_value = {"channel": {"properties": {"tabs": [
+        {"id": "Ct1", "label": "Page", "type": "agent_view", "data": {"file_id": "F1"}},
+        {"id": "Ct2", "label": "Sampler", "type": "agent_view", "data": {"file_id": "F2"}},
+        {"id": "Ct3", "label": "Plan", "type": "canvas", "data": {"file_id": "F3"}}]}}}
+    monkeypatch.setattr(tools, "_download", lambda c, file_id: f"content of {file_id}")
 
-    assert "Actions (block_kit): view_key=actions, view_id=Ct9" in tools.list_views("CCODE")
-    assert tools.read_view(Mock(), "CCODE", view_id="Ct9") == "content of F9"
-    assert tools.remove_view("CCODE", view_key="actions") == "Tab removed."
-    assert tools.list_views("CCODE").startswith("No tabs listed.")
+    listing = tools.list_views(client, "CCODE")
+    assert "Page (html): view_key=page, view_id=Ct1" in listing
+    assert "Sampler (html or block_kit): view_key unknown (use the view_id), view_id=Ct2" in listing
+    assert "Plan (canvas)" in listing and "view_id=Ct3" in listing
+    assert tools.read_view(client, "CCODE", view_id="Ct2") == "content of F2"
+
+    calls.clear()
+    tools.remove_view(client, "CCODE", view_id="Ct2")
+    assert tools.remove_view(client, "CCODE", view_id="Ct3").endswith("Its canvas was deleted with it.")
+    assert [c for c in calls if c[0] != "agents.conversations.listViews"] == [
+        ("agents.conversations.removeView", {"channel_id": "CCODE", "view_id": "Ct2"}),
+        ("canvases.delete", {"canvas_id": "F3"})]
 
 
 def test_reading_a_canvas_includes_its_comments(slack):

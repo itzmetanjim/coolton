@@ -2220,18 +2220,17 @@ def code_channel_create_view_tool(
 
 @agent.tool
 def code_channel_list_views_tool(ctx: RunContext[AgentDeps]) -> str:
-    """List this code channel's tabs (their view_key, view_id and type)."""
+    """List every tab in this code channel (HTML, Block Kit, canvas and the diff, whoever
+    made them), with each one's view_key when known and its view_id."""
     from agent.tools.code_channel_tools import list_views
 
-    return list_views(ctx.deps.channel_id)
+    return list_views(ctx.deps.client, ctx.deps.channel_id)
 
 
 @agent.tool
 def code_channel_remove_view_tool(ctx: RunContext[AgentDeps], view_key: str = "", view_id: str = "") -> str:
-    """DELETE one of this code channel's tabs, by view_key or view_id. Works for every kind
-    of tab except a canvas (Slack can't remove those through its API yet). A Block Kit tab
-    often isn't in code_channel_list_views_tool's list, but deleting it by its view_key
-    still works: just try it.
+    """DELETE one of this code channel's tabs, by view_key or view_id (from
+    code_channel_list_views_tool). Deleting a canvas tab deletes its canvas too.
 
     Args:
         view_key: The tab's view_key.
@@ -2239,7 +2238,7 @@ def code_channel_remove_view_tool(ctx: RunContext[AgentDeps], view_key: str = ""
     """
     from agent.tools.code_channel_tools import remove_view
 
-    return remove_view(ctx.deps.channel_id, view_key, view_id)
+    return remove_view(ctx.deps.client, ctx.deps.channel_id, view_key, view_id)
 
 
 @agent.tool

@@ -12,7 +12,8 @@ import threading
 
 from agent.code_channel_api import call, error_text
 from agent.code_channel_store import (
-    canvas_views, forget_view, is_code_channel, remember_canvas_view, remember_view, views as stored_views,
+    canvas_views, forget_canvas_view, forget_view, is_code_channel, remember_canvas_view, remember_view,
+    views as stored_views,
 )
 
 VIEW_TYPES = ("html", "diff", "block_kit", "canvas", "pull_request")
@@ -120,24 +121,66 @@ def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = ""
             f"rich_text channel element whose tab_id is that view_id).")
 
 
-def list_views(channel_id: str) -> str:
+def _channel_tabs(client, channel_id: str) -> list[dict] | None:
+    """Every tab Slack shows in the channel, from conversations.info's properties.tabs:
+    {"id" (the view_id), "label", "type" ("agent_view" for HTML and Block Kit, "canvas"),
+    "data": {"file_id"}}. The only complete list: listViews leaves out Block Kit and canvas
+    tabs. The diff isn't in it (it lives in the built-in Code tab). None if it can't be read."""
+    try:
+        channel = client.conversations_info(channel=channel_id)["channel"]
+    except Exception:
+        return None
+    return (channel.get("properties") or {}).get("tabs") or []
+
+
+def _tabs(client, channel_id: str) -> list[dict]:
+    """The channel's tabs, each put together from properties.tabs, listViews and what
+    coolton remembers: {"view_id", "view_key" (if known), "type", "name", "file_id"}."""
+    remembered = {**{k: {**c, "type": "canvas", "file_id": c.get("canvas_id")} for k, c in canvas_views(channel_id).items()},
+                  **stored_views(channel_id)}
+    listed = call("agents.conversations.listViews", channel_id=channel_id).get("views") or []
+    by_id: dict[str, dict] = {}
+    for key, v in remembered.items():
+        by_id[v.get("view_id") or key] = dict(view_id=v.get("view_id"), view_key=key, type=v.get("type"),
+                                             name=v.get("name") or key, file_id=v.get("file_id"))
+    for v in listed:
+        tab = by_id.setdefault(v.get("view_id"), dict(view_id=v.get("view_id"), type="diff" if v.get("view_id") == "code" else "html"))
+        tab.update({k: val for k, val in (("view_key", v.get("view_key")), ("file_id", v.get("file_id")),
+                                          ("name", v.get("label") or v.get("name"))) if val})
+    shown = _channel_tabs(client, channel_id)
+    if shown is None:  # can't see the channel's tabs: fall back to what's known
+        return list(by_id.values())
+    tabs = []
+    for t in shown:
+        tab = by_id.get(t.get("id")) or dict(view_id=t.get("id"))
+        tab.setdefault("type", "canvas" if t.get("type") == "canvas" else "html or block_kit")
+        tab["name"] = t.get("label") or tab.get("name")
+        tab["file_id"] = (t.get("data") or {}).get("file_id") or tab.get("file_id")
+        tabs.append(tab)
+    diff = by_id.get("code") or next((v for v in by_id.values() if v.get("type") == "diff"), None)
+    if diff:
+        tabs.append(diff)
+    return tabs
+
+
+def _find_tab(client, channel_id: str, view_key: str, view_id: str) -> dict | None:
+    return next((t for t in _tabs(client, channel_id)
+                 if (view_id and t.get("view_id") == view_id) or (view_key and t.get("view_key") == view_key)), None)
+
+
+def list_views(client, channel_id: str) -> str:
+    """Every tab in this code channel, with what's needed to read or delete it."""
     denied = not_a_code_channel(channel_id)
     if denied:
         return denied
-    response = call("agents.conversations.listViews", channel_id=channel_id)
-    if not response.get("ok"):
-        return error_text(response)
-    listed = response.get("views") or []
-    lines = [f"- {v.get('label') or v.get('name') or '(unnamed)'}: view_key={v.get('view_key', '(diff)')}, "
-             f"view_id={v.get('view_id')}, version {v.get('content_version')}" for v in listed]
-    # Slack leaves Block Kit and canvas tabs out of listViews; add the ones coolton made.
-    seen = {v.get("view_id") for v in listed}
-    remembered = {**{k: {**c, "type": "canvas"} for k, c in canvas_views(channel_id).items()}, **stored_views(channel_id)}
-    lines += [f"- {v.get('name') or key} ({v.get('type')}): view_key={key}, view_id={v.get('view_id')}"
-              for key, v in remembered.items() if v.get("view_id") not in seen]
-    note = ("(Slack's own list leaves out Block Kit tabs, so older ones you made may be missing here. A tab "
-            "that isn't listed can still be deleted or updated by its view_key.)")
-    return ("\n".join(lines) if lines else "No tabs listed.") + "\n" + note
+    lines = []
+    for t in _tabs(client, channel_id):
+        key = f"view_key={t['view_key']}" if t.get("view_key") else "view_key unknown (use the view_id)"
+        name = "the diff, in the Code tab" if t.get("type") == "diff" else t.get("name") or "(unnamed)"
+        lines.append(f"- {name} ({t.get('type')}): {key}, view_id={t.get('view_id')}")
+    if not lines:
+        return "This code channel has no tabs yet."
+    return "\n".join(lines) + "\n(Up to 5 tabs, at most one diff.)"
 
 
 _READ_LIMIT = 40_000
@@ -162,23 +205,15 @@ def read_view(client, channel_id: str, view_key: str = "", view_id: str = "") ->
         return denied
     if bool(view_key) == bool(view_id):
         return "Error: give exactly one of view_key or view_id."
-    remembered = stored_views(channel_id)
-    if view_id:
-        view_key = next((k for k, v in remembered.items() if v.get("view_id") == view_id), "")
-    tab = remembered.get(view_key) if view_key else None
-    if view_key in canvas_views(channel_id) or (tab or {}).get("type") == "canvas":
-        return read_canvas(channel_id, view_key)
-    file_id = (tab or {}).get("file_id")
-    if not file_id:
-        response = call("agents.conversations.listViews", channel_id=channel_id)
-        match = next((v for v in response.get("views") or []
-                      if (view_key and v.get("view_key") == view_key) or (view_id and v.get("view_id") == view_id)), None)
-        file_id = (match or {}).get("file_id")
-    if not file_id:
-        return ("Error: no tab I can read with that id here (list them with code_channel_list_views_tool). A Block "
-                "Kit tab only shows up there, and can only be read, if you made it.")
+    tab = _find_tab(client, channel_id, view_key, view_id)
+    if not tab:
+        return "Error: there's no tab with that id here (code_channel_list_views_tool lists them all)."
+    if tab.get("type") == "canvas":
+        return read_canvas(channel_id, tab.get("view_key") or "", canvas_id=tab.get("file_id"))
+    if not tab.get("file_id"):
+        return "Error: Slack didn't say which file holds that tab's content, so it can't be read."
     try:
-        content = _download(client, file_id)
+        content = _download(client, tab["file_id"])
     except Exception as e:
         return f"Error: couldn't read that tab's content ({e})."
     if len(content) > _READ_LIMIT:
@@ -186,34 +221,39 @@ def read_view(client, channel_id: str, view_key: str = "", view_id: str = "") ->
     return content
 
 
-def remove_view(channel_id: str, view_key: str = "", view_id: str = "") -> str:
+def remove_view(client, channel_id: str, view_key: str = "", view_id: str = "") -> str:
+    """Delete a tab. A canvas tab is deleted by deleting its canvas (Slack's removeView
+    can't remove canvas tabs, and deleting the canvas takes its tab with it)."""
     denied = not_a_code_channel(channel_id)
     if denied:
         return denied
     if bool(view_key) == bool(view_id):
         return "Error: give exactly one of view_key or view_id."
-    if view_key in canvas_views(channel_id):
-        return ("Error: Slack can't remove canvas tabs through its API yet. Ask someone to remove it from the "
-                "channel's tabs in Slack, or keep it and update it instead.")
-    response = call("agents.conversations.removeView", channel_id=channel_id,
-                    **({"view_key": view_key} if view_key else {"view_id": view_id}))
-    if response.get("error") == "view_not_found":
-        return (error_text(response) + ". There's no tab with that id. A view_key isn't the tab's name: find "
-                "the view_key (or view_id) in the result of the call that created the tab, and remember a "
-                "creation that failed (e.g. too_many_views) never made a tab.")
-    if not response.get("ok"):
-        return error_text(response)
-    key = view_key or next((k for k, v in stored_views(channel_id).items() if v.get("view_id") == view_id), "")
-    if key:
-        forget_view(channel_id, key)
-    return "Tab removed."
+    tab = _find_tab(client, channel_id, view_key, view_id)
+    if not tab:
+        return ("Error: there's no tab with that id here. A view_key isn't the tab's name, and a creation that "
+                "failed (e.g. too_many_views) never made a tab: code_channel_list_views_tool lists every tab.")
+    if tab.get("type") == "canvas":
+        if not tab.get("file_id"):
+            return "Error: Slack didn't say which canvas that tab shows, so it can't be deleted."
+        response = call("canvases.delete", canvas_id=tab["file_id"])
+        if not response.get("ok"):
+            return error_text(response)
+    else:
+        response = call("agents.conversations.removeView", channel_id=channel_id, view_id=tab["view_id"])
+        if not response.get("ok"):
+            return error_text(response)
+    if tab.get("view_key"):
+        forget_view(channel_id, tab["view_key"])
+        forget_canvas_view(channel_id, tab["view_key"])
+    return "Tab deleted." + (" Its canvas was deleted with it." if tab.get("type") == "canvas" else "")
 
 
-def read_canvas(channel_id: str, view_key: str, include_resolved: bool = False) -> str:
+def read_canvas(channel_id: str, view_key: str, include_resolved: bool = False, canvas_id: str | None = None) -> str:
     denied = not_a_code_channel(channel_id)
     if denied:
         return denied
-    canvas_id = _canvas_id(channel_id, view_key)
+    canvas_id = canvas_id or _canvas_id(channel_id, view_key)
     if not canvas_id:
         known = ", ".join(canvas_views(channel_id)) or "none"
         return f"Error: no canvas tab with view_key {view_key!r} here (canvas tabs: {known})."
