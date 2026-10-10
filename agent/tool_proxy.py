@@ -19,6 +19,7 @@ Security:
 
 import json
 import logging
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -30,7 +31,9 @@ from agent.redact import redact as _redact
 logger = logging.getLogger(__name__)
 
 LISTEN_HOST = "127.0.0.1"
-LISTEN_PORT = 29057
+# Overridable so the test suite, which runs on the same host as the live bot, can listen
+# elsewhere while the bot's own proxy holds the default port.
+LISTEN_PORT = int(os.environ.get("COOLTON_TOOL_PROXY_PORT", "29057"))
 
 # Prefix github_proxy routes to us (mirror of the URL path, minus the leading host).
 URL_PREFIX = "/agent_tools"

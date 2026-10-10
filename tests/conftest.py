@@ -25,8 +25,21 @@ later runs (e.g. making a thread look engaged that a test expects not to be).
 """
 
 import json
+import os
+import socket
 
 import pytest
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+# The live bot runs on the same host as the test suite, and its code-mode tool proxy
+# holds the default port once anyone has used code mode (agent.tool_proxy).
+os.environ.setdefault("COOLTON_TOOL_PROXY_PORT", str(_free_port()))
 
 from agent import fallback_cache, feedback_store, leave_thread_store, provider_config
 
