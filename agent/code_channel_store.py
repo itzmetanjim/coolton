@@ -99,6 +99,34 @@ def remember_canvas_view(channel_id: str, view_key: str, canvas_id: str, view_id
         _save(data)
 
 
+def remember_view(channel_id: str, view_key: str, view_type: str, view_id: str, file_id: str, name: str = "") -> None:
+    """Record a tab coolton added, with the Slack file holding its content: listViews
+    leaves Block Kit and canvas tabs out, so this is how coolton lists and reads them
+    (agent.tools.code_channel_tools). Only for a registered code channel."""
+    with _lock:
+        data = _load()
+        entry = data.get(channel_id)
+        if entry is None:
+            return
+        entry.setdefault("views", {})[view_key] = {"type": view_type, "view_id": view_id, "file_id": file_id,
+                                                   "name": name}
+        _save(data)
+
+
+def forget_view(channel_id: str, view_key: str) -> None:
+    with _lock:
+        data = _load()
+        views = (data.get(channel_id) or {}).get("views") or {}
+        if views.pop(view_key, None) is not None:
+            _save(data)
+
+
+def views(channel_id: str) -> dict:
+    """view_key -> {"type", "view_id", "file_id", "name"} for the tabs coolton added here."""
+    with _lock:
+        return dict((_load().get(channel_id) or {}).get("views") or {})
+
+
 def canvas_views(channel_id: str) -> dict:
     """view_key -> {"canvas_id", "view_id", "name"} for the canvas tabs coolton added here."""
     with _lock:

@@ -2167,14 +2167,15 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
 
 
 @agent.tool
-def code_channel_view_tool(
+def code_channel_create_view_tool(
     ctx: RunContext[AgentDeps], view_type: str, view_key: str = "", name: str = "", content: str = "",
     content_file: str = "", blocks: str = "", markdown: str = "", pr_url: str = "", base_branch: str = "",
     head_branch: str = "", access_level: str = "comment", resource_domains: str = "",
 ) -> str:
-    """Add or update a tab (an artifact) in this code channel, shown next to the chat.
-    Calling again with the same view_key updates that tab in place. Up to 5 tabs per
-    channel, at most one diff.
+    """CREATE a tab (an artifact) in this code channel, shown next to the chat. Calling it
+    again with the same view_key updates that tab in place (send the whole new content).
+    Up to 5 tabs per channel, at most one diff. To see what a tab holds, use
+    code_channel_read_view_tool; to delete one, code_channel_remove_view_tool.
 
     view_type:
     - "html": a full, self-contained HTML document (a report, a dashboard, a demo, a
@@ -2219,7 +2220,7 @@ def code_channel_view_tool(
 
 @agent.tool
 def code_channel_list_views_tool(ctx: RunContext[AgentDeps]) -> str:
-    """List this code channel's tabs (their view_key, view_id and version)."""
+    """List this code channel's tabs (their view_key, view_id and type)."""
     from agent.tools.code_channel_tools import list_views
 
     return list_views(ctx.deps.channel_id)
@@ -2227,7 +2228,8 @@ def code_channel_list_views_tool(ctx: RunContext[AgentDeps]) -> str:
 
 @agent.tool
 def code_channel_remove_view_tool(ctx: RunContext[AgentDeps], view_key: str = "", view_id: str = "") -> str:
-    """Remove one of this code channel's tabs, by view_key or (for the diff tab) view_id.
+    """DELETE one of this code channel's tabs, by view_key or view_id. Works for every kind
+    of tab except a canvas (Slack can't remove those through its API yet).
 
     Args:
         view_key: The tab's view_key.
@@ -2236,6 +2238,21 @@ def code_channel_remove_view_tool(ctx: RunContext[AgentDeps], view_key: str = ""
     from agent.tools.code_channel_tools import remove_view
 
     return remove_view(ctx.deps.channel_id, view_key, view_id)
+
+
+@agent.tool
+def code_channel_read_view_tool(ctx: RunContext[AgentDeps], view_key: str = "", view_id: str = "") -> str:
+    """READ what one of this code channel's tabs currently holds: an HTML page's source, the
+    diff's text, a Block Kit tab's blocks (JSON), or a canvas's markdown and comments. Use
+    it before updating a tab you didn't just write, or when someone asks about a tab.
+
+    Args:
+        view_key: The tab's view_key (the diff tab's is "diff").
+        view_id: The tab's view_id, from code_channel_list_views_tool.
+    """
+    from agent.tools.code_channel_tools import read_view
+
+    return read_view(ctx.deps.client, ctx.deps.channel_id, view_key, view_id)
 
 
 @agent.tool
@@ -3442,8 +3459,9 @@ DEFERRED_TOOLS = frozenset({
     "update_slack_bot_manifest_tool", "wrangler_bot_deploy_tool",
     "create_scheduled_task_tool", "list_scheduled_tasks_tool", "pause_scheduled_task_tool",
     "resume_scheduled_task_tool", "delete_scheduled_task_tool",
-    "create_code_channel_tool", "code_channel_view_tool", "code_channel_list_views_tool",
-    "code_channel_remove_view_tool", "code_channel_read_canvas_tool", "code_channel_context_bar_tool",
+    "create_code_channel_tool", "code_channel_create_view_tool", "code_channel_list_views_tool",
+    "code_channel_read_view_tool", "code_channel_remove_view_tool", "code_channel_read_canvas_tool",
+    "code_channel_context_bar_tool",
     "code_channel_commands_tool", "code_channel_rename_tool", "code_channel_archive_tool",
     "analyze_csv_tool", "run_sql_on_csv_tool", "run_python_data_analysis_tool", "extract_tar_gz_tool",
     "install_opencode_tool", "run_opencode_tool",

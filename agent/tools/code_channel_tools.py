@@ -11,7 +11,9 @@ import re
 import threading
 
 from agent.code_channel_api import call, error_text
-from agent.code_channel_store import canvas_views, is_code_channel, remember_canvas_view
+from agent.code_channel_store import (
+    canvas_views, forget_view, is_code_channel, remember_canvas_view, remember_view, views as stored_views,
+)
 
 VIEW_TYPES = ("html", "diff", "block_kit", "canvas", "pull_request")
 CONTEXT_BAR_ICONS = ("branch", "folder", "hierarchy", "life-ring", "link", "globe", "terminal", "code", "search", "lock")
@@ -54,7 +56,7 @@ def _canvas_id(channel_id: str, view_key: str) -> str | None:
 def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = "", content: str = "",
              blocks: str = "", markdown: str = "", pr_url: str = "", base_branch: str = "",
              head_branch: str = "", access_level: str = "comment", resource_domains: str = "") -> str:
-    """Create or update a tab (see agent.agent.code_channel_view_tool)."""
+    """Create a tab, or update one by its view_key (see agent.agent.code_channel_create_view_tool)."""
     denied = not_a_code_channel(channel_id)
     if denied:
         return denied
@@ -111,6 +113,8 @@ def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = ""
         return error_text(response)
     if view_type == "canvas":
         remember_canvas_view(channel_id, view_key, params["canvas_id"], response.get("view_id", ""), name)
+    remember_view(channel_id, view_key or view_type, view_type, response.get("view_id", ""),
+                  response.get("file_id") or params.get("canvas_id", ""), name)
     return (f"Tab {'updated' if (response.get('content_version') or 1) > 1 else 'added'}: view_id "
             f"{response.get('view_id')} (link to it in a message with a rich_text channel element whose "
             f"tab_id is that view_id).")
@@ -123,11 +127,61 @@ def list_views(channel_id: str) -> str:
     response = call("agents.conversations.listViews", channel_id=channel_id)
     if not response.get("ok"):
         return error_text(response)
+    listed = response.get("views") or []
     lines = [f"- {v.get('label') or v.get('name') or '(unnamed)'}: view_key={v.get('view_key', '(diff)')}, "
-             f"view_id={v.get('view_id')}, version {v.get('content_version')}" for v in response.get("views") or []]
-    lines += [f"- {c.get('name') or key} (canvas): view_key={key}, view_id={c.get('view_id')}"
-              for key, c in canvas_views(channel_id).items()]
+             f"view_id={v.get('view_id')}, version {v.get('content_version')}" for v in listed]
+    # Slack leaves Block Kit and canvas tabs out of listViews; add the ones coolton made.
+    seen = {v.get("view_id") for v in listed}
+    remembered = {**{k: {**c, "type": "canvas"} for k, c in canvas_views(channel_id).items()}, **stored_views(channel_id)}
+    lines += [f"- {v.get('name') or key} ({v.get('type')}): view_key={key}, view_id={v.get('view_id')}"
+              for key, v in remembered.items() if v.get("view_id") not in seen]
     return "\n".join(lines) if lines else "This code channel has no tabs yet."
+
+
+_READ_LIMIT = 40_000
+
+
+def _download(client, file_id: str) -> str:
+    """A Slack file's text, fetched with coolton's own bot (`client`)."""
+    import requests
+
+    info = client.files_info(file=file_id)["file"]
+    url = info.get("url_private_download") or info.get("url_private")
+    response = requests.get(url, headers={"Authorization": f"Bearer {client.token}"}, timeout=30)
+    response.raise_for_status()
+    return response.text
+
+
+def read_view(client, channel_id: str, view_key: str = "", view_id: str = "") -> str:
+    """A tab's content (HTML, diff or Block Kit JSON) from the Slack file behind it;
+    canvas tabs go through read_canvas, which also returns their comments."""
+    denied = not_a_code_channel(channel_id)
+    if denied:
+        return denied
+    if bool(view_key) == bool(view_id):
+        return "Error: give exactly one of view_key or view_id."
+    remembered = stored_views(channel_id)
+    if view_id:
+        view_key = next((k for k, v in remembered.items() if v.get("view_id") == view_id), "")
+    tab = remembered.get(view_key) if view_key else None
+    if view_key in canvas_views(channel_id) or (tab or {}).get("type") == "canvas":
+        return read_canvas(channel_id, view_key)
+    file_id = (tab or {}).get("file_id")
+    if not file_id:
+        response = call("agents.conversations.listViews", channel_id=channel_id)
+        match = next((v for v in response.get("views") or []
+                      if (view_key and v.get("view_key") == view_key) or (view_id and v.get("view_id") == view_id)), None)
+        file_id = (match or {}).get("file_id")
+    if not file_id:
+        return ("Error: no tab I can read with that id here (list them with code_channel_list_views_tool). A Block "
+                "Kit tab only shows up there, and can only be read, if you made it.")
+    try:
+        content = _download(client, file_id)
+    except Exception as e:
+        return f"Error: couldn't read that tab's content ({e})."
+    if len(content) > _READ_LIMIT:
+        content = content[:_READ_LIMIT] + f"\n[... {len(content) - _READ_LIMIT} more characters cut]"
+    return content
 
 
 def remove_view(channel_id: str, view_key: str = "", view_id: str = "") -> str:
@@ -141,7 +195,12 @@ def remove_view(channel_id: str, view_key: str = "", view_id: str = "") -> str:
                 "channel's tabs in Slack, or keep it and update it instead.")
     response = call("agents.conversations.removeView", channel_id=channel_id,
                     **({"view_key": view_key} if view_key else {"view_id": view_id}))
-    return "Tab removed." if response.get("ok") else error_text(response)
+    if not response.get("ok"):
+        return error_text(response)
+    key = view_key or next((k for k, v in stored_views(channel_id).items() if v.get("view_id") == view_id), "")
+    if key:
+        forget_view(channel_id, key)
+    return "Tab removed."
 
 
 def read_canvas(channel_id: str, view_key: str, include_resolved: bool = False) -> str:

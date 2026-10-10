@@ -19,12 +19,16 @@ def slack(monkeypatch):
         calls.append((method, params))
         return responses.get(method, {"ok": True})
 
-    canvases = {}
+    canvases, views = {}, {}
     monkeypatch.setattr(tools, "call", call)
     monkeypatch.setattr(tools, "is_code_channel", lambda c: c == "CCODE")
     monkeypatch.setattr(tools, "canvas_views", lambda c: dict(canvases))
     monkeypatch.setattr(tools, "remember_canvas_view",
                         lambda c, key, canvas_id, view_id, name="": canvases.update({key: {"canvas_id": canvas_id, "view_id": view_id}}))
+    monkeypatch.setattr(tools, "stored_views", lambda c: dict(views))
+    monkeypatch.setattr(tools, "remember_view", lambda c, key, kind, view_id, file_id, name="": views.update(
+        {key: {"type": kind, "view_id": view_id, "file_id": file_id, "name": name}}))
+    monkeypatch.setattr(tools, "forget_view", lambda c, key: views.pop(key, None))
     return calls, responses
 
 
@@ -88,6 +92,20 @@ def test_a_new_canvas_tab_is_created_then_later_updated_in_place(slack):
     tools.set_view("CCODE", "canvas", "plan", markdown="# Plan v2")
     assert calls[-1] == ("agents.conversations.setCanvasContent",
                          {"channel": "CCODE", "canvas_id": "F1", "content": "# Plan v2"})
+
+
+def test_a_block_kit_tab_is_listed_and_readable_though_slack_leaves_it_out(slack, monkeypatch):
+    """listViews omits Block Kit (and canvas) tabs; each tab's content is a Slack file."""
+    _, responses = slack
+    responses["agents.conversations.setView"] = {"ok": True, "view_id": "Ct9", "file_id": "F9"}
+    responses["agents.conversations.listViews"] = {"ok": True, "views": []}
+    tools.set_view("CCODE", "block_kit", "actions", "Actions", blocks='[{"type": "divider"}]')
+    monkeypatch.setattr(tools, "_download", lambda client, file_id: f"content of {file_id}")
+
+    assert "Actions (block_kit): view_key=actions, view_id=Ct9" in tools.list_views("CCODE")
+    assert tools.read_view(Mock(), "CCODE", view_id="Ct9") == "content of F9"
+    assert tools.remove_view("CCODE", view_key="actions") == "Tab removed."
+    assert tools.list_views("CCODE") == "This code channel has no tabs yet."
 
 
 def test_reading_a_canvas_includes_its_comments(slack):
