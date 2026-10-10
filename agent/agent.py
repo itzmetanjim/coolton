@@ -2229,7 +2229,9 @@ def code_channel_list_views_tool(ctx: RunContext[AgentDeps]) -> str:
 @agent.tool
 def code_channel_remove_view_tool(ctx: RunContext[AgentDeps], view_key: str = "", view_id: str = "") -> str:
     """DELETE one of this code channel's tabs, by view_key or view_id. Works for every kind
-    of tab except a canvas (Slack can't remove those through its API yet).
+    of tab except a canvas (Slack can't remove those through its API yet). A Block Kit tab
+    often isn't in code_channel_list_views_tool's list, but deleting it by its view_key
+    still works: just try it.
 
     Args:
         view_key: The tab's view_key.

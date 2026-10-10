@@ -105,7 +105,7 @@ def test_a_block_kit_tab_is_listed_and_readable_though_slack_leaves_it_out(slack
     assert "Actions (block_kit): view_key=actions, view_id=Ct9" in tools.list_views("CCODE")
     assert tools.read_view(Mock(), "CCODE", view_id="Ct9") == "content of F9"
     assert tools.remove_view("CCODE", view_key="actions") == "Tab removed."
-    assert tools.list_views("CCODE") == "This code channel has no tabs yet."
+    assert tools.list_views("CCODE").startswith("No tabs listed.")
 
 
 def test_reading_a_canvas_includes_its_comments(slack):

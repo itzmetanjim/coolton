@@ -135,7 +135,9 @@ def list_views(channel_id: str) -> str:
     remembered = {**{k: {**c, "type": "canvas"} for k, c in canvas_views(channel_id).items()}, **stored_views(channel_id)}
     lines += [f"- {v.get('name') or key} ({v.get('type')}): view_key={key}, view_id={v.get('view_id')}"
               for key, v in remembered.items() if v.get("view_id") not in seen]
-    return "\n".join(lines) if lines else "This code channel has no tabs yet."
+    note = ("(Slack's own list leaves out Block Kit tabs, so older ones you made may be missing here. A tab "
+            "that isn't listed can still be deleted or updated by its view_key.)")
+    return ("\n".join(lines) if lines else "No tabs listed.") + "\n" + note
 
 
 _READ_LIMIT = 40_000
