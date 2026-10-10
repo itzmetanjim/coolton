@@ -115,9 +115,9 @@ def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = ""
         remember_canvas_view(channel_id, view_key, params["canvas_id"], response.get("view_id", ""), name)
     remember_view(channel_id, view_key or view_type, view_type, response.get("view_id", ""),
                   response.get("file_id") or params.get("canvas_id", ""), name)
-    return (f"Tab {'updated' if (response.get('content_version') or 1) > 1 else 'added'}: view_id "
-            f"{response.get('view_id')} (link to it in a message with a rich_text channel element whose "
-            f"tab_id is that view_id).")
+    return (f"Tab {'updated' if (response.get('content_version') or 1) > 1 else 'added'}: view_key "
+            f"{view_key or view_type}, view_id {response.get('view_id')} (link to it in a message with a "
+            f"rich_text channel element whose tab_id is that view_id).")
 
 
 def list_views(channel_id: str) -> str:
@@ -197,6 +197,10 @@ def remove_view(channel_id: str, view_key: str = "", view_id: str = "") -> str:
                 "channel's tabs in Slack, or keep it and update it instead.")
     response = call("agents.conversations.removeView", channel_id=channel_id,
                     **({"view_key": view_key} if view_key else {"view_id": view_id}))
+    if response.get("error") == "view_not_found":
+        return (error_text(response) + ". There's no tab with that id. A view_key isn't the tab's name: find "
+                "the view_key (or view_id) in the result of the call that created the tab, and remember a "
+                "creation that failed (e.g. too_many_views) never made a tab.")
     if not response.get("ok"):
         return error_text(response)
     key = view_key or next((k for k, v in stored_views(channel_id).items() if v.get("view_id") == view_id), "")
