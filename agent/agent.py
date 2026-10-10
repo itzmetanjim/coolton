@@ -2386,27 +2386,46 @@ async def text_only_response(ctx: RunContext[AgentDeps], emoji_name: str, respon
     return response
 
 
+_WRITTEN_OUT_CALL_START_RE = re.compile(r"\s*text_only_response\s*\(")
+_WRITTEN_OUT_EMOJI_RE = re.compile(r"""emoji_name\s*[=:]\s*["']([^"'\n]*)["']""")
+_WRITTEN_OUT_RESPONSE_RE = re.compile(r"""["']?response["']?\s*[=:]\s*(\"\"\"|'\'\'|"|')""")
+_ESCAPES = {"n": "\n", "t": "\t", '"': '"', "'": "'", "\\": "\\"}
+
+
 def _written_out_text_only_response(text: str) -> dict | None:
     """The arguments of a text_only_response call the model wrote out as its reply's text
-    (seen live from Claude Haiku 5.5 on HCAI) instead of making it, or None."""
+    (seen live from Claude Haiku 5.5 on HCAI) instead of making it, or None. Read as
+    Python when it is valid Python, else leniently: its strings can hold raw line breaks
+    and leaked tool-call markup can follow the call (both seen live)."""
     import ast
 
+    if not _WRITTEN_OUT_CALL_START_RE.match(text):
+        return None
     try:
         call = ast.parse(text.strip(), mode="eval").body
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "text_only_response":
+            args = {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords if kw.arg}
+            for positional in call.args:  # text_only_response({"emoji_name": ..., "response": ...})
+                value = ast.literal_eval(positional)
+                if isinstance(value, dict):
+                    args.update(value)
+            if isinstance(args.get("response"), str):
+                return args
     except (SyntaxError, ValueError):
+        pass
+    # The response string runs from its opening quote to the last matching quote that
+    # closes the call (or failing that, the last matching quote at all).
+    opening = _WRITTEN_OUT_RESPONSE_RE.search(text)
+    if not opening:
         return None
-    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
-            and call.func.id == "text_only_response"):
+    quote, body_start = opening[1], opening.end()
+    closings = [m.start() for m in re.finditer(re.escape(quote) + r"\s*\)", text[body_start:])]
+    body_end = body_start + closings[-1] if closings else text.rfind(quote, body_start)
+    if body_end <= body_start:
         return None
-    try:
-        args = {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords if kw.arg}
-        for positional in call.args:  # text_only_response({"emoji_name": ..., "response": ...})
-            value = ast.literal_eval(positional)
-            if isinstance(value, dict):
-                args.update(value)
-    except (ValueError, SyntaxError):
-        return None
-    return args if isinstance(args.get("response"), str) else None
+    response = re.sub(r"\\(.)", lambda m: _ESCAPES.get(m[1], m[0]), text[body_start:body_end])
+    emoji = _WRITTEN_OUT_EMOJI_RE.search(text[:opening.start()]) or _WRITTEN_OUT_EMOJI_RE.search(text[body_end:])
+    return {"emoji_name": emoji[1] if emoji else "", "response": response}
 
 
 async def plain_text_reply(ctx: RunContext[AgentDeps], text: str) -> str:

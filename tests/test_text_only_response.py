@@ -4,6 +4,7 @@ like any plain-text final answer)."""
 import importlib
 from types import SimpleNamespace
 
+import pytest
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
@@ -51,14 +52,19 @@ def test_plain_text_is_still_a_valid_final_answer(monkeypatch):
     assert surface.reactions == []
 
 
-def test_a_text_only_response_written_out_as_text_still_only_sends_the_reply(monkeypatch):
-    """Seen live: a reply of `text_only_response(emoji_name="tada", response="...")` as
-    plain text, which was posted parameters and all."""
-    reply = TextPart('text_only_response(emoji_name="tada", response="all set, it\'s done")')
+@pytest.mark.parametrize("written", [
+    'text_only_response(emoji_name="tada", response="all set, it\'s done.\\n\\nbye")',
+    # Seen live: raw line breaks inside an ordinary string, so it isn't valid Python.
+    'text_only_response(emoji_name="tada", response="all set, it\'s done.\n\nbye")',
+    # Seen live: a triple-quoted response, then leaked tool-call markup after the call.
+    'text_only_response(\nemoji_name="tada",\nresponse="""all set, it\'s done.\n\nbye""")\n</parameter>\n</invoke>.',
+])
+def test_a_text_only_response_written_out_as_text_still_only_sends_the_reply(monkeypatch, written):
+    """Seen live: replies of `text_only_response(emoji_name="tada", response="...")` as
+    plain text, which were posted parameters and all."""
+    result, surface, calls = _run(lambda messages, info: ModelResponse(parts=[TextPart(written)]), monkeypatch)
 
-    result, surface, calls = _run(lambda messages, info: ModelResponse(parts=[reply]), monkeypatch)
-
-    assert result.output == "all set, it's done" and surface.reactions == ["tada"]
+    assert result.output == "all set, it's done.\n\nbye" and surface.reactions == ["tada"]
     assert len(calls) == 1
 
 
