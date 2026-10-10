@@ -117,3 +117,16 @@ def test_text_beside_a_text_only_response_call_is_not_posted_as_a_status_update(
 
     assert test_agent.run_sync("hi", deps=deps).output == "done"
     deps.client.chat_postMessage.assert_not_called()
+
+
+def test_a_reply_written_out_as_a_call_is_shown_to_the_model_as_the_reply_it_was(monkeypatch):
+    """Seen live: once one reply was a text_only_response call written out as text, the
+    model saw itself answering that way in the history and kept doing it, turn after turn."""
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    history = [ModelRequest(parts=[UserPromptPart("hi")]),
+               ModelResponse(parts=[TextPart('text_only_response(emoji_name="wave", response="hey!")')])]
+
+    cleaned = agent_mod._without_written_out_calls(history)
+
+    assert cleaned[1].parts[0].content == "hey!" and cleaned[0] is history[0]

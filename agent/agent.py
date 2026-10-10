@@ -11,7 +11,8 @@ import requests
 from pydantic_ai import RunContext
 from pydantic_ai import Agent, TextOutput, ToolOutput
 from pydantic_ai.messages import (
-    BinaryContent, ModelRequest, ModelResponse, SystemPromptPart, ToolCallPart, ToolReturn, UserPromptPart,
+    BinaryContent, ModelRequest, ModelResponse, SystemPromptPart, TextPart, ToolCallPart, ToolReturn,
+    UserPromptPart,
 )
 from pydantic_ai.capabilities import Hooks, PrepareTools, ProcessHistory
 from pydantic_ai.toolsets import FunctionToolset
@@ -3228,6 +3229,8 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
     # turn already gets a brand-new AgentDeps() so this is already None, but reset
     # explicitly in case some other caller reuses a deps object across calls.
     deps.last_attempt_messages = None
+    message_history = _without_written_out_calls(message_history)
+    resume_from = _without_written_out_calls(resume_from)
 
     # Attribute the incoming message to its sender so the model can tell users apart.
     platform = deps.platform or SlackPlatform(deps.client)
@@ -3472,6 +3475,45 @@ def _preload_search_call(groups: set[str], history=None, slack_mcp: bool = False
         return None
     call = ToolCallPart(SEARCH_TOOL, {"queries": names}, tool_call_id=f"{PRELOAD_CALL_ID_PREFIX}{uuid4().hex[:12]}")
     return [ModelResponse(parts=[call])]
+
+
+def _claude_through_gateway(prov_config: dict, http_client):
+    """A Claude model behind an OpenRouter-based gateway (HCAI proxies OpenRouter).
+
+    Claude keeps its earlier thinking in context and expects it back signed during a tool
+    loop; OpenRouter carries it as `reasoning_details`. OpenAIChatModel only sends thinking
+    back as a bare, unsigned `reasoning` string, so Claude lost its own reasoning at every
+    step (Claude Haiku 5.5 then started writing its tool calls out as text). OpenRouterModel
+    sends `reasoning_details` back as received. Thinking stored from before (unsigned) isn't
+    sent back at all."""
+    from openai import AsyncOpenAI
+    from pydantic_ai.models.openrouter import OpenRouterModel
+    from pydantic_ai.providers.openrouter import OpenRouterProvider
+
+    provider = OpenRouterProvider(openai_client=AsyncOpenAI(
+        base_url=prov_config["base_url"], api_key=prov_config["api_key"], http_client=http_client,
+    ))
+    profile = {**(provider.model_profile(prov_config["model"]) or {}), "openai_chat_send_back_thinking_parts": False}
+    return OpenRouterModel(prov_config["model"], provider=provider, profile=profile)
+
+
+def _without_written_out_calls(messages):
+    """`messages` with each reply that was a text_only_response call written out as text
+    (see plain_text_reply) reduced to the reply that was posted, so the model never sees
+    itself answering that way and copies it on later turns (seen live)."""
+    if not messages:
+        return messages
+    cleaned = []
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            parts = []
+            for part in message.parts:
+                written = _written_out_text_only_response(part.content) if isinstance(part, TextPart) else None
+                parts.append(replace(part, content=written["response"]) if written else part)
+            if parts != message.parts:
+                message = replace(message, parts=parts)
+        cleaned.append(message)
+    return cleaned
 
 
 def _checkpoint_hooks(deps):
@@ -3775,14 +3817,17 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
                         event_hooks={"response": [lambda r: _capture_raw_response(raw_response, r)]},
                         limits=httpx.Limits(max_keepalive_connections=0),
                     )
-                    model_obj = OpenAIChatModel(
-                        prov_config["model"],
-                        provider=OpenAIProvider(
-                            base_url=prov_config["base_url"],
-                            api_key=prov_config["api_key"],
-                            http_client=http_client,
-                        ),
-                    )
+                    if model_name.lower().startswith("anthropic/"):
+                        model_obj = _claude_through_gateway(prov_config, http_client)
+                    else:
+                        model_obj = OpenAIChatModel(
+                            prov_config["model"],
+                            provider=OpenAIProvider(
+                                base_url=prov_config["base_url"],
+                                api_key=prov_config["api_key"],
+                                http_client=http_client,
+                            ),
+                        )
 
                 # Set env vars for this provider
                 if prov_config.get("api_key") and provider_name != "byok":
