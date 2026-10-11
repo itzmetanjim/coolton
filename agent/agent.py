@@ -2196,7 +2196,9 @@ def code_channel_create_view_tool(
         view_key: The tab's stable id (e.g. "plan", "reports/coverage.html"); reuse it to update.
         name: The tab's label.
         content: The HTML document or diff text.
-        content_file: A sandbox file to read content from instead (e.g. a big diff or page).
+        content_file: A sandbox file holding the tab's content instead (a big page or diff, a
+            Block Kit JSON array, or canvas markdown), read for whichever of content, blocks
+            or markdown the view_type uses.
         blocks: Block Kit blocks as a JSON array string, for block_kit.
         markdown: The canvas content, for canvas.
         pr_url: The pull request's https URL, for pull_request.
@@ -2207,13 +2209,21 @@ def code_channel_create_view_tool(
     """
     from agent.tools.code_channel_tools import set_view
 
-    if content_file and not content:
+    if content_file:
         try:
             with sandbox_use(ctx.deps.channel_id, ctx.deps.thread_ts) as use:
                 use.sandbox, _ = get_or_create_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
-                content = use.sandbox.files.read(content_file)
+                from_file = use.sandbox.files.read(content_file)
         except Exception as e:
             return f"Error: couldn't read {content_file} from the sandbox: {e}"
+        # The file holds whatever this view_type takes (seen live: a Block Kit tab made from a
+        # file came out empty, because the file only ever filled `content`).
+        if view_type.strip().lower() == "block_kit":
+            blocks = from_file
+        elif view_type.strip().lower() == "canvas":
+            markdown = from_file
+        else:
+            content = from_file
     return set_view(ctx.deps.channel_id, view_type, view_key, name, content, blocks, markdown, pr_url,
                     base_branch, head_branch, access_level, resource_domains)
 

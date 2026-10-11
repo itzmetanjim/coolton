@@ -86,6 +86,10 @@ def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = ""
         parsed, error = _json(blocks, "blocks")
         if error:
             return error
+        if not isinstance(parsed, list) or not parsed:
+            # Slack accepts an empty array, and the tab then just shows "We can't fully display
+            # this message".
+            return "Error: blocks must be a non-empty JSON array of blocks (pass them in blocks or content_file)."
         params["blocks"] = parsed
     elif view_type == "pull_request":
         if not pr_url:
