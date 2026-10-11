@@ -133,10 +133,9 @@ def build_web_hooks(conversation_id: str):
     async def after_tool(ctx, *, call, tool_def, args, result):
         deps = ctx.deps
 
-        steering = (take_steering_messages(deps.channel_id, deps.thread_ts, steering_senders(deps))
-                    if isinstance(result, str) else [])
+        steering = take_steering_messages(deps.channel_id, deps.thread_ts) if isinstance(result, str) else []
         if steering:
-            result = f"{result}\n\n" + "\n\n".join(steering_note(s) for s in steering)
+            result = f"{result}\n\n" + "\n\n".join(steering_note(s, steering_senders(deps)) for s in steering)
 
         if is_preload_call(call):
             return result

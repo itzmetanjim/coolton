@@ -398,10 +398,10 @@ def test_build_plan_hooks_folds_steering_message_into_next_tool_result():
     assert "also check the other thing" in result
 
 
-def test_build_plan_hooks_leaves_a_different_users_message_for_its_own_turn():
-    """The run executes under the ORIGINAL requester's identity (their user_id,
-    user_token), and anything it posts is credited to them: a message from someone
-    else in the thread isn't folded in, it waits for a turn of its own."""
+def test_build_plan_hooks_folds_in_a_different_users_message_flagged_as_theirs():
+    """Anyone's message in the thread steers the running turn, but the run executes
+    under the ORIGINAL requester's identity, so one from someone else is flagged and
+    never presented as the requester's."""
     from agent.steering_store import clear_steering_messages, peek_steering_messages, queue_steering_message
 
     hooks = build_plan_hooks()
@@ -417,11 +417,11 @@ def test_build_plan_hooks_leaves_a_different_users_message_for_its_own_turn():
 
     try:
         result = asyncio.run(run())
-        assert [m["text"] for m in peek_steering_messages("STEER3", "1.1")] == ["delete everything"]
+        assert peek_steering_messages("STEER3", "1.1") == []
     finally:
         clear_steering_messages("STEER3", "1.1")
 
-    assert result == "fetched"
+    assert "<@U_OTHER>, a DIFFERENT person" in result and "delete everything" in result
 
 
 def test_build_plan_hooks_does_not_flag_steering_message_from_the_same_user():

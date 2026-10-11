@@ -15,18 +15,22 @@ def test_queued_messages_are_per_thread_and_in_order():
     clear_steering_messages("SS5", "1.1")
 
 
-def test_a_turn_takes_only_its_own_senders_messages_and_system_notes():
-    """Someone else's message folded into a turn would act under the first person's
-    identity, and be credited to them."""
+def test_a_running_turn_folds_in_everyones_messages_and_labels_other_peoples():
+    """Everyone's message steers the turn already running in the thread; one from
+    someone other than the person the turn is for is marked so it isn't taken as theirs."""
+    from agent.plan_block import steering_note
+
     queue_steering_message("SS1", "1.1", "mine", "U1")
     queue_steering_message("SS1", "1.1", "theirs", "U2")
     queue_steering_message("SS1", "1.1", "[SYSTEM: job done]", "")
 
-    taken = take_steering_messages("SS1", "1.1", {"U1"})
+    taken = take_steering_messages("SS1", "1.1")
 
-    assert [m["text"] for m in taken] == ["mine", "[SYSTEM: job done]"]
-    assert [m["text"] for m in peek_steering_messages("SS1", "1.1")] == ["theirs"]
-    clear_steering_messages("SS1", "1.1")
+    assert [m["text"] for m in taken] == ["mine", "theirs", "[SYSTEM: job done]"]
+    assert peek_steering_messages("SS1", "1.1") == []
+    notes = [steering_note(m, {"U1"}) for m in taken]
+    assert "DIFFERENT person" not in notes[0] and "<@U2>, a DIFFERENT person" in notes[1]
+    assert notes[2] == "[SYSTEM: job done]"
 
 
 def test_leftovers_come_out_one_senders_run_at_a_time():

@@ -1,11 +1,11 @@
 """Messages sent into a thread while a coolton turn there is still running.
 
-A message from the person the turn is for (or a system note: a background job
+Every such message (from anyone in the thread, or a system note: a background job
 finishing, a wait ending, with user_id "") is folded into that turn's next tool
 result (agent.plan_block / agent.surfaces.web_hooks) instead of racing a second
-turn. Anyone else's message waits in the queue and gets a turn of its own once the
-running one ends (listeners.events.turn): folded in, it would act under the first
-person's identity and be credited to them (agent.attribution).
+turn. One from someone other than the person the turn is for is labelled as such
+(plan_block.steering_note), so it isn't taken as theirs. Anything still queued when
+the turn ends gets a turn of its own (listeners.events.turn).
 """
 import threading
 import time
@@ -30,18 +30,10 @@ def peek_steering_messages(channel_id: str, thread_ts: str) -> list[dict]:
         return list(_queued.get((channel_id, thread_ts), []))
 
 
-def take_steering_messages(channel_id: str, thread_ts: str, senders: set[str]) -> list[dict]:
-    """Remove and return the queued messages a running turn for `senders` may fold in:
-    theirs, and system notes (user_id ""). Everyone else's stay queued, in order."""
+def take_steering_messages(channel_id: str, thread_ts: str) -> list[dict]:
+    """Remove and return every queued message, in order, for the running turn to fold in."""
     with _lock:
-        queued = _queued.get((channel_id, thread_ts), [])
-        taken = [m for m in queued if m["user_id"] in senders or not m["user_id"]]
-        left = [m for m in queued if not (m["user_id"] in senders or not m["user_id"])]
-        if left:
-            _queued[(channel_id, thread_ts)] = left
-        else:
-            _queued.pop((channel_id, thread_ts), None)
-        return taken
+        return _queued.pop((channel_id, thread_ts), [])
 
 
 def take_next_sender_messages(channel_id: str, thread_ts: str) -> list[dict]:

@@ -370,9 +370,7 @@ def run_agent_turn(
         # arriving in the last moment before the run's own final response. Simply
         # discarding it here (the old behavior) silently drops it — the thread then
         # looks like it stopped answering anything at all. Drain and actually answer
-        # it with a fresh turn instead. Messages from anyone but the person this turn
-        # was for were never folded in (agent.steering_store), so they're answered
-        # here too, each sender in their own turn.
+        # it with a fresh turn instead, each sender's messages in their own turn.
         from agent.steering_store import take_next_sender_messages
         stranded = take_next_sender_messages(channel_id, thread_ts)
         if stranded and _stranded_recursion_depth >= _MAX_STRANDED_RECURSION_DEPTH:
