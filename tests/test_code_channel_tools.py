@@ -1,6 +1,7 @@
 """agent.tools.code_channel_tools and the code channels app's listeners: coolton's tabs,
 context bar, canvas, commands and archiving in a code channel, and how people's commands,
 button presses and stop clicks there reach her."""
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -83,6 +84,20 @@ def test_an_empty_block_kit_tab_is_refused(slack):
     calls, _ = slack
     assert tools.set_view("CCODE", "block_kit", "gallery", blocks="[]").startswith("Error")
     assert calls == []
+
+
+def test_a_tab_rule_slack_wont_explain_is_caught_before_calling_it(slack):
+    """Seen live: a multi-select in an actions block made setView answer a bare
+    invalid_blocks (blocks.validate passes it)."""
+    calls, responses = slack
+    multi = {"type": "multi_static_select", "action_id": "m", "placeholder": {"type": "plain_text", "text": "p"},
+             "options": [{"text": {"type": "plain_text", "text": "a"}, "value": "a"}]}
+    result = tools.set_view("CCODE", "block_kit", "gallery", blocks=json.dumps([{"type": "actions", "elements": [multi]}]))
+    assert "/0/elements/0" in result and calls == []
+
+    responses["agents.conversations.setView"] = {"ok": False, "error": "invalid_blocks"}
+    responses["blocks.validate"] = {"ok": False, "errors": [{"pointer": "/0/text", "message": "too long"}]}
+    assert "/0/text: too long" in tools.set_view("CCODE", "block_kit", "gallery", blocks='[{"type": "divider"}]')
 
 
 def test_a_new_canvas_tab_is_created_then_later_updated_in_place(slack):

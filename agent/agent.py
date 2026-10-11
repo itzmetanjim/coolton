@@ -2229,6 +2229,32 @@ def code_channel_create_view_tool(
 
 
 @agent.tool
+def block_kit_validate_tool(
+    ctx: RunContext[AgentDeps], blocks: str = "", blocks_file: str = "", surface: str = "message",
+) -> str:
+    """Check Block Kit blocks before posting them or putting them in a code channel tab:
+    Slack's own validation (each problem with a JSON pointer like /0/rows/1/1 = block 0,
+    row 1, cell 1) plus, for surface "tab", the rules code channel tabs add. Fix what it
+    points at and check again before using the blocks.
+
+    Args:
+        blocks: The blocks as a JSON array string.
+        blocks_file: A sandbox file holding the JSON array instead.
+        surface: "message" (chat.postMessage) or "tab" (a code channel Block Kit tab).
+    """
+    from agent.tools.block_kit import validate
+
+    if blocks_file:
+        try:
+            with sandbox_use(ctx.deps.channel_id, ctx.deps.thread_ts) as use:
+                use.sandbox, _ = get_or_create_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
+                blocks = use.sandbox.files.read(blocks_file)
+        except Exception as e:
+            return f"Error: couldn't read {blocks_file} from the sandbox: {e}"
+    return validate(ctx.deps.client, blocks, surface)
+
+
+@agent.tool
 def code_channel_list_views_tool(ctx: RunContext[AgentDeps]) -> str:
     """List every tab in this code channel (HTML, Block Kit, canvas and the diff, whoever
     made them), with each one's view_key when known and its view_id."""
@@ -3472,7 +3498,7 @@ DEFERRED_TOOLS = frozenset({
     "resume_scheduled_task_tool", "delete_scheduled_task_tool",
     "create_code_channel_tool", "code_channel_create_view_tool", "code_channel_list_views_tool",
     "code_channel_read_view_tool", "code_channel_remove_view_tool", "code_channel_read_canvas_tool",
-    "code_channel_context_bar_tool",
+    "code_channel_context_bar_tool", "block_kit_validate_tool",
     "code_channel_commands_tool", "code_channel_rename_tool", "code_channel_archive_tool",
     "analyze_csv_tool", "run_sql_on_csv_tool", "run_python_data_analysis_tool", "extract_tar_gz_tool",
     "install_opencode_tool", "run_opencode_tool",

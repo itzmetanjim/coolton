@@ -83,13 +83,16 @@ def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = ""
             return "Error: a diff tab needs content: unified diff text (git diff output)."
         params.update(content=content, **{k: v for k, v in (("base_branch", base_branch), ("head_branch", head_branch)) if v})
     elif view_type == "block_kit":
-        parsed, error = _json(blocks, "blocks")
-        if error:
-            return error
-        if not isinstance(parsed, list) or not parsed:
-            # Slack accepts an empty array, and the tab then just shows "We can't fully display
-            # this message".
-            return "Error: blocks must be a non-empty JSON array of blocks (pass them in blocks or content_file)."
+        from agent.tools.block_kit import parse_blocks, tab_problems
+
+        # An empty array is refused here: Slack accepts it, and the tab then just shows "We
+        # can't fully display this message".
+        parsed, error = parse_blocks(blocks)
+        if parsed is None:
+            return (error or "Error: no blocks.") + " Pass them in blocks or content_file."
+        problems = tab_problems(parsed)
+        if problems:
+            return "Error: a code channel tab won't take these blocks:\n" + "\n".join(f"- {p}" for p in problems)
         params["blocks"] = parsed
     elif view_type == "pull_request":
         if not pr_url:
@@ -111,6 +114,13 @@ def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = ""
         params.update(canvas_id=created["canvas_id"], access_level=access_level or "comment")
     with _view_lock(channel_id):
         response = call("agents.conversations.setView", **params)
+    if view_type == "block_kit" and response.get("error") == "invalid_blocks":
+        # setView gives no detail for this; Slack's validator points at the problems.
+        check = call("blocks.validate", blocks=params["blocks"])
+        details = [f"- {e.get('pointer', '?')}: {e.get('message') or e.get('code')}" for e in check.get("errors") or []]
+        return ("Error: Slack refused these blocks (invalid_blocks)" + (":\n" + "\n".join(details) if details else
+                ". blocks.validate finds nothing wrong, so it's a tab-only rule: check the block-kit skill's list "
+                "of what tabs refuse."))
     if response.get("error") == "view_creation_failed":
         return (error_text(response) + ". Slack couldn't add it as a tab; if it keeps failing for this "
                 "view_key, try a new view_key.")

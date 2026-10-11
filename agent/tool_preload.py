@@ -59,7 +59,7 @@ TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
     "code_channels": ("Does this involve a code channel: creating one, or working in one (its tabs, context bar, canvas, slash commands, renaming or archiving it)?", frozenset({
         "create_code_channel_tool", "code_channel_create_view_tool", "code_channel_list_views_tool",
         "code_channel_read_view_tool", "code_channel_remove_view_tool", "code_channel_read_canvas_tool",
-        "code_channel_context_bar_tool",
+        "code_channel_context_bar_tool", "block_kit_validate_tool",
         "code_channel_commands_tool", "code_channel_rename_tool", "code_channel_archive_tool"})),
     "data_analysis": ("Does this involve analyzing data: a CSV, Excel or spreadsheet file, a SQL query, statistics, or charts and graphs of numbers?", frozenset({
         "analyze_csv_tool", "run_sql_on_csv_tool", "run_python_data_analysis_tool"})),

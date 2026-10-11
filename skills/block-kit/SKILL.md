@@ -24,8 +24,14 @@ fields and limits, read the reference files (`read_skill_resource`):
   `action_id` and `value` so you can tell what was used.
 - To change a tab, call it again with the same `view_key` and the whole new array. See what a tab
   holds with `code_channel_read_view_tool`.
-- Tabs reject `alert` (modals only) and `file` blocks; everything else that works in a message
-  works in a tab.
+- Tabs are stricter than messages. They refuse:
+  - `alert` blocks (modals only) and `file` blocks;
+  - a multi-select menu (`multi_static_select`, `multi_users_select`, `multi_conversations_select`,
+    `multi_channels_select`, `multi_external_select`) inside an `actions` block: put each one in
+    its own `section` as the `accessory` instead;
+  - a `datetimepicker` as a section's `accessory`: put it in an `actions` block instead;
+  - `rich_text_input` and `file_input` in an `input` block.
+- Pass a big array in a sandbox file with `content_file` (it's used as the blocks).
 
 **2. A message**, posted with `slack_api_call` (as cooltonUser) or `slack_api_call_as_bot_tool`
 (as the bot): `chat.postMessage` with `channel`, `blocks` (a JSON array) and `text`. `text` is
@@ -42,11 +48,12 @@ Edit with `chat.update` (same `channel`, the message's `ts`, new `blocks` and `t
 
 ## Always validate first
 
-Before posting or creating a tab, check the array with `slack_api_call("blocks.validate",
-{"blocks": [...]})`. It returns `{"ok": true}` or `invalid_blocks` with one error per problem and a
-JSON pointer to it (e.g. `"pointer": "/0/rows/1/1"` = block 0, row 1, cell 1). Fix exactly what it
-points at and validate again. It checks message rules, so also remember tabs refuse `alert` and
-`file`.
+Before posting or creating a tab, check the array with `block_kit_validate_tool` (through
+`call_tool`; `search_tools("block kit validate")` if it isn't loaded), with `surface` "message" or
+"tab", and the blocks inline or in a sandbox file (`blocks_file`). It runs Slack's own validation
+plus the tab rules above, and reports each problem with a JSON pointer (`/0/rows/1/1` = block 0,
+row 1, cell 1). Fix exactly what it points at and check again. Don't trust Slack's
+`blocks.validate` alone for a tab: it passes things tabs refuse.
 
 ## Rules that trip people up
 
