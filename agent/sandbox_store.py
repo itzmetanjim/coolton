@@ -1,7 +1,7 @@
 # agent/sandbox_store.py
-import os
-import json
 import threading
+
+from agent.json_file import load_json, save_json
 
 SANDBOX_STORE_FILE = "thread_sandboxes.json"
 store_lock = threading.Lock()
@@ -9,41 +9,20 @@ store_lock = threading.Lock()
 def get_thread_sandbox_id(channel_id: str, thread_ts: str) -> str | None:
     """Retrieve the active E2B sandbox ID for a specific Slack thread."""
     with store_lock:
-        try:
-            with open(SANDBOX_STORE_FILE, "r") as f:
-                data = json.load(f)
-                return data.get(f"{channel_id}:{thread_ts}")
-        except Exception:
-            return None
+        return load_json(SANDBOX_STORE_FILE).get(f"{channel_id}:{thread_ts}")
+
 
 def save_thread_sandbox_id(channel_id: str, thread_ts: str, sandbox_id: str):
     """Save the active E2B sandbox ID for a specific Slack thread."""
-    data = {}
     with store_lock:
-        if os.path.exists(SANDBOX_STORE_FILE):
-            try:
-                with open(SANDBOX_STORE_FILE, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                pass
+        data = load_json(SANDBOX_STORE_FILE)
         data[f"{channel_id}:{thread_ts}"] = sandbox_id
-        temp = f"{SANDBOX_STORE_FILE}.tmp"
-        with open(temp, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp, SANDBOX_STORE_FILE)
+        save_json(SANDBOX_STORE_FILE, data)
+
 
 def delete_thread_sandbox_id(channel_id: str, thread_ts: str):
     """Remove the stored E2B sandbox ID for a specific Slack thread, if present."""
-    data = {}
     with store_lock:
-        if os.path.exists(SANDBOX_STORE_FILE):
-            try:
-                with open(SANDBOX_STORE_FILE, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                data = {}
+        data = load_json(SANDBOX_STORE_FILE)
         data.pop(f"{channel_id}:{thread_ts}", None)
-        temp = f"{SANDBOX_STORE_FILE}.tmp"
-        with open(temp, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp, SANDBOX_STORE_FILE)
+        save_json(SANDBOX_STORE_FILE, data)

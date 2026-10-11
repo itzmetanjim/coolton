@@ -63,7 +63,10 @@ tmp.txt
 manifest.json
 
 # Runtime state (regenerated at runtime; contains private Slack IDs)
-conversations.json
+conversations.json*
+conversations/
+# A state file that wasn't valid JSON, set aside by agent.json_file
+*.corrupt-*
 fallback_cache.json
 mcp_health.json
 leave_thread_store.json
@@ -117,3 +120,5 @@ skill_proposals.json
 feedback.json
 skill_proposals/
 inflight_runs.json
+.gh_proxy_admin_token
+.gh_proxy_tokens.json

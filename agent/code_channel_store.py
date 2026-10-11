@@ -15,11 +15,10 @@ _load (missing file, corrupt JSON, or a JSON value that isn't even a dict all
 degrade to "no code channels" instead of raising), and an atomic write.
 """
 
-import json
-import os
 import re
 import threading
 import time
+from agent.json_file import load_json, save_json
 
 CODE_CHANNEL_STORE_FILE = "code_channels.json"
 CODE_CHANNEL_THREAD_TS = ""
@@ -35,19 +34,11 @@ _ORIGIN_CONTEXT_RE = re.compile(r"^<https?://[^|>]+/archives/([A-Z0-9]+)/p(\d+)(
 
 
 def _load() -> dict:
-    try:
-        with open(CODE_CHANNEL_STORE_FILE, "r") as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return load_json(CODE_CHANNEL_STORE_FILE)
 
 
 def _save(data: dict) -> None:
-    temp = f"{CODE_CHANNEL_STORE_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, CODE_CHANNEL_STORE_FILE)
+    save_json(CODE_CHANNEL_STORE_FILE, data)
 
 
 def register_code_channel(
@@ -71,11 +62,6 @@ def register_code_channel(
 def is_code_channel(channel_id: str) -> bool:
     with _lock:
         return channel_id in _load()
-
-
-def get_code_channel(channel_id: str) -> dict | None:
-    with _lock:
-        return _load().get(channel_id)
 
 
 def unregister_code_channel(channel_id: str) -> None:

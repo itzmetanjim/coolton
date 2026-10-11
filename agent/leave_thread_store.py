@@ -1,25 +1,17 @@
-import os
-import json
 import threading
 import time
+from agent.json_file import load_json, save_json
 
 LEAVE_THREAD_STORE_FILE = "leave_thread_store.json"
 leave_thread_lock = threading.Lock()
 
 
 def _load_store() -> dict:
-    try:
-        with open(LEAVE_THREAD_STORE_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return load_json(LEAVE_THREAD_STORE_FILE)
 
 
 def _save_store(data: dict):
-    temp = f"{LEAVE_THREAD_STORE_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, LEAVE_THREAD_STORE_FILE)
+    save_json(LEAVE_THREAD_STORE_FILE, data)
 
 
 def leave_thread(channel_id: str, thread_ts: str) -> str:

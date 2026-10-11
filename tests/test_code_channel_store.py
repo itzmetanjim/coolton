@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from agent import code_channel_store as store
@@ -16,18 +18,14 @@ def test_register_and_is_code_channel(tmp_file):
     assert store.is_code_channel("C1") is True
 
 
-def test_get_code_channel_returns_all_fields(tmp_file):
+def test_register_records_who_made_it_and_where_from(tmp_file):
     store.register_code_channel("C1", "Code audit and bug detection", "U1", "C0", "1.1")
-    entry = store.get_code_channel("C1")
+    entry = json.load(open(tmp_file))["C1"]
     assert entry["name"] == "Code audit and bug detection"
     assert entry["owner_id"] == "U1"
     assert entry["source_channel_id"] == "C0"
     assert entry["source_thread_ts"] == "1.1"
     assert "created_at" in entry
-
-
-def test_get_code_channel_missing_returns_none(tmp_file):
-    assert store.get_code_channel("nonexistent") is None
 
 
 def test_is_code_channel_false_for_missing_file(tmp_file):
@@ -51,8 +49,8 @@ def test_register_multiple_channels_independent(tmp_file):
     store.register_code_channel("C2", "Second", "U2", "C0", "2.2")
     assert store.is_code_channel("C1") is True
     assert store.is_code_channel("C2") is True
-    assert store.get_code_channel("C1")["name"] == "First"
-    assert store.get_code_channel("C2")["name"] == "Second"
+    stored = json.load(open(tmp_file))
+    assert (stored["C1"]["name"], stored["C2"]["name"]) == ("First", "Second")
 
 
 def test_only_the_context_opener_of_a_channel_coolton_made_is_recognized():

@@ -10,14 +10,13 @@ moment it stops answering, instead of waiting for someone to notice the bot got 
 """
 
 import asyncio
-import json
 import logging
 import os
-import tempfile
 import threading
 import time
 
 from agent.admin_alerts import notify_admin
+from agent.json_file import load_json, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -29,26 +28,11 @@ _STILL_DOWN_REMINDER_SECONDS = 2 * 60 * 60  # re-alert every 2h while still down
 
 
 def _load() -> dict:
-    if not os.path.exists(MCP_HEALTH_FILE):
-        return {}
-    try:
-        with open(MCP_HEALTH_FILE, "r") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    return load_json(MCP_HEALTH_FILE)
 
 
 def _save(data: dict) -> None:
-    directory = os.path.dirname(os.path.abspath(MCP_HEALTH_FILE)) or "."
-    fd, temp_file = tempfile.mkstemp(prefix=".mcp-health-", suffix=".tmp", dir=directory)
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp_file, MCP_HEALTH_FILE)
-    finally:
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
+    save_json(MCP_HEALTH_FILE, data)
 
 
 async def _probe() -> tuple[bool, str]:

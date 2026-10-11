@@ -17,12 +17,12 @@ and redoing work it already did.
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 import threading
 from pathlib import Path
 from typing import Any
+from agent.json_file import load_json, save_json
 
 STORE_PATH = Path(os.environ.get("COOLTON_INFLIGHT_RUNS_STORE", "inflight_runs.json"))
 _lock = threading.Lock()
@@ -34,24 +34,11 @@ def _checkpoint_path(channel_id: str, thread_ts: str) -> Path:
 
 
 def _load() -> dict[str, Any]:
-    try:
-        data = json.loads(STORE_PATH.read_text())
-        return data if isinstance(data, dict) else {}
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return load_json(STORE_PATH)
 
 
 def _save(data: dict[str, Any]) -> None:
-    parent = STORE_PATH.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix="coolton-inflight-", dir=str(parent))
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f)
-        os.replace(name, STORE_PATH)
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
+    save_json(STORE_PATH, data, indent=None)
 
 
 def _key(channel_id: str, thread_ts: str) -> str:

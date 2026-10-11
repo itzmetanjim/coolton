@@ -7,31 +7,21 @@ job_id) triples currently have a background job someone might want to be
 notified about?" agent.background_jobs_poller polls exactly this list.
 """
 
-import json
-import os
 import threading
 import time
+from agent.json_file import load_json, save_json
 
 BACKGROUND_JOBS_FILE = "background_jobs.json"
 _lock = threading.Lock()
 
 
 def _load() -> dict:
-    try:
-        with open(BACKGROUND_JOBS_FILE, "r") as f:
-            data = json.load(f)
-        if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
-            return {"jobs": []}
-        return data
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"jobs": []}
+    data = load_json(BACKGROUND_JOBS_FILE, default=lambda: {"jobs": []})
+    return data if isinstance(data.get("jobs"), list) else {"jobs": []}
 
 
 def _save(data: dict) -> None:
-    temp = f"{BACKGROUND_JOBS_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, BACKGROUND_JOBS_FILE)
+    save_json(BACKGROUND_JOBS_FILE, data)
 
 
 def register_job(job_id: str, channel_id: str, thread_ts: str, user_id: str, command: str) -> None:

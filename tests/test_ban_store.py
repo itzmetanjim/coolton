@@ -54,7 +54,7 @@ def test_persists_to_disk(tmp_store):
 
 
 def test_is_authorized_only_the_hardcoded_admin():
-    assert store.is_authorized(store.BAN_ADMIN_USER_ID) is True
+    assert store.is_authorized(store.ADMIN_USER_ID) is True
     assert store.is_authorized("U_SOMEONE_ELSE") is False
 
 

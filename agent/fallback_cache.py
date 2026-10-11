@@ -1,7 +1,7 @@
-import json
 import time
 import logging
 import threading
+from agent.json_file import load_json, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -26,19 +26,11 @@ _cache_lock = threading.Lock()
 
 
 def _load_cache():
-    try:
-        with open(FALLBACK_CACHE_FILE) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return load_json(FALLBACK_CACHE_FILE)
 
 
 def _save_cache(cache):
-    temp = f"{FALLBACK_CACHE_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(cache, f)
-    import os
-    os.replace(temp, FALLBACK_CACHE_FILE)
+    save_json(FALLBACK_CACHE_FILE, cache, indent=None)
 
 
 def get_working_provider() -> str | None:
