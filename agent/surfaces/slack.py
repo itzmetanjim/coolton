@@ -108,11 +108,6 @@ class SlackSurface:
         from agent.tools.slack_info import remove_emoji_reaction
         return remove_emoji_reaction(self.channel_id, timestamp or self.message_ts, emoji_name)
 
-    def set_activity(self, text: str) -> None:
-        # Slack agent sessions take no custom status text (see agent.thread_status);
-        # progress shows in the plan message's tasks instead.
-        pass
-
     def download_attachments(self, sandbox: Any, limit: int = 20) -> str:
         from agent.agent import download_slack_attachments
         return download_slack_attachments(self.channel_id, self.thread_ts, sandbox, self.user_token, limit)
@@ -126,8 +121,8 @@ class SlackSurface:
         return join_thread(self.channel_id, self.thread_ts) if engaged else leave_thread(self.channel_id, self.thread_ts)
 
     def build_hooks(self, deps: Any) -> Any | None:
-        if not deps.plan_ts:
-            return None
+        # Even when the plan message failed to post: the same hooks honor !stop, fold
+        # in steering and checkpoint progress, and only skip the plan updates.
         from agent.plan_block import build_plan_hooks
         return build_plan_hooks()
 

@@ -1,7 +1,9 @@
 
 import time
+from types import SimpleNamespace
 
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.openai import OpenAIChatModel
 from unittest.mock import Mock, patch
 
@@ -32,6 +34,13 @@ def clean_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(agent_mod, "_cached_model", None)
     return monkeypatch
+
+
+@pytest.fixture
+def unbuilt_models(monkeypatch):
+    """Fake provider configs name models no provider could build, and the provider
+    chain tests fake run_sync anyway: hand it the model name as it is."""
+    monkeypatch.setattr(agent_mod.provider_config, "build_model", lambda name, api_key: name)
 
 
 # ---------------------------------------------------------------------------
@@ -233,42 +242,21 @@ def test_rate_limit_no_sleep_after_interval_elapsed(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _apply_provider_env
+# provider_config.build_model
 # ---------------------------------------------------------------------------
 
 
-def test_apply_provider_env_mapping(monkeypatch, clean_env):
-    agent_mod._apply_provider_env("anthropic", "k1")
-    assert __import__("os").environ["ANTHROPIC_API_KEY"] == "k1"
+def test_each_model_gets_its_own_key_and_the_environment_is_left_alone(clean_env):
+    """Keys used to be written into os.environ, which concurrent turns share: one
+    turn could run on the key another turn had just picked."""
+    import os
 
-    agent_mod._apply_provider_env("openai", "k2")
-    assert __import__("os").environ["OPENAI_API_KEY"] == "k2"
+    from agent.provider_config import build_model
 
-    agent_mod._apply_provider_env("gemini_gemma", "k4")
-    assert __import__("os").environ["GOOGLE_API_KEY"] == "k4"
-
-    agent_mod._apply_provider_env("mistral", "k5")
-    assert __import__("os").environ["MISTRAL_API_KEY"] == "k5"
-
-    # "groq_1" is the shape providers.json actually generates for the 2nd of
-    # several groq models (see _make_provider_name) — exact-match on the base
-    # id after stripping the trailing "_<index>".
-    agent_mod._apply_provider_env("groq_1", "k6")
-    assert __import__("os").environ["GROQ_API_KEY"] == "k6"
-
-
-def test_apply_provider_env_skips_byok_hcai(monkeypatch, clean_env):
-    agent_mod._apply_provider_env("byok", "k")
-    agent_mod._apply_provider_env("hcai", "k")
-    agent_mod._apply_provider_env("hcai_luna", "k")
-    os = __import__("os")
-    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
-        assert key not in os.environ
-
-
-def test_apply_provider_env_empty_key_skipped(monkeypatch, clean_env):
-    agent_mod._apply_provider_env("anthropic", "")
-    assert "ANTHROPIC_API_KEY" not in __import__("os").environ
+    first = build_model("groq:llama-x", "key-1")
+    second = build_model("groq:llama-x", "key-2")
+    assert (first._provider.client.api_key, second._provider.client.api_key) == ("key-1", "key-2")
+    assert "GROQ_API_KEY" not in os.environ
 
 
 # ---------------------------------------------------------------------------
@@ -441,11 +429,11 @@ def test_resolve_provider_order_skips_a_dead_family_regardless_of_tag_or_byok(is
 def test_runtime_model_string_provider(isolated_config, monkeypatch, clean_env):
     isolated_config({
         "providers": [{"id": "anthropic", "api_url": None, "api_key_env_var_name": "ANTHROPIC_API_KEY"}],
-        "models": [{"provider": "anthropic", "model": "m1", "context_window": 100_000}],
+        "models": [{"provider": "anthropic", "model": "anthropic:m1", "context_window": 100_000}],
     })
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     model = agent_mod.get_runtime_model()
-    assert model == "m1"
+    assert (model.system, model.model_name, model._provider.client.api_key) == ("anthropic", "m1", "k")
 
 
 def test_runtime_model_hcai_returns_model_object(monkeypatch, clean_env):
@@ -572,10 +560,7 @@ def test_get_model_accepts_documented_provider_keys(monkeypatch, clean_env, env_
 
     monkeypatch.setenv(env_key, "test-key")
     result = agent_mod.get_model()
-    if isinstance(result, OpenAIChatModel):
-        assert result.model_name == expected
-    else:
-        assert result == expected
+    assert result.model_name == expected.split(":", 1)[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -589,9 +574,23 @@ def _run_ctx(client):
 
     deps = SimpleNamespace(
         client=client, channel_id="C1", thread_ts="1.2", user_id="U_TEST",
-        last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=0.0, keep_sandbox_warm=False,
+        last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=0.0,
     )
     return RunContext(model=None, usage=None, prompt="", deps=deps)
+
+
+def test_a_reminder_set_by_an_automated_turn_goes_to_whoever_started_it(monkeypatch):
+    """An automated turn's user is "AUTOMATED": a reminder DM'd there can never arrive."""
+    reminded = []
+    monkeypatch.setattr("agent.tools.reminder_tool.schedule_reminder", lambda u, c, t, d: reminded.append(u) or "r1")
+    ctx = _run_ctx(Mock())
+    ctx.deps.user_id, ctx.deps.on_behalf_of = "AUTOMATED", "U0STARTER"
+    agent_mod.schedule_reminder_tool(ctx, "check the build", 60)
+    assert reminded == ["U0STARTER"]
+
+    ctx.deps.on_behalf_of = ""
+    assert agent_mod.schedule_reminder_tool(ctx, "check the build", 60).startswith("Error")
+    assert reminded == ["U0STARTER"]
 
 
 def test_chat_post_message_sends_as_bot():
@@ -825,7 +824,7 @@ def test_run_with_provider_chain_shows_model_before_run_sync_returns(monkeypatch
     assert deps.model_used == "anthropic / anthropic:claude-sonnet-4-6"
 
 
-def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatch, clean_env):
+def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatch, clean_env, unbuilt_models):
     from types import SimpleNamespace
 
     monkeypatch.setattr(
@@ -867,7 +866,7 @@ def test_run_with_provider_chain_updates_model_task_again_on_fallback(monkeypatc
     "status_code: 402, body: Insufficient credits",
     "status_code: 403, body: You are banned from using this service.",
 ])
-def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(monkeypatch, clean_env, error):
+def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(monkeypatch, clean_env, error, unbuilt_models):
     """HCAI's daily spending cap fails EVERY model routed through its one
     shared account with a 429 — and "429" is in retryable_errors, so before
     this check existed the same dead model got retried with exponential
@@ -899,7 +898,7 @@ def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(mon
     def fake_run_sync(**kwargs):
         attempted.append(kwargs.get("model"))
         if len(attempted) == 1:
-            raise RuntimeError(error)
+            raise ModelHTTPError(429, "m", body=error)
         return SimpleNamespace(output="ok")
 
     warned = []
@@ -916,6 +915,31 @@ def test_run_with_provider_chain_skips_entire_family_on_daily_spending_limit(mon
     assert marked == ["hcai"]
     assert slept == []  # no exponential-backoff retry against a guaranteed-dead model
     assert warned == [deps]  # the thread is told coolton's HCAI credits ran out
+
+
+def test_a_tool_error_that_reads_like_an_outage_marks_nothing(monkeypatch, clean_env, unbuilt_models):
+    """A tool's exception can carry text anyone wrote (a fetched page, a message): only
+    the provider's own errors may mark a key or a whole provider family out."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(agent_mod, "_resolve_provider_order", lambda user_id, tag=None: [
+        ("hcai_0", {"model": "m0", "api_key": "k"}), ("anthropic", {"model": "anthropic:x", "api_key": "k"})])
+    monkeypatch.setattr("agent.fallback_cache.set_working_provider", lambda name: None)
+    monkeypatch.setattr("agent.plan_block.set_model_task", lambda *a, **k: None)
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+    calls = []
+
+    def fake_run_sync(**kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("Daily spending limit of $3 reached. Payment required.")
+        return SimpleNamespace(output="ok")
+
+    deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
+    agent_mod._run_with_provider_chain(SimpleNamespace(run_sync=fake_run_sync), {}, deps)
+
+    from agent import fallback_cache
+    assert fallback_cache.get_dead_families() == {} and fallback_cache.get_out_keys() == {}
 
 
 def test_run_with_provider_chain_switches_hcai_to_its_next_key_when_one_runs_out(monkeypatch, clean_env, isolated_config):
@@ -943,7 +967,7 @@ def test_run_with_provider_chain_switches_hcai_to_its_next_key_when_one_runs_out
     def fake_run_sync(**kwargs):
         keys.append(kwargs["model"]._provider.client.api_key)
         if keys[-1] == "key-one":
-            raise RuntimeError("Error code: 429 - Daily spending limit of $3 reached. Need a higher limit? hey@mahadk.com")
+            raise ModelHTTPError(429, "m0", body="Daily spending limit of $3 reached. Need a higher limit? hey@mahadk.com")
         return SimpleNamespace(output="ok")
 
     deps = SimpleNamespace(user_id=None, provider_tag_filter=None, plan_ts="1.1", last_attempt_messages=None)
@@ -957,7 +981,7 @@ def test_run_with_provider_chain_switches_hcai_to_its_next_key_when_one_runs_out
     assert warned == []
 
 
-def test_run_with_provider_chain_forces_single_tool_call_for_minimax(monkeypatch, clean_env):
+def test_run_with_provider_chain_forces_single_tool_call_for_minimax(monkeypatch, clean_env, unbuilt_models):
     """MiniMax models served via OpenAI-compatible gateways (kilocode, OpenRouter) have
     been observed live leaking a broken multi-tool-call attempt as raw text instead of
     proper structured tool_calls when asked for more than one tool in a turn (see
@@ -987,7 +1011,7 @@ def test_run_with_provider_chain_forces_single_tool_call_for_minimax(monkeypatch
     assert seen_settings == [{"temperature": 0.5, "parallel_tool_calls": False}]
 
 
-def test_claude_through_an_openai_compatible_gateway_asks_to_be_prompt_cached(monkeypatch, clean_env):
+def test_claude_through_an_openai_compatible_gateway_asks_to_be_prompt_cached(monkeypatch, clean_env, unbuilt_models):
     """Seen live: every Claude Haiku 5.5 request through HCAI (OpenRouter) reported
     cache_read 0, paying full price for its ~60k-token prefix on every call. OpenRouter
     only caches a Claude model when the request carries a cache_control marker."""
@@ -1032,7 +1056,7 @@ def test_run_with_provider_chain_leaves_other_models_settings_untouched(monkeypa
     assert seen_settings == [{"temperature": 0.5}]
 
 
-def test_run_with_provider_chain_resumes_from_checkpoint_after_mid_turn_fallback(monkeypatch, clean_env):
+def test_run_with_provider_chain_resumes_from_checkpoint_after_mid_turn_fallback(monkeypatch, clean_env, unbuilt_models):
     """If a provider fails AFTER real tool calls already ran this turn (agent.plan_block's
     before_tool_execute hook checkpoints progress into deps.last_attempt_messages on every
     call), the next fallback attempt must resume from that checkpoint instead of silently
@@ -1078,7 +1102,7 @@ def test_run_with_provider_chain_resumes_from_checkpoint_after_mid_turn_fallback
     assert seen_kwargs[1]["user_prompt"] is None
 
 
-def test_run_with_provider_chain_does_not_touch_history_without_progress(monkeypatch, clean_env):
+def test_run_with_provider_chain_does_not_touch_history_without_progress(monkeypatch, clean_env, unbuilt_models):
     """No tool call ran before the failure (deps.last_attempt_messages never got
     reassigned, e.g. an immediate auth error, or a subagent/kevinton caller that never
     wires up the hook at all) — the next attempt must use the original run_kwargs
@@ -1233,7 +1257,6 @@ def test_agent_browser_stream_tool_posts_into_the_thread_and_keeps_the_sandbox_w
         result = agent_mod.agent_browser_stream_tool(ctx)
     assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
     assert post.call_args.kwargs["json"]["blocks"][0]["video_url"] == "https://x.e2b.app/vnc.html"
-    assert ctx.deps.keep_sandbox_warm is True
     assert ctx.deps.sandbox_keepalive_seconds == 120
     assert armed == [("C1", "1.2", 120)]
     # send_web_embed's return value is always a non-empty string (success or
@@ -1316,6 +1339,24 @@ def test_run_linux_command_clamps_an_out_of_range_positive_timeout(monkeypatch):
     assert fake_commands.last_call["timeout"] == 1800  # ceiling
 
 
+def test_run_linux_command_shows_the_output_of_a_command_that_fails(monkeypatch):
+    """E2B raises CommandExitException on a non-zero exit, and its str() is the
+    stderr alone, so the model never saw what the command printed or its code."""
+    from e2b.sandbox.commands.command_handle import CommandExitException
+
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    fake_commands, fake_sandbox = _fake_sandbox_recording_timeout(monkeypatch)
+
+    def _fail(self, cmd, envs=None, timeout=None):
+        raise CommandExitException(stderr="boom", stdout="test output", exit_code=1, error="exit status 1")
+
+    monkeypatch.setattr(fake_commands, "run", _fail)
+    result = agent_mod.run_linux_command(_run_ctx(Mock()), "make test")
+    assert "STDOUT:\ntest output" in result
+    assert "STDERR:\nboom" in result
+    assert "Exit Code: 1" in result
+
+
 # ---------------------------------------------------------------------------
 # Sandbox keepalive (agent.sandbox_keepalive) — a VNC stream needs the sandbox
 # to survive between commands, not pause the instant each one returns.
@@ -1344,7 +1385,6 @@ def test_run_linux_command_arms_keepalive_instead_of_pausing_when_active(monkeyp
     agent_mod.run_linux_command(ctx, "echo hi")
     assert fake_sandbox.paused == 0
     assert armed == [("C1", "1.2", 120)]
-    assert ctx.deps.keep_sandbox_warm is True
 
 
 def test_run_linux_command_stays_warm_for_a_pending_background_job(monkeypatch):
@@ -1362,7 +1402,6 @@ def test_run_linux_command_stays_warm_for_a_pending_background_job(monkeypatch):
     assert fake_sandbox.paused == 0
     from agent.tools.sandbox_background import BG_JOB_KEEPALIVE_SECONDS
     assert armed == [("C1", "1.2", BG_JOB_KEEPALIVE_SECONDS)]
-    assert ctx.deps.keep_sandbox_warm is True
 
 
 def test_should_force_pause_sandbox_true_with_no_pending_jobs(monkeypatch):
@@ -1485,10 +1524,16 @@ def test_skip_preserve_true_snapshots_last_attempt_messages(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_wait_tool_excluded_from_code_mode():
-    """Like skip, wait_tool raises HaltRun to end the whole top-level turn —
-    calling it from inside a code_mode sandboxed loop makes no sense."""
-    assert "wait_tool" in agent_mod.CODE_MODE_EXCLUDED_TOOLS
+def test_code_mode_cant_call_tools_that_end_the_turn_or_need_a_thread():
+    """wait_tool and skip end the whole top-level turn by raising HaltRun, and a code
+    channel needs the Slack thread itself: none of that makes sense from inside a
+    code_mode sandboxed loop."""
+    allowlist, signatures = agent_mod._code_mode_tools()
+    for tool in ("wait_tool", "skip", "create_code_channel_tool", "code_mode", "run_linux_command"):
+        assert tool in agent_mod.agent._function_toolset.tools
+        assert tool not in allowlist
+        assert tool not in signatures
+    assert "fetch_url_tool" in allowlist
 
 
 def test_wait_tool_ends_the_turn_like_skip_preserve_on_success(monkeypatch):
@@ -1595,7 +1640,6 @@ def test_computer_stream_tool_posts_into_the_thread_and_keeps_the_sandbox_warm(m
         post.return_value.json.return_value = {"ok": True}
         agent_mod.computer_stream_tool(ctx)
     assert post.call_args.kwargs["json"]["thread_ts"] == "1.2"
-    assert ctx.deps.keep_sandbox_warm is True
     assert ctx.deps.sandbox_keepalive_seconds == 120
     assert armed == [("C1", "1.2", 120)]
 
@@ -2065,7 +2109,7 @@ def test_computer_use_action_resets_keepalive_when_active(monkeypatch):
 
     from pydantic_ai import RunContext
     deps = SimpleNamespace(
-        channel_id="C1", thread_ts="1.2", keep_sandbox_warm=False,
+        channel_id="C1", thread_ts="1.2",
         last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=120,
     )
     ctx = RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
@@ -2084,7 +2128,7 @@ def test_computer_use_action_does_not_touch_keepalive_when_inactive(monkeypatch)
 
     from pydantic_ai import RunContext
     deps = SimpleNamespace(
-        channel_id="C1", thread_ts="1.2", keep_sandbox_warm=False,
+        channel_id="C1", thread_ts="1.2",
         last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=0.0,
     )
     ctx = RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
@@ -2097,7 +2141,7 @@ def _computer_use_ctx():
     from pydantic_ai import RunContext
 
     deps = SimpleNamespace(
-        channel_id="C1", thread_ts="1.2", keep_sandbox_warm=False,
+        channel_id="C1", thread_ts="1.2",
         last_screenshot_post_ts=0.0, sandbox_keepalive_seconds=0.0,
     )
     return RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
@@ -2146,7 +2190,6 @@ def test_set_sandbox_keepalive_tool_arms_a_positive_value(monkeypatch):
     ctx = _run_ctx(Mock())
     result = agent_mod.set_sandbox_keepalive_tool(ctx, 300)
     assert ctx.deps.sandbox_keepalive_seconds == 300
-    assert ctx.deps.keep_sandbox_warm is True
     assert armed == [("C1", "1.2", 300)]
     assert "300" in result
 
@@ -2168,15 +2211,47 @@ def test_set_sandbox_keepalive_tool_zero_cancels(monkeypatch):
     assert "disabled" in result.lower()
 
 
-def test_run_agent_finally_cancels_keepalive_before_pausing():
-    """Whatever countdown was pending, a turn ending must always pause the sandbox —
-    never leave it running into the next turn on the strength of an old timer."""
-    import inspect
+@pytest.mark.parametrize("used,pending_job,paused", [(True, False, True), (False, False, False), (True, True, False)])
+def test_a_turn_pauses_the_sandbox_it_used_at_its_end(monkeypatch, used, pending_job, paused):
+    """Whichever tool left the sandbox running (or a keepalive countdown kept it up), the
+    turn's end pauses it, so it never idles on into the next turn (or for E2B's whole
+    timeout). A turn that never touched it doesn't resume it just to pause it, and a
+    pending background job keeps it running on purpose."""
+    from agent import sandbox_helpers
+    from agent.deps import AgentDeps
 
-    src = inspect.getsource(agent_mod.run_agent)
-    finally_block = src[src.index("finally:"):]
-    assert "sandbox_keepalive.cancel(" in finally_block
-    assert finally_block.index("sandbox_keepalive.cancel(") < finally_block.index("pause_if_idle(")
+    class _Platform:
+        name, system_prompt = "fake", "SYSTEM"
+
+        def format_user_message(self, text, deps):
+            return text
+
+        def build_context_prompt(self, deps):
+            return ""
+
+        def build_turn_context(self, deps, model, is_vision):
+            return ""
+
+        def toolsets(self, deps):
+            return []
+
+    events = []
+    monkeypatch.setattr("listeners.actions.instructions_actions.get_user_instructions", lambda uid: "")
+    monkeypatch.setattr(agent_mod, "_run_with_provider_chain",
+                        lambda a, kw, deps: (SimpleNamespace(output="ok", all_messages=lambda: []), "p"))
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "cancel", lambda c, t: events.append("cancel"))
+    monkeypatch.setattr(sandbox_helpers, "pause_if_idle", lambda c, t, sandbox=None: events.append("pause") or True)
+    monkeypatch.setattr("agent.background_jobs_store.has_pending_jobs", lambda c, t: pending_job)
+    sandbox_helpers._running.discard(("CEND", "1.1"))
+    if used:
+        sandbox_helpers._running.add(("CEND", "1.1"))
+
+    agent_mod.run_agent("hi", AgentDeps(client=Mock(), user_id="U1", channel_id="CEND", thread_ts="1.1",
+                                        message_ts="1.2", platform=_Platform()))
+
+    assert ("pause" in events) is paused
+    if paused:
+        assert events == ["cancel", "pause"]  # an old countdown can't fire after the pause
 
 
 # ---------------------------------------------------------------------------
@@ -2264,7 +2339,7 @@ def test_computer_use_screenshot_action_posts_to_thread(monkeypatch):
     monkeypatch.setattr(agent_mod, "_maybe_post_screenshot", lambda ctx, png: posted.append(png))
 
     deps = SimpleNamespace(
-        channel_id="C1", thread_ts="1.2", keep_sandbox_warm=False, last_screenshot_post_ts=0.0,
+        channel_id="C1", thread_ts="1.2", last_screenshot_post_ts=0.0,
         sandbox_keepalive_seconds=0.0,
     )
     ctx = RunContext(model=SimpleNamespace(model_name="anthropic:claude-sonnet-4-6"), usage=None, prompt="", deps=deps)
@@ -2272,7 +2347,7 @@ def test_computer_use_screenshot_action_posts_to_thread(monkeypatch):
     assert posted == [b"fake-png-bytes"]
 
 
-def test_forced_tag_success_marks_the_model_up_without_making_it_preferred(monkeypatch, clean_env):
+def test_forced_tag_success_marks_the_model_up_without_making_it_preferred(monkeypatch, clean_env, unbuilt_models):
     """[!WITH:luna] succeeding proves luna is up, so a stale dead mark must go —
     but one user forcing a model mustn't reorder the chain for everyone."""
     from types import SimpleNamespace
@@ -2292,7 +2367,7 @@ def test_forced_tag_success_marks_the_model_up_without_making_it_preferred(monke
     assert fc.get_working_provider() == "groq_0"
 
 
-def test_subagent_runs_leave_the_turns_model_display_alone(monkeypatch, clean_env):
+def test_subagent_runs_leave_the_turns_model_display_alone(monkeypatch, clean_env, unbuilt_models):
     """History compaction's summarizer runs after the turn with the turn's own
     deps; announcing its model appended a step to the finished web
     conversation, which the web UI rendered as a new turn stuck "working"."""
@@ -2328,7 +2403,7 @@ def _run_chain_with_history(monkeypatch, window: int, history: list):
     return seen["history"], deps
 
 
-def test_chain_observes_just_in_time_only_for_a_model_too_small_for_the_history(monkeypatch, clean_env):
+def test_chain_observes_just_in_time_only_for_a_model_too_small_for_the_history(monkeypatch, clean_env, unbuilt_models):
     from pydantic_ai.messages import ModelResponse, TextPart
 
     from agent import observational_memory as om

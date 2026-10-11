@@ -14,7 +14,7 @@ is its own pydantic-ai run through the same provider fallback chain as the turn
 - its own copy of the turn's AgentDeps (subagent_deps), so parallel runs don't
   share per-run state; the turn's per-turn limits (the Slack call budget) still count
   on the turn's deps (AgentDeps.parent_deps), and anything that has to outlive the
-  subagent (keeping the sandbox warm) is copied back when it finishes.
+  subagent (a keepalive countdown) is copied back when it finishes.
 - the turn's tool hooks (secret redaction, the abuse stop, the Slack budget), plus its
   own: `!stop` stops it at its next tool call, past SUBAGENT_TOOL_CALL_LIMIT every
   tool call is refused so it writes up what it has, and a checkpoint so a provider
@@ -114,13 +114,6 @@ SUBAGENT_PROMPTS = {
     ),
 }
 
-SUBAGENT_DESCRIPTIONS = {
-    "general": "Does the task with all of coolton's tools (sandbox, web, Slack, files, email...) and reports back.",
-    "research": "Read-only Slack, web, canvas and docs research; returns compact sourced findings.",
-    "explore": "Reads the sandbox workspace (files, grep, read-only commands) to gather context.",
-    "summarizer": "Summarizes a conversation transcript, keeping decisions, open questions and action items.",
-}
-
 # What no subagent gets: delegating again, and what only the turn itself does.
 SUBAGENT_EXCLUDED_TOOLS = frozenset({
     "delegate_to_subagent", "delegate_to_subagents",
@@ -181,8 +174,6 @@ def subagent_deps(deps: AgentDeps) -> AgentDeps:
 
 def _merge_back(deps: AgentDeps, sub: AgentDeps) -> None:
     """What a subagent changed that has to outlive it, onto the turn's deps."""
-    if sub.keep_sandbox_warm:
-        deps.keep_sandbox_warm = True
     deps.sandbox_keepalive_seconds = max(deps.sandbox_keepalive_seconds, sub.sandbox_keepalive_seconds)
     deps.last_screenshot_post_ts = max(deps.last_screenshot_post_ts, sub.last_screenshot_post_ts)
 

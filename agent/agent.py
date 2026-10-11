@@ -32,9 +32,12 @@ from agent.redact import redact as _redact, strip_secret_keys as _strip_secret_k
 from e2b import Sandbox
 from e2b.exceptions import FileNotFoundException
 from agent.sandbox_store import get_thread_sandbox_id
-from agent.sandbox_helpers import get_or_create_sandbox, pause_if_idle, sandbox_use, _proxy_env
+from agent.sandbox_helpers import (
+    attachment_filename, get_or_create_sandbox, pause_if_running, run_command, sandbox_use, _proxy_env,
+)
 from agent import sandbox_keepalive
 from agent.github_proxy_client import PUBLIC_PROXY_HOST
+from agent.keyed_locks import KeyedLocks
 from agent.tool_proxy import (
     build_sandbox_module,
     format_signatures,
@@ -95,9 +98,9 @@ def enforce_rate_limit():
 
 SYSTEM_PROMPT = SlackPlatform().system_prompt
 
-_cached_model: str | None = None
+_cached_model = None
 
-def get_model() -> str:
+def get_model():
     global _cached_model
     if _cached_model is not None:
         return _cached_model
@@ -105,21 +108,10 @@ def get_model() -> str:
     return _cached_model
 
 
-def _apply_provider_env(provider_name: str, api_key: str) -> None:
-    """Set the provider API key env var pydantic-ai needs to instantiate a model.
-
-    Delegates to provider_config.apply_provider_env which reads from providers.json.
-    """
-    provider_config.apply_provider_env(provider_name, api_key)
-
-
-def get_runtime_model(deps_user_id: str | None = None) -> str:
-    """Resolve the provider model AND set its env key, like run_agent does.
-
-    Returns the model string for the first viable provider in the fallback order
-    (BYOK user endpoint first when present), or a fully-configured model object
-    for providers with a custom base_url (BYOK/HCAI). Raises RuntimeError if none
-    configured.
+def get_runtime_model(deps_user_id: str | None = None):
+    """The model for the first viable provider in the fallback order (BYOK user
+    endpoint first when present), built with its key like run_agent does. Raises
+    RuntimeError if none is configured.
     """
     provider_order = _build_provider_order(deps_user_id)
     for provider_name, prov_config in provider_order:
@@ -137,8 +129,7 @@ def get_runtime_model(deps_user_id: str | None = None) -> str:
                     api_key=prov_config["api_key"],
                 ),
             )
-        _apply_provider_env(provider_name, api_key or "")
-        return model_name
+        return provider_config.build_model(model_name, api_key)
     raise RuntimeError(
         "No AI provider configured. "
         "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or HCAI_API_KEY."
@@ -335,7 +326,7 @@ def _run_in_thread_sandbox(ctx: RunContext[AgentDeps], use, command: str, timeou
     # SDK's own timeout_to_ms helper) — the model opts into that explicitly per call,
     # it isn't the implicit default.
     try:
-        return sandbox.commands.run(command, envs=_proxy_env(proxy_info), timeout=timeout)
+        return run_command(sandbox, command, envs=_proxy_env(proxy_info), timeout=timeout)
     finally:
         # A VNC stream (deps.sandbox_keepalive_seconds > 0) needs the sandbox to
         # survive between commands, not pause the instant this one returns — arm a
@@ -350,7 +341,6 @@ def _run_in_thread_sandbox(ctx: RunContext[AgentDeps], use, command: str, timeou
         has_bg_jobs = has_pending_jobs(channel_id, thread_ts)
         if ctx.deps.sandbox_keepalive_seconds > 0 or has_bg_jobs:
             use.pause = False
-            ctx.deps.keep_sandbox_warm = True
             seconds = max(ctx.deps.sandbox_keepalive_seconds, BG_JOB_KEEPALIVE_SECONDS) if has_bg_jobs else ctx.deps.sandbox_keepalive_seconds
             sandbox_keepalive.arm(channel_id, thread_ts, seconds)
 
@@ -496,13 +486,7 @@ def _code_mode_tools(excluded=None) -> tuple[list[str], dict[str, str]]:
     return allowlist, signatures
 
 
-_code_mode_locks: dict[tuple[str, str], threading.Lock] = {}
-_code_mode_locks_lock = threading.Lock()
-
-
-def _code_mode_lock(channel_id: str, thread_ts: str) -> threading.Lock:
-    with _code_mode_locks_lock:
-        return _code_mode_locks.setdefault((channel_id, thread_ts), threading.Lock())
+_code_mode_locks = KeyedLocks()
 
 
 def _tool_resolver(tool_name: str):
@@ -549,7 +533,7 @@ def code_mode(ctx: RunContext[AgentDeps], code: str) -> str:
         start_tool_proxy()
         # One code_mode run per thread at a time: runs share the sandbox's proxy token,
         # its registration and the script files, so parallel ones would clobber each other.
-        with _code_mode_lock(channel_id, thread_ts), sandbox_use(channel_id, thread_ts) as use:
+        with _code_mode_locks.hold((channel_id, thread_ts)), sandbox_use(channel_id, thread_ts) as use:
             sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
             use.sandbox = sandbox
 
@@ -564,7 +548,8 @@ def code_mode(ctx: RunContext[AgentDeps], code: str) -> str:
                 "AGENT_TOOLS_SANDBOX": sandbox.sandbox_id,
             })
             try:
-                result = sandbox.commands.run(
+                result = run_command(
+                    sandbox,
                     "cd /home/user && python3 code_mode_run.py", timeout=600, envs=envs
                 )
             finally:
@@ -639,6 +624,7 @@ def download_slack_attachments(
         if not files:
             return "No files found in this thread."
         results = []
+        taken: set[str] = set()
         for f in files[:limit]:
             file_url = f.get("url_private_download") or f.get("url_private")
             if not file_url:
@@ -647,7 +633,7 @@ def download_slack_attachments(
             if file_resp.status_code != 200:
                 results.append(f"✗ {f.get('name')}: failed to download")
                 continue
-            filename = f.get("name", "unknown")
+            filename = attachment_filename(f.get("name", ""), taken)
             sandbox.files.write(f"/home/user/attachments/{filename}", file_resp.content)
             results.append(f"✓ {filename} ({len(file_resp.content)} bytes)")
         return "Downloaded to ~/attachments/:\n" + "\n".join(results)
@@ -693,10 +679,9 @@ def get_slack_file_tool(ctx: RunContext[AgentDeps], file: str, filename: str = "
         return "Error: SLACK_USER_TOKEN not configured"
 
     sandbox = None
-    sandbox_id = get_thread_sandbox_id(ctx.deps.channel_id, ctx.deps.thread_ts)
-    if sandbox_id:
+    if get_thread_sandbox_id(ctx.deps.channel_id, ctx.deps.thread_ts):
         try:
-            sandbox = Sandbox.connect(sandbox_id)
+            sandbox, _ = get_or_create_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
         except Exception as e:
             return f"Error connecting to sandbox: {e}"
     return download_file_by_id(
@@ -963,7 +948,6 @@ def computer_use(
         )
     except Exception as e:
         return ToolReturn(f"Error: {e}")
-    ctx.deps.keep_sandbox_warm = True
     if ctx.deps.sandbox_keepalive_seconds > 0:
         # Any action is "activity" — reset the auto-pause countdown so a stream stays
         # live through a whole click/screenshot sequence, not just the first command.
@@ -993,7 +977,6 @@ def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
         url = _computer_stream_start(ctx.deps.channel_id, ctx.deps.thread_ts)
     except Exception as e:
         return f"Error starting desktop stream: {e}"
-    ctx.deps.keep_sandbox_warm = True
     ctx.deps.sandbox_keepalive_seconds = _STREAM_KEEPALIVE_SECONDS
     sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, _STREAM_KEEPALIVE_SECONDS)
     error = _surface(ctx.deps).post_embed(
@@ -1021,7 +1004,6 @@ def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
         url = _agent_browser_stream_start(ctx.deps.channel_id, ctx.deps.thread_ts)
     except Exception as e:
         return f"Error starting agent-browser stream: {e}"
-    ctx.deps.keep_sandbox_warm = True
     ctx.deps.sandbox_keepalive_seconds = _STREAM_KEEPALIVE_SECONDS
     sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, _STREAM_KEEPALIVE_SECONDS)
     error = _surface(ctx.deps).post_embed(
@@ -1050,7 +1032,6 @@ def set_sandbox_keepalive_tool(ctx: RunContext[AgentDeps], seconds: int) -> str:
     seconds = max(0, min(seconds, _SANDBOX_KEEPALIVE_MAX_SECONDS))
     ctx.deps.sandbox_keepalive_seconds = seconds
     if seconds > 0:
-        ctx.deps.keep_sandbox_warm = True
         sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, seconds)
         return f"Sandbox keepalive set to {seconds}s — it'll stay up that long after each action before auto-pausing."
     sandbox_keepalive.cancel(ctx.deps.channel_id, ctx.deps.thread_ts)
@@ -1249,8 +1230,14 @@ def schedule_reminder_tool(ctx: RunContext[AgentDeps], text: str, delay_seconds:
         text: Reminder message text.
         delay_seconds: Seconds from now until reminder fires (max ~120 days).
     """
+    from agent.attribution import attribution_user_id
     from agent.tools.reminder_tool import schedule_reminder_tool as srt
-    return srt(ctx.deps.user_id, ctx.deps.channel_id, text, delay_seconds)
+
+    # An automated turn has no user of its own; remind whoever started it.
+    user_id = attribution_user_id(ctx.deps)
+    if not user_id:
+        return "Error: there's no one to DM a reminder to in this turn."
+    return srt(user_id, ctx.deps.channel_id, text, delay_seconds)
 
 
 @agent.tool
@@ -2362,7 +2349,8 @@ def code_channel_archive_tool(ctx: RunContext[AgentDeps], summary: str) -> str:
     """
     from agent.tools.code_channel_tools import archive
 
-    return archive(ctx.deps.client, ctx.deps.channel_id, summary)
+    from agent.attribution import attribution_user_id
+    return archive(ctx.deps.client, ctx.deps.channel_id, summary, attribution_user_id(ctx.deps))
 
 
 @agent.tool
@@ -2610,7 +2598,7 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
         with sandbox_use(channel_id, thread_ts) as use:
             sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
             use.sandbox = sandbox
-            result = sandbox.commands.run(cmd, timeout=180, envs=_proxy_env(proxy_info))
+            result = run_command(sandbox, cmd, timeout=180, envs=_proxy_env(proxy_info))
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -2953,7 +2941,7 @@ def _run_skill_script_in_sandbox(script, args=None, ctx=None) -> str:
             sandbox, proxy_info = get_or_create_sandbox(deps.channel_id, deps.thread_ts)
             use.sandbox = sandbox
             sandbox.files.write(remote_path, content)
-            result = sandbox.commands.run(run_cmd, envs=_proxy_env(proxy_info), timeout=120)
+            result = run_command(sandbox, run_cmd, envs=_proxy_env(proxy_info), timeout=120)
     except Exception as e:
         return f"Error running skill script in sandbox: {e}"
 
@@ -3469,18 +3457,18 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
             history = deps.halted_messages if deps.halted_messages is not None else stored_history
             return _SkipResult(history)
     finally:
-        # computer_use / agent_browser_stream_tool don't pause the sandbox after every
-        # action (unlike run_linux_command) so a live stream survives the whole turn,
-        # and run_linux_command itself skips its own pause whenever a keepalive
-        # countdown is active (agent.sandbox_keepalive) — pause it once here instead,
-        # however the turn ended. A turn never leaves the sandbox running past its own
-        # end regardless of any pending countdown... UNLESS a run_background_command
-        # job is still pending for this thread (_should_force_pause_sandbox), which
-        # needs the opposite: still running *past* this turn's end is the entire
-        # point (agent.background_jobs_poller notifies once it's actually done).
-        if deps.keep_sandbox_warm and _should_force_pause_sandbox(deps.channel_id, deps.thread_ts):
+        # Many tools leave the sandbox running when they're done (computer_use, so a live
+        # stream survives the whole turn; run_linux_command while a keepalive countdown
+        # is active; the file, data and image tools), so pause it once here instead,
+        # however the turn ended, if anything used it (pause_if_running). A turn never
+        # leaves the sandbox running past its own end regardless of any pending
+        # countdown... UNLESS a run_background_command job is still pending for this
+        # thread (_should_force_pause_sandbox), which needs the opposite: still running
+        # *past* this turn's end is the entire point (agent.background_jobs_poller
+        # notifies once it's actually done).
+        if _should_force_pause_sandbox(deps.channel_id, deps.thread_ts):
             sandbox_keepalive.cancel(deps.channel_id, deps.thread_ts)
-            pause_if_idle(deps.channel_id, deps.thread_ts)
+            pause_if_running(deps.channel_id, deps.thread_ts)
 
 
 # Tools kept out of the model's tool list: it finds them with `search_tools`
@@ -3884,15 +3872,11 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
                             ),
                         )
 
-                # Set env vars for this provider
-                if prov_config.get("api_key") and provider_name != "byok":
-                    provider_config.apply_provider_env(provider_name, prov_config["api_key"])
-
                 # Rate limit for Cerebras
                 if "cerebras" in model_name.lower():
                     enforce_rate_limit()
 
-                run_kwargs["model"] = model_obj if model_obj else model_name
+                run_kwargs["model"] = model_obj or provider_config.build_model(model_name, prov_config.get("api_key"))
                 # MiniMax models served through OpenAI-compatible gateways (kilocode,
                 # OpenRouter) have been observed live leaking a broken multi-tool-call
                 # attempt as raw XML-ish text (see
@@ -3965,8 +3949,11 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
                     run_kwargs["message_history"] = deps.last_attempt_messages
                     run_kwargs["user_prompt"] = None
                     checkpoint_baseline = deps.last_attempt_messages
-                outage, next_key = (None, None) if provider_name == "byok" else provider_config.on_outage(
-                    family, prov_config.get("api_key") or "", str(e), err)
+                # Only the provider's own errors can mean an account is out: a tool's exception
+                # can carry text anyone wrote (a page, a message) that merely reads like one.
+                from pydantic_ai.exceptions import ModelAPIError
+                outage, next_key = (None, None) if provider_name == "byok" or not isinstance(e, ModelAPIError) \
+                    else provider_config.on_outage(family, prov_config.get("api_key") or "", str(e), err)
                 if outage == "next_key":
                     # This API key's account is out (no credits, a spending limit...), but the
                     # provider has another key: every model of the family uses it from now on.

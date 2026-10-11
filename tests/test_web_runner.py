@@ -22,10 +22,9 @@ def tmp_store(monkeypatch, tmp_path):
     # below) — default to "already consented" so they aren't all incidentally
     # coupled to it.
     monkeypatch.setattr("agent.policy_consent.has_consent", lambda uid: True)
+    monkeypatch.setattr("agent.active_runs._active_since", {})
     yield
-    from agent.active_runs import mark_run_finished
     from agent.steering_store import clear_steering_messages
-    mark_run_finished("web", "convo-1")
     clear_steering_messages("web", "convo-1")
 
 
@@ -96,14 +95,12 @@ def test_submit_message_steers_into_an_active_run_instead_of_starting_a_new_one(
     assert len(queued) == 1
     assert queued[0]["text"] == "keep going"
 
-    from agent.active_runs import mark_run_finished
-    mark_run_finished("web", conversation_id)
     from agent.steering_store import clear_steering_messages
     clear_steering_messages("web", conversation_id)
 
 
 def test_submit_message_reacts_to_the_steered_message_with_a_checkmark(conversation_id, monkeypatch):
-    from agent.active_runs import mark_run_finished, mark_run_started
+    from agent.active_runs import mark_run_started
     from web import runner
 
     mark_run_started("web", conversation_id, time.time())
@@ -116,7 +113,6 @@ def test_submit_message_reacts_to_the_steered_message_with_a_checkmark(conversat
     assert len(reaction_events) == 1
     assert reaction_events[0]["emoji"] == "white_check_mark"
 
-    mark_run_finished("web", conversation_id)
     from agent.steering_store import clear_steering_messages
     clear_steering_messages("web", conversation_id)
 

@@ -274,3 +274,11 @@ def test_kill_background_command_unknown_job(sandbox_env):
     sandbox_env(canned=[("kill \"$pid\"", SimpleNamespace(stdout="UNKNOWN\n", stderr="", exit_code=0))])
     result = bg.kill_background_command("C1", "1.1", "abcd1234")
     assert "no background command with id" in result
+
+
+def test_kill_background_command_stops_the_whole_process_group(sandbox_env):
+    """setsid made the job its own process group; killing only the bash wrapper
+    left a dev server's children running."""
+    fake = sandbox_env(canned=[("kill \"$pid\"", SimpleNamespace(stdout="KILLED\n", stderr="", exit_code=0))])
+    bg.kill_background_command("C1", "1.1", "abcd1234")
+    assert 'kill -- -"$pid"' in fake.commands.calls[0]

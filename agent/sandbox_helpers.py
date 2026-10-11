@@ -14,19 +14,31 @@ same way:
   parallel subagents). Creating it is serialized per thread, so they never make two,
   and a call that's done only pauses it when no other call is still using it
   (sandbox_use / pause_if_idle); otherwise the last one to finish does.
+- A sandbox runs for at most SANDBOX_TIMEOUT_SECONDS after it's last connected to,
+  then E2B PAUSES it (lifecycle on_timeout "pause"), so nothing in it is lost. E2B's
+  own default is 300 seconds and then KILL, which deleted the files of any tool that
+  didn't pause the sandbox itself, background jobs, and long commands.
+- Its GitHub proxy token is replaced with a fresh one once it's
+  TOKEN_REFRESH_AFTER_SECONDS old; the proxy expires tokens on its own.
 """
 
 import logging
 import os
 import threading
-from collections import defaultdict
+import time
 from contextlib import contextmanager
 from types import SimpleNamespace
 
 from e2b import Sandbox
 from e2b.exceptions import SandboxNotFoundException
 
-from agent.github_proxy_client import PUBLIC_PROXY_HOST, issue_sandbox_token, revoke_sandbox_token
+from agent.github_proxy_client import (
+    PUBLIC_PROXY_HOST,
+    TOKEN_REFRESH_AFTER_SECONDS,
+    issue_sandbox_token,
+    revoke_sandbox_token,
+)
+from agent.keyed_locks import KeyedLocks
 from agent.sandbox_store import (
     delete_thread_sandbox_id,
     get_thread_sandbox_id,
@@ -51,6 +63,43 @@ def _proxy_cache_set(sandbox_id: str, proxy_info: dict | None) -> None:
 def _proxy_cache_get(sandbox_id: str) -> dict | None:
     with _proxy_cache_lock:
         return _proxy_cache.get(sandbox_id)
+
+
+def _new_proxy_info(sandbox_id: str) -> dict:
+    info = {"proxy_host": PUBLIC_PROXY_HOST, "token": issue_sandbox_token(sandbox_id), "issued_at": time.time()}
+    _proxy_cache_set(sandbox_id, info)
+    return info
+
+
+def _fresh_proxy_info(sandbox_id: str) -> dict:
+    """The sandbox's proxy token, replaced by a new one once it's getting old. The old
+    one isn't revoked: a background job may still be using it, and it expires anyway."""
+    info = _proxy_cache_get(sandbox_id)
+    if info and time.time() - info.get("issued_at", 0) < TOKEN_REFRESH_AFTER_SECONDS:
+        return info
+    return _new_proxy_info(sandbox_id)
+
+
+# How long a sandbox stays up after it's last connected to before E2B pauses it (see
+# the module docstring). 1 hour is the most E2B's Hobby plan allows.
+SANDBOX_TIMEOUT_SECONDS = 3600
+
+
+def run_command(sandbox, command: str, **kwargs):
+    """sandbox.commands.run, returning the result (stdout, stderr, exit code) even when
+    the command fails: E2B raises CommandExitException for a non-zero exit, and its
+    message holds only stderr, so a failing test run's output was lost."""
+    from e2b.sandbox.commands.command_handle import CommandExitException
+
+    try:
+        return sandbox.commands.run(command, **kwargs)
+    except CommandExitException as e:
+        return e
+
+
+def connect_sandbox(sandbox_id: str):
+    """Connect to (resuming if paused) a stored sandbox, extending its lifetime."""
+    return Sandbox.connect(sandbox_id, timeout=SANDBOX_TIMEOUT_SECONDS)
 
 
 def _sandbox_template_id() -> str | None:
@@ -123,7 +172,7 @@ def _is_stale_sandbox_error(e: Exception) -> bool:
 def _recycle_dead_sandbox(channel_id: str, thread_ts: str, sandbox_id: str, error: Exception) -> None:
     logger.warning(f"stored sandbox {sandbox_id} is dead ({error}); recreating")
     try:
-        Sandbox.connect(sandbox_id).kill()
+        connect_sandbox(sandbox_id).kill()
     except Exception:
         pass
     delete_thread_sandbox_id(channel_id, thread_ts)
@@ -152,7 +201,7 @@ def kill_thread_sandbox(channel_id: str, thread_ts: str) -> None:
     if not sandbox_id:
         return
     try:
-        Sandbox.connect(sandbox_id).kill()
+        connect_sandbox(sandbox_id).kill()
     except Exception:
         logger.warning("Failed to kill sandbox %s for %s/%s", sandbox_id, channel_id, thread_ts, exc_info=True)
     delete_thread_sandbox_id(channel_id, thread_ts)
@@ -163,14 +212,17 @@ def kill_thread_sandbox(channel_id: str, thread_ts: str) -> None:
         _proxy_cache.pop(sandbox_id, None)
 
 
-_thread_locks: defaultdict[tuple[str, str], threading.RLock] = defaultdict(threading.RLock)
-_thread_locks_lock = threading.Lock()
+_thread_locks = KeyedLocks()
 _in_use: dict[tuple[str, str], int] = {}
+# Threads whose sandbox has been connected to or created and not paused since: a turn
+# pauses its thread's sandbox at its end only if it's here (pause_if_running), so a
+# turn that never touched the sandbox doesn't resume it just to pause it.
+_running: set[tuple[str, str]] = set()
+_running_lock = threading.Lock()
 
 
-def _thread_lock(channel_id: str, thread_ts: str) -> threading.RLock:
-    with _thread_locks_lock:
-        return _thread_locks[(channel_id, thread_ts)]
+def _thread_lock(channel_id: str, thread_ts: str):
+    return _thread_locks.hold((channel_id, thread_ts))
 
 
 def _pause_quietly(sandbox, channel_id: str, thread_ts: str) -> None:
@@ -178,6 +230,16 @@ def _pause_quietly(sandbox, channel_id: str, thread_ts: str) -> None:
         sandbox.pause()
     except Exception as e:
         logger.warning("Couldn't pause the sandbox for %s/%s: %s", channel_id, thread_ts, e)
+    else:
+        with _running_lock:
+            _running.discard((channel_id, thread_ts))
+
+
+def pause_if_running(channel_id: str, thread_ts: str) -> bool:
+    """pause_if_idle, if this thread's sandbox was used since it was last paused."""
+    with _running_lock:
+        running = (channel_id, thread_ts) in _running
+    return running and pause_if_idle(channel_id, thread_ts)
 
 
 @contextmanager
@@ -221,7 +283,7 @@ def pause_if_idle(channel_id: str, thread_ts: str, sandbox=None) -> bool:
             if not sandbox_id:
                 return False
             try:
-                sandbox = Sandbox.connect(sandbox_id)
+                sandbox = connect_sandbox(sandbox_id)
             except Exception as e:
                 logger.warning("Couldn't connect to pause the sandbox for %s/%s: %s", channel_id, thread_ts, e)
                 return False
@@ -238,19 +300,18 @@ def get_or_create_sandbox(channel_id: str, thread_ts: str):
     parallel calls never create two sandboxes.
     """
     with _thread_lock(channel_id, thread_ts):
-        return _get_or_create_sandbox(channel_id, thread_ts)
+        sandbox, proxy_info = _get_or_create_sandbox(channel_id, thread_ts)
+    with _running_lock:
+        _running.add((channel_id, thread_ts))
+    return sandbox, proxy_info
 
 
 def _get_or_create_sandbox(channel_id: str, thread_ts: str):
     sandbox_id = get_thread_sandbox_id(channel_id, thread_ts)
     if sandbox_id:
         try:
-            sandbox = Sandbox.connect(sandbox_id)
-            proxy_info = _proxy_cache_get(sandbox_id)
-            if proxy_info is None:
-                tok = issue_sandbox_token(sandbox.sandbox_id)
-                proxy_info = {"proxy_host": PUBLIC_PROXY_HOST, "token": tok}
-                _proxy_cache_set(sandbox.sandbox_id, proxy_info)
+            sandbox = connect_sandbox(sandbox_id)
+            proxy_info = _fresh_proxy_info(sandbox.sandbox_id)
             try:
                 # connect() to a recycled sandbox is lazy; a trivial command forces the
                 # lifecycle error out immediately instead of mid-request.
@@ -267,10 +328,10 @@ def _get_or_create_sandbox(channel_id: str, thread_ts: str):
                 raise
             _recycle_dead_sandbox(channel_id, thread_ts, sandbox_id, e)
             sandbox_id = None
-    sandbox = Sandbox.create(_sandbox_template_id())
-    tok = issue_sandbox_token(sandbox.sandbox_id)
-    proxy_info = {"proxy_host": PUBLIC_PROXY_HOST, "token": tok}
-    _proxy_cache_set(sandbox.sandbox_id, proxy_info)
+    sandbox = Sandbox.create(
+        _sandbox_template_id(), timeout=SANDBOX_TIMEOUT_SECONDS, lifecycle={"on_timeout": "pause"},
+    )
+    proxy_info = _new_proxy_info(sandbox.sandbox_id)
     provision = _provision_sandbox(sandbox, proxy_info)
     logger.info(f"coolton sandbox provisioned:\n{provision}")
     save_thread_sandbox_id(channel_id, thread_ts, sandbox.sandbox_id)
@@ -316,9 +377,10 @@ EOF
   export PATH="/home/user/bin:$PATH"
 fi
 echo "==> common tools (wget, unzip, jq, ...):"
-command -v wget >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || \
-  (sudo apt-get update -qq 2>&1 | tail -1 || true) && \
+if ! { command -v wget && command -v unzip && command -v jq; } >/dev/null 2>&1; then
+  (sudo apt-get update -qq 2>&1 | tail -1 || true)
   (sudo apt-get install -y -qq wget curl unzip zip jq ca-certificates less nano vim-tiny htop file sqlite3 2>&1 | tail -1 || echo "APT_INSTALL_FAILED")
+fi
 echo "==> versions:"
 echo "git:  $(git --version 2>&1)"
 echo "node: $(node --version 2>&1)"
@@ -342,7 +404,7 @@ echo "==> gh api self (authenticated via host proxy):"
 gh api user --jq .login 2>&1 || true
 """.replace("__GH_USER__", gh_user)
     try:
-        result = sandbox.commands.run(script, timeout=900, envs=_proxy_env(proxy_info))
+        result = run_command(sandbox, script, timeout=900, envs=_proxy_env(proxy_info))
         out = []
         if result.stdout:
             out.append(result.stdout)
@@ -352,3 +414,21 @@ gh api user --jq .login 2>&1 || true
         return "\n".join(out)
     except Exception as e:
         return f"provision error: {e}"
+
+
+def attachment_filename(name: str, taken: set[str]) -> str:
+    """A safe, unused file name in ~/attachments for an attachment called `name`, which
+    whoever uploaded it chose: only its last path segment, never "." or a hidden file,
+    and "image (2).png" when "image.png" is already taken (every pasted screenshot is
+    called image.png). Adds the result to `taken`."""
+    base = (name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    base = "".join(c for c in base if c.isprintable()).strip().lstrip(".") or "file"
+    stem, dot, ext = base.rpartition(".")
+    if not dot or not stem:
+        stem, ext = base, ""
+    candidate, n = base, 1
+    while candidate in taken:
+        n += 1
+        candidate = f"{stem} ({n}).{ext}" if ext else f"{stem} ({n})"
+    taken.add(candidate)
+    return candidate

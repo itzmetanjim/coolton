@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 # datetime used for typing if needed
 
 from slack_sdk import WebClient
+from agent.json_file import load_json, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -18,24 +19,24 @@ _scheduler = None
 
 
 def _load_reminders() -> dict:
-    try:
-        with open(REMINDERS_FILE, "r") as f:
-            data = json.load(f)
-        if not isinstance(data, dict) or "reminders" not in data:
-            return {"reminders": []}
-        return data
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"reminders": []}
+    data = load_json(REMINDERS_FILE, default=lambda: {"reminders": []})
+    return data if isinstance(data.get("reminders"), list) else {"reminders": []}
 
 
 def _save_reminders(data: dict):
-    temp = f"{REMINDERS_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, REMINDERS_FILE)
+    save_json(REMINDERS_FILE, data)
 
 
 REMINDER_RETENTION_SECONDS = 7 * 86400
+
+# Errors no retry fixes: there's no one, or nothing, to DM.
+_UNDELIVERABLE_REMINDER_ERRORS = {
+    "user_not_found", "channel_not_found", "cannot_dm_bot", "user_disabled", "account_inactive",
+}
+# Past this, a reminder that still can't be sent is given up on; until then retries back off
+# from a minute to an hour between attempts.
+_REMINDER_GIVE_UP_AFTER_SECONDS = 24 * 3600
+_REMINDER_MAX_RETRY_GAP_SECONDS = 3600
 
 
 def _prune_sent_reminders(data: dict) -> None:
@@ -53,7 +54,7 @@ def _prune_sent_reminders(data: dict) -> None:
     now = time.time()
     data["reminders"] = [
         r for r in data["reminders"]
-        if not r.get("sent") or now - r.get("due_at", now) < REMINDER_RETENTION_SECONDS
+        if not (r.get("sent") or r.get("failed")) or now - r.get("due_at", now) < REMINDER_RETENTION_SECONDS
     ]
 
 
@@ -79,7 +80,11 @@ def _get_due_reminders() -> list[dict]:
     now = time.time()
     with reminders_lock:
         data = _load_reminders()
-        due = [r for r in data["reminders"] if not r.get("sent") and r.get("due_at", float("inf")) <= now]
+        due = [
+            r for r in data["reminders"]
+            if not (r.get("sent") or r.get("failed"))
+            and max(r.get("due_at", float("inf")), r.get("retry_at", 0)) <= now
+        ]
         return due
 
 
@@ -91,6 +96,26 @@ def _mark_sent(reminder_id: str):
                 r["sent"] = True
                 break
         _prune_sent_reminders(data)
+        _save_reminders(data)
+
+
+def _record_reminder_failure(reminder_id: str, error: str) -> None:
+    """Retry later, backing off, or give up: on an error no retry fixes, or once the
+    reminder is a day overdue. Retrying every 30 seconds forever is what this replaces."""
+    now = time.time()
+    with reminders_lock:
+        data = _load_reminders()
+        for r in data["reminders"]:
+            if r["id"] != reminder_id:
+                continue
+            r["attempts"] = r.get("attempts", 0) + 1
+            r["last_error"] = error
+            if error in _UNDELIVERABLE_REMINDER_ERRORS or now - r.get("due_at", now) > _REMINDER_GIVE_UP_AFTER_SECONDS:
+                r["failed"] = True
+                logger.error("Gave up on reminder %s after %d attempt(s): %s", reminder_id, r["attempts"], error)
+            else:
+                r["retry_at"] = now + min(30 * 2 ** r["attempts"], _REMINDER_MAX_RETRY_GAP_SECONDS)
+            break
         _save_reminders(data)
 
 
@@ -110,21 +135,12 @@ ADMIN_USER_IDS = {"U0B2VTYER33", "U09ASUK57K8", "U0BFB1AEY3D", "U0BDCU34308"}
 
 
 def _load_tasks() -> dict:
-    try:
-        with open(SCHEDULED_TASKS_FILE, "r") as f:
-            data = json.load(f)
-        if not isinstance(data, dict) or "tasks" not in data:
-            return {"tasks": []}
-        return data
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"tasks": []}
+    data = load_json(SCHEDULED_TASKS_FILE, default=lambda: {"tasks": []})
+    return data if isinstance(data.get("tasks"), list) else {"tasks": []}
 
 
 def _save_tasks(data: dict):
-    temp = f"{SCHEDULED_TASKS_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, SCHEDULED_TASKS_FILE)
+    save_json(SCHEDULED_TASKS_FILE, data)
 
 
 def _resolve_tz(timezone: str):
@@ -233,10 +249,16 @@ def _fire_task(task_id: str):
         return
 
     client = WebClient(token=bot_token)
+    from agent.attribution import attribute_text
+    from agent.mentions import defuse_mass_mentions
+
+    # The prompt is whatever its creator wrote: credit them, and never let it ping a
+    # group (it's posted again every time the task fires).
+    banner = attribute_text(f":timer_clock: *Scheduled task:* {defuse_mass_mentions(task['prompt'])}", task["user_id"])
     try:
         response = client.chat_postMessage(
             channel=task["channel_id"],
-            text=f":timer_clock: *Scheduled task:* {task['prompt']}",
+            text=banner,
             thread_ts=task["thread_ts"] or None,
         )
     except Exception as e:
@@ -614,11 +636,13 @@ def start_scheduler(app):
                 res_json = resp.json()
                 if not res_json.get("ok"):
                     logger.error("Failed to send reminder %s: %s", reminder["id"], res_json.get("error", "unknown"))
+                    _record_reminder_failure(reminder["id"], res_json.get("error", "unknown"))
                     continue
                 _mark_sent(reminder["id"])
                 logger.info("Sent reminder %s to user %s", reminder["id"], reminder["user_id"])
             except Exception as e:
                 logger.error("Failed to send reminder %s: %s", reminder["id"], e)
+                _record_reminder_failure(reminder["id"], type(e).__name__)
 
     def check_token_rotation():
         try:

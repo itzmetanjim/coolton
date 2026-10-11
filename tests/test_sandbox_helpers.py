@@ -30,13 +30,14 @@ class _FakeSandboxAPI:
         self.existing = existing or {}
         self.created = []
 
-    def connect(self, sandbox_id):
+    def connect(self, sandbox_id, timeout=None):
         if sandbox_id in self.existing:
             return self.existing[sandbox_id]
         return _FakeSandbox(sandbox_id)
 
-    def create(self, template_id=None):
+    def create(self, template_id=None, timeout=None, lifecycle=None):
         sb = _FakeSandbox(f"sbx-{len(self.created) + 1}")
+        sb.timeout, sb.lifecycle = timeout, lifecycle
         self.created.append(sb)
         return sb
 
@@ -178,8 +179,53 @@ def test_kill_thread_sandbox_is_a_noop_with_nothing_stored(sandbox_env):
 
 def test_kill_thread_sandbox_never_raises_if_the_sandbox_is_already_gone(sandbox_env):
     class _ExplodingAPI:
-        def connect(self, sandbox_id):
+        def connect(self, sandbox_id, timeout=None):
             raise RuntimeError("sandbox not found")
 
     sandbox_env(store_id="sbx-gone", api=_ExplodingAPI())
     helpers_mod.kill_thread_sandbox("web", "convo-1")  # must not raise
+
+
+def test_a_new_sandbox_pauses_instead_of_being_killed_when_it_times_out(sandbox_env):
+    """E2B's default is 300s and then KILL, which deleted the files of any tool that
+    didn't pause the sandbox itself, background jobs, and long commands."""
+    api = _FakeSandboxAPI()
+    sandbox_env(api=api)
+    helpers_mod.get_or_create_sandbox("C1", "1.1")
+    (created,) = api.created
+    assert created.lifecycle == {"on_timeout": "pause"}
+    assert created.timeout == helpers_mod.SANDBOX_TIMEOUT_SECONDS > 300
+
+
+def test_an_old_proxy_token_is_replaced_before_its_used_again(sandbox_env, monkeypatch):
+    """The proxy expires sandbox tokens after a day, so a long-lived sandbox gets a new
+    one well before that (and the old one is left to expire, not revoked under a
+    background job still using it)."""
+    issued = iter(["tok-1", "tok-2"])
+    sandbox_env(store_id="sbx-live", api=_FakeSandboxAPI(existing={"sbx-live": _FakeSandbox("sbx-live")}))
+    monkeypatch.setattr(helpers_mod, "issue_sandbox_token", lambda sid: next(issued))
+    revoked = []
+    monkeypatch.setattr(helpers_mod, "revoke_sandbox_token", revoked.append)
+    helpers_mod._proxy_cache.pop("sbx-live", None)
+
+    assert helpers_mod.get_or_create_sandbox("C1", "1.1")[1]["token"] == "tok-1"
+    assert helpers_mod.get_or_create_sandbox("C1", "1.1")[1]["token"] == "tok-1"  # still fresh
+    helpers_mod._proxy_cache["sbx-live"]["issued_at"] -= helpers_mod.TOKEN_REFRESH_AFTER_SECONDS + 1
+    assert helpers_mod.get_or_create_sandbox("C1", "1.1")[1]["token"] == "tok-2"
+    assert revoked == []
+
+
+def test_per_thread_locks_are_dropped_once_nobody_holds_them():
+    before = len(helpers_mod._thread_locks)
+    with helpers_mod.sandbox_use("CLOCK", "1.1"):
+        assert len(helpers_mod._thread_locks) == before
+    with helpers_mod._thread_lock("CLOCK", "1.1"):
+        assert len(helpers_mod._thread_locks) == before + 1
+    assert len(helpers_mod._thread_locks) == before
+
+
+def test_attachment_names_stay_in_the_folder_and_never_collide():
+    taken = set()
+    names = [helpers_mod.attachment_filename(n, taken) for n in
+             ("image.png", "image.png", "image.png", "../../.bashrc", "a/b\\c.txt", "", ".hidden", "README")]
+    assert names == ["image.png", "image (2).png", "image (3).png", "bashrc", "c.txt", "file", "hidden", "README"]

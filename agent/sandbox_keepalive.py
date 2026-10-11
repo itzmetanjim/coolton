@@ -17,9 +17,6 @@ turn that armed it or pauses a sandbox a later turn is still using.
 import logging
 import threading
 
-from e2b import Sandbox
-from agent.sandbox_store import get_thread_sandbox_id
-
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
@@ -31,13 +28,10 @@ def _pause(channel_id: str, thread_ts: str) -> None:
         _timers.pop((channel_id, thread_ts), None)
     # A command still running (e.g. a long one a parallel subagent started) keeps it up;
     # that command pauses the sandbox itself when it's done.
-    from agent.sandbox_helpers import while_idle
+    from agent.sandbox_helpers import pause_if_idle
 
     try:
-        with while_idle(channel_id, thread_ts) as idle:
-            sandbox_id = get_thread_sandbox_id(channel_id, thread_ts) if idle else None
-            if sandbox_id:
-                Sandbox.connect(sandbox_id).pause()
+        pause_if_idle(channel_id, thread_ts)
     except Exception as e:
         logger.warning(f"sandbox keepalive auto-pause failed for {channel_id}/{thread_ts}: {e}")
 

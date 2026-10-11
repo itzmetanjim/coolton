@@ -354,38 +354,15 @@ def build_vision_chain() -> list[tuple[str, str, str, str]]:
     return chain
 
 
-def apply_provider_env(provider_name: str, api_key: str) -> None:
-    """Set the provider API key env var for pydantic-ai.
+def build_model(model_name: str, api_key: str | None):
+    """The pydantic-ai model for a "provider:model" name, using `api_key` (None: the
+    provider's own env var). The key goes to the model itself, never into os.environ,
+    which every concurrent turn shares: one turn's key would otherwise be used by
+    another that picked a different key or provider in between."""
+    from pydantic_ai.models import infer_model
+    from pydantic_ai.providers import infer_provider_class
 
-    Looks up the provider's api_key_env_var_name from the JSON config.
-    Skips BYOK and providers with a base_url (HCAI-style).
-    """
-    if not api_key or provider_name == "byok":
-        return
-
-    # Find the provider config by name, including aliases. Generated names look
-    # like "<provider_id>_<index>" (see _make_provider_name) — strip the trailing
-    # index for an exact match rather than prefix-matching, which could pick the
-    # wrong provider if one id happens to prefix another (dict order is unordered).
-    pmap = _provider_map()
-    pconf = pmap.get(provider_name)
-    if pconf is None:
-        base = re.sub(r"_\d+$", "", provider_name)
-        pconf = pmap.get(base)
-    if pconf is None:
-        for pc in pmap.values():
-            if provider_name in (pc.get("aliases") or []):
-                pconf = pc
-                break
-    if not pconf:
-        return
-
-    if pconf.get("api_url"):
-        return  # HCAI-style: uses base_url + api_key, not env var
-
-    env_var = pconf.get("pydantic_ai_env_var") or pconf.get("api_key_env_var_name")
-    if env_var:
-        os.environ[env_var] = api_key
+    return infer_model(model_name, provider_factory=lambda provider: infer_provider_class(provider)(api_key=api_key))
 
 
 def get_provider_display(model_entry: dict, provider_map: dict | None = None) -> str:
@@ -403,13 +380,9 @@ def get_provider_display(model_entry: dict, provider_map: dict | None = None) ->
     return f"{displayname} {model_entry['model']}"
 
 
-def get_model_from_config(user_id: str | None = None) -> str:
-    """Get the first viable model string from config.
-
-    Replaces the old get_model() function. Returns a string model name
-    for standard providers, or a configured OpenAIChatModel for base_url
-    providers (HCAI/BYOK).
-    """
+def get_model_from_config(user_id: str | None = None):
+    """The first viable model in the config, ready to run: an OpenAIChatModel for
+    base_url providers (HCAI/BYOK), otherwise the provider's own model class."""
     for model_entry in _get_models():
         if not _is_chat_model(model_entry):
             continue
@@ -434,7 +407,7 @@ def get_model_from_config(user_id: str | None = None) -> str:
                 ),
             )
 
-        return model_name
+        return build_model(model_name, api_key)
 
     raise RuntimeError(
         "No AI provider configured. Set at least one supported provider key: "

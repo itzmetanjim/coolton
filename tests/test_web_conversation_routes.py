@@ -38,7 +38,8 @@ def test_list_conversations_reports_working_from_active_runs():
 
     busy = log.create_conversation("U1", title="busy")
     idle = log.create_conversation("U1", title="idle")
-    mark_run_started("web", busy, time.time())
+    started = time.time()
+    mark_run_started("web", busy, started)
     try:
         request, as_user = _request_for("U1")
         with as_user:
@@ -47,7 +48,7 @@ def test_list_conversations_reports_working_from_active_runs():
         assert by_id[busy]["working"] is True
         assert by_id[idle]["working"] is False
     finally:
-        mark_run_finished("web", busy)
+        mark_run_finished("web", busy, started)
 
 
 def test_rename_stores_the_new_title():

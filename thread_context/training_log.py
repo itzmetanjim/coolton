@@ -16,6 +16,9 @@ from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from agent.redact import redact
 
 _SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]+")
+# The newest Slack messages kept beside a trace: a thread rarely has more, but a code
+# channel's conversation is the whole channel's history, fetched again every turn.
+MAX_SLACK_MESSAGES = 1000
 
 
 class ConversationTraceStore:
@@ -44,7 +47,7 @@ class ConversationTraceStore:
             "thread_ts": thread_ts,
             "updated_at": time.time(),
             "slack_messages": slack_messages or [],
-            "messages": [_normalize_message(message) for message in serialized],
+            "messages": [_normalize_message(message) for message in _without_file_bytes(serialized)],
         }
         document = _redact_strings(document)
         destination = self.path_for(channel_id, thread_ts)
@@ -70,19 +73,37 @@ class ConversationTraceStore:
         thread_ts: str,
         messages: list[ModelMessage],
     ) -> Path:
-        """Fetch the complete Slack thread and persist it beside the model trace. A code
-        channel's conversation (thread_ts "", agent.code_channel_store) is the channel's
-        own top-level messages."""
+        """Fetch the Slack thread (up to MAX_SLACK_MESSAGES of it) and persist it beside
+        the model trace. A code channel's conversation (thread_ts "",
+        agent.code_channel_store) is the channel's own top-level messages, newest first."""
         fetch = (client.conversations_replies if thread_ts else client.conversations_history)
         params = {"channel": channel_id, "limit": 200, **({"ts": thread_ts} if thread_ts else {})}
         response = fetch(**params)
         slack_messages = response.get("messages", [])
-        while response.get("has_more") and response.get("response_metadata", {}).get("next_cursor"):
+        while (len(slack_messages) < MAX_SLACK_MESSAGES and response.get("has_more")
+               and response.get("response_metadata", {}).get("next_cursor")):
             response = fetch(**params, cursor=response["response_metadata"]["next_cursor"])
             slack_messages.extend(response.get("messages", []))
+        slack_messages = slack_messages[:MAX_SLACK_MESSAGES]
         if not thread_ts:
             slack_messages.reverse()  # history is newest first; replies are oldest first
         return self.write(channel_id, thread_ts, messages, slack_messages)
+
+
+def _without_file_bytes(value: Any) -> Any:
+    """`value` with every attached file's bytes (an image the model saw, a screenshot)
+    replaced by a note of its type and size: a trace keeps what was said and done, and a
+    few screenshots would otherwise make up most of it."""
+    if isinstance(value, list):
+        return [_without_file_bytes(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if value.get("kind") == "binary" and isinstance(value.get("data"), str):
+        size = len(value["data"]) * 3 // 4 - value["data"][-2:].count("=")  # base64-decoded length
+        return {**value, "data": f"<{value.get('media_type', 'file')}, {size} bytes, not kept>"}
+    if isinstance(value.get("url"), str) and value["url"].startswith("data:"):
+        return {**value, "url": "<data: URL, not kept>"}
+    return {key: _without_file_bytes(item) for key, item in value.items()}
 
 
 def _redact_strings(value: Any) -> Any:

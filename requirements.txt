@@ -1,7 +1,7 @@
 slack-sdk==3.42.0
 slack-bolt>=1.28.0
 slack-cli-hooks<1.0.0
-pydantic-ai[openai,anthropic,groq,openrouter]
+pydantic-ai[openai,anthropic,groq,openrouter,mistral]
 pydantic-ai-skills>=1.4,<2
 fastapi
 uvicorn
@@ -9,7 +9,7 @@ python-multipart
 python-dotenv==1.2.2
 requests
 e2b-code-interpreter
-e2b
+e2b>=2.15
 cryptography
 apscheduler
 croniter

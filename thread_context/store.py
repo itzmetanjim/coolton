@@ -1,11 +1,18 @@
-import os
-import json
-import tempfile
-import time
+"""Each conversation's message history (pydantic-ai ModelMessages), kept as one
+JSON file per conversation under conversations/, so a turn rewrites just its own
+conversation, not every one coolton remembers. A conversation nobody has written
+to for `ttl_seconds` is forgotten."""
+
 import logging
-import threading
+import os
+import time
+from urllib.parse import quote
+
 from pydantic import TypeAdapter
 from pydantic_ai.messages import ModelMessage
+
+from agent.json_file import load_json, save_json
+from agent.keyed_locks import KeyedLocks
 
 logger = logging.getLogger(__name__)
 
@@ -55,74 +62,62 @@ def _latest_ts(a: str | None, b: str | None) -> str | None:
 
 
 class ConversationStore:
-    """Thread-safe, file-persisted conversation history store.
-
-    Stores Pydantic AI message histories both in memory (for maximum speed) 
-    and in a local JSON file (so conversations survive server restarts).
-    """
+    """Thread-safe, file-persisted conversation history store."""
 
     def __init__(
-        self, 
-        file_path: str = "conversations.json", 
-        ttl_seconds: int = 86400, 
-        max_conversations: int = 1000
+        self,
+        directory: str = "conversations",
+        ttl_seconds: int = 90 * 24 * 60 * 60,
+        legacy_file: str | None = "conversations.json",
     ):
-        self._file_path = file_path
+        self._directory = directory
         self._ttl_seconds = ttl_seconds
-        self._max_conversations = max_conversations
-        self._lock = threading.Lock()
+        self._locks = KeyedLocks()
+        if legacy_file:
+            self._migrate(legacy_file)
+        self._forget_expired()
 
-        # Snapshots are serialized and written to disk OUTSIDE self._lock (see
-        # set_history), so concurrent writers can complete out of order. This
-        # sequence number + lock (much smaller critical section than the full
-        # serialize+write) ensures a stale/older snapshot can never clobber a
-        # newer one that already landed on disk.
-        self._write_order_lock = threading.Lock()
-        self._write_seq = 0
-        self._written_seq = 0
+    def _path(self, channel_id: str, thread_ts: str) -> str:
+        # Quoted, so whatever the ids hold it's one file in the directory (":" becomes %3A).
+        return os.path.join(self._directory, quote(f"{channel_id}:{thread_ts}", safe="") + ".json")
 
-        # In-memory store: keyed by (channel_id, thread_ts)
-        self._store: dict[tuple[str, str], dict] = {}
-        
-        # Load existing histories from disk on startup
-        self._load_from_disk()
+    def _load(self, channel_id: str, thread_ts: str) -> dict | None:
+        """The conversation's stored entry with its messages deserialized, or None. An
+        expired history is deleted, and so is one that can't be resent: unreadable, or
+        with a tool call and return that don't pair up (see _is_valid_history)."""
+        path = self._path(channel_id, thread_ts)
+        entry = load_json(path, default=lambda: None)
+        if entry is None:
+            return None
+        written_at = entry.get("timestamp")
+        if not isinstance(written_at, (int, float)) or time.time() - written_at > self._ttl_seconds:
+            _remove(path)
+            return None
+        try:
+            messages = ModelMessagesTypeAdapter.validate_python(entry.get("messages"))
+        except ValueError as e:
+            logger.error("Discarding unreadable stored history for %s:%s: %s", channel_id, thread_ts, e)
+            _remove(path)
+            return None
+        if not _is_valid_history(messages):
+            logger.error(
+                "Discarding structurally invalid stored history for %s:%s "
+                "(unpaired tool call/return) — this thread will start fresh "
+                "instead of failing every turn identically.",
+                channel_id, thread_ts,
+            )
+            _remove(path)
+            return None
+        return {"messages": messages, "last_seen_ts": entry.get("last_seen_ts")}
 
     def get_history(self, channel_id: str, thread_ts: str) -> list[ModelMessage] | None:
         """Retrieve conversation history for a thread.
 
         Returns None if no history exists or if the history has expired.
         """
-        key = (channel_id, thread_ts)
-        snapshot = None
-        seq = None
-        with self._lock:
-            entry = self._store.get(key)
-            if entry is None:
-                return None
-
-            # Check if expired
-            if time.time() - entry["timestamp"] > self._ttl_seconds:
-                del self._store[key]
-                snapshot = dict(self._store)
-                self._write_seq += 1
-                seq = self._write_seq
-            elif not _is_valid_history(entry["messages"]):
-                logger.error(
-                    "Discarding structurally invalid stored history for %s:%s "
-                    "(unpaired tool call/return) — this thread will start fresh "
-                    "instead of failing every turn identically.",
-                    channel_id, thread_ts,
-                )
-                del self._store[key]
-                snapshot = dict(self._store)
-                self._write_seq += 1
-                seq = self._write_seq
-            else:
-                return entry["messages"]
-
-        # Persisting the expiry/discard is done outside the lock (see set_history for why).
-        self._write_snapshot(snapshot, seq)
-        return None
+        with self._locks.hold((channel_id, thread_ts)):
+            entry = self._load(channel_id, thread_ts)
+        return entry["messages"] if entry else None
 
     def set_history(
         self, channel_id: str, thread_ts: str, messages: list[ModelMessage],
@@ -133,154 +128,66 @@ class ConversationStore:
         `last_seen_ts` is the Slack ts of the latest thread message this history
         covers (see get_last_seen_ts). It only ever moves forward.
         """
-        key = (channel_id, thread_ts)
-        with self._lock:
-            previous = (self._store.get(key) or {}).get("last_seen_ts")
-            self._store[key] = {
-                "messages": messages,
-                "timestamp": time.time(),
-                "last_seen_ts": _latest_ts(previous, last_seen_ts),
-            }
-            self._cleanup()
-            snapshot = dict(self._store)
-            self._write_seq += 1
-            seq = self._write_seq
-        # Serializing (dump_python + file write) is O(total conversations) —
-        # up to max_conversations. Slack Bolt dispatches concurrent events
-        # across channels on separate worker threads, so doing this while
-        # holding self._lock would block every other channel's get/set_history
-        # behind one busy/large conversation's full-store disk write. Take a
-        # point-in-time copy under the lock (cheap) and serialize/write outside
-        # it instead — see _write_snapshot for the resulting write-ordering
-        # tradeoff.
-        self._write_snapshot(snapshot, seq)
+        path = self._path(channel_id, thread_ts)
+        try:
+            with self._locks.hold((channel_id, thread_ts)):
+                previous = load_json(path).get("last_seen_ts")
+                save_json(path, {
+                    "channel_id": channel_id,
+                    "thread_ts": thread_ts,
+                    "messages": ModelMessagesTypeAdapter.dump_python(messages, mode="json"),
+                    "timestamp": time.time(),
+                    "last_seen_ts": _latest_ts(previous, last_seen_ts),
+                }, private=True, indent=None)
+        except Exception as e:
+            logger.error(f"Failed to save conversation {channel_id}:{thread_ts} to disk: {e}")
 
     def get_last_seen_ts(self, channel_id: str, thread_ts: str) -> str | None:
         """Slack ts of the latest thread message coolton's stored history for
         this thread covers — anything posted after it (while coolton wasn't
         mentioned) is something it hasn't seen. None if unknown."""
-        with self._lock:
-            entry = self._store.get((channel_id, thread_ts))
-            return entry.get("last_seen_ts") if entry else None
+        with self._locks.hold((channel_id, thread_ts)):
+            entry = self._load(channel_id, thread_ts)
+        return entry["last_seen_ts"] if entry else None
 
-    def _cleanup(self) -> None:
-        """Remove expired entries and enforce max conversation limit.
-
-        NOTE: Must be called inside the lock.
-        """
-        now = time.time()
-
-        # Remove expired entries
-        expired = [
-            k
-            for k, v in self._store.items()
-            if now - v["timestamp"] > self._ttl_seconds
-        ]
-        for k in expired:
-            del self._store[k]
-
-        # Enforce max limit
-        if len(self._store) > self._max_conversations:
-            sorted_keys = sorted(
-                self._store.keys(), key=lambda k: self._store[k]["timestamp"]
-            )
-            excess = len(self._store) - self._max_conversations
-            for k in sorted_keys[:excess]:
-                del self._store[k]
-
-    def _load_from_disk(self) -> None:
-        """Load and deserialize conversation histories from disk on startup."""
-        if not os.path.exists(self._file_path):
-            return
-
-        with self._lock:
-            try:
-                with open(self._file_path, "r") as f:
-                    raw_data = json.load(f)
-                
-                now = time.time()
-                loaded_count = 0
-                
-                for key_str, entry in raw_data.items():
-                    try:
-                        if not isinstance(entry, dict) or "timestamp" not in entry:
-                            raise ValueError("malformed entry (missing timestamp)")
-                        # Skip expired histories
-                        if now - entry["timestamp"] > self._ttl_seconds:
-                            continue
-                        
-                        # Split the string key "channel_id:thread_ts" back into a tuple
-                        channel_id, thread_ts = key_str.split(":", 1)
-                        key_tuple = (channel_id, thread_ts)
-                        
-                        # Deserialize the JSON dictionaries back into rich Pydantic AI objects
-                        messages = ModelMessagesTypeAdapter.validate_python(entry["messages"])
-                        if not _is_valid_history(messages):
-                            logger.error(
-                                "Skipping structurally invalid stored history for %s "
-                                "(unpaired tool call/return) — this thread will start fresh.",
-                                key_str,
-                            )
-                            continue
-
-                        self._store[key_tuple] = {
-                            "messages": messages,
-                            "timestamp": entry["timestamp"],
-                            "last_seen_ts": entry.get("last_seen_ts"),
-                        }
-                        loaded_count += 1
-                    except Exception as e:
-                        logger.error(f"Failed to deserialize history for {key_str}: {e}")
-                
-                logger.info(f"Loaded {loaded_count} active conversations from {self._file_path}")
-            except Exception as e:
-                logger.error(f"Error loading conversations from disk: {e}")
-
-    def _write_snapshot(self, snapshot: dict, seq: int) -> None:
-        """Serialize and atomically write a point-in-time copy of the store.
-
-        Deliberately called OUTSIDE self._lock (see set_history/get_history) so
-        a full-store JSON dump never blocks other channels' in-memory reads or
-        writes. Concurrent calls may therefore finish out of order; `seq`
-        (assigned under self._lock at snapshot time) lets a stale write detect
-        that a newer one already landed and skip clobbering it, under
-        self._write_order_lock — a much smaller critical section than the
-        serialize+write this replaces.
-        """
+    def _forget_expired(self) -> None:
+        """Delete every conversation nobody has written to within the TTL (a file's
+        mtime is its last write)."""
+        cutoff = time.time() - self._ttl_seconds
         try:
-            serialized_data = {}
-            for (channel_id, thread_ts), entry in snapshot.items():
-                # Convert Pydantic AI's rich ModelMessage objects into plain JSON-serializable types
-                serialized_messages = ModelMessagesTypeAdapter.dump_python(
-                    entry["messages"],
-                    mode="json"
-                )
-
-                # Flatten the tuple key to a JSON-compatible string
-                key_str = f"{channel_id}:{thread_ts}"
-                serialized_data[key_str] = {
-                    "messages": serialized_messages,
-                    "timestamp": entry["timestamp"],
-                    "last_seen_ts": entry.get("last_seen_ts"),
-                }
-
-            # Atomic write (write to a unique temp file first, then replace).
-            # A unique name (not a fixed `.tmp` suffix) is required because
-            # writers are no longer mutually exclusive here.
-            directory = os.path.dirname(os.path.abspath(self._file_path)) or "."
-            fd, temp_file = tempfile.mkstemp(prefix=".conversations-", suffix=".tmp", dir=directory)
+            files = list(os.scandir(self._directory))
+        except FileNotFoundError:
+            return
+        for f in files:
             try:
-                with os.fdopen(fd, "w") as f:
-                    json.dump(serialized_data, f, indent=2)
-                with self._write_order_lock:
-                    if seq >= self._written_seq:
-                        os.replace(temp_file, self._file_path)
-                        self._written_seq = seq
-                    else:
-                        os.unlink(temp_file)
-            finally:
-                if os.path.exists(temp_file):
-                    os.unlink(temp_file)
+                if f.name.endswith(".json") and f.stat().st_mtime < cutoff:
+                    os.remove(f.path)
+            except OSError:
+                logger.exception("Couldn't forget expired conversation %s", f.path)
 
-        except Exception as e:
-            logger.error(f"Failed to save conversations to disk: {e}")
+    def _migrate(self, legacy_file: str) -> None:
+        """Split the single file every conversation used to share into per-conversation
+        files, once; the old file is kept beside them as `<name>.migrated`."""
+        if not os.path.exists(legacy_file):
+            return
+        moved = 0
+        for key, entry in load_json(legacy_file).items():
+            channel_id, _, thread_ts = key.partition(":")
+            path = self._path(channel_id, thread_ts)
+            if not isinstance(entry, dict) or os.path.exists(path):
+                continue
+            save_json(path, {**entry, "channel_id": channel_id, "thread_ts": thread_ts}, private=True, indent=None)
+            written_at = entry.get("timestamp")
+            if isinstance(written_at, (int, float)):
+                os.utime(path, (written_at, written_at))
+            moved += 1
+        if os.path.exists(legacy_file):
+            os.replace(legacy_file, f"{legacy_file}.migrated")
+        logger.info("Moved %d conversations from %s into %s/", moved, legacy_file, self._directory)
+
+
+def _remove(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass

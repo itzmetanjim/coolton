@@ -46,8 +46,6 @@ def test_provider(provider_name: str, config: dict) -> tuple[bool, str, float, s
     raw: dict = {}
 
     try:
-        provider_config.apply_provider_env(provider_name, config["api_key"])
-
         from pydantic_ai import Agent
 
         if config.get("base_url"):
@@ -72,7 +70,7 @@ def test_provider(provider_name: str, config: dict) -> tuple[bool, str, float, s
                 ),
             )
         else:
-            model = config["model"]
+            model = provider_config.build_model(config["model"], config["api_key"])
 
         a = Agent(model)
         result = a.run_sync("Hello! Respond with the single word 'ok' if you receive this.")

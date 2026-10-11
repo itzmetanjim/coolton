@@ -15,6 +15,7 @@ import agent.thread_status as thread_status
 from agent import AgentDeps, run_agent
 from agent.message_split import MARKDOWN_LIMIT, split_markdown
 from agent.redact import redact as _redact
+from agent.platforms.web import WebPlatform
 from agent.surface import get_surface as _surface
 from thread_context import conversation_store, conversation_trace_store
 from listeners.views.feedback_builder import build_feedback_blocks
@@ -155,7 +156,8 @@ def run_agent_turn(
     from agent.active_runs import mark_run_finished, mark_run_started
     from agent.inflight_runs import record_finished as _record_inflight_finished, record_start as _record_inflight_start
     turn_started = time.perf_counter()
-    mark_run_started(channel_id, thread_ts, time.time())
+    run_started_at = time.time()
+    mark_run_started(channel_id, thread_ts, run_started_at)
     _record_inflight_start(
         channel_id, thread_ts, message_ts=message_ts, user_id=user_id, text=text, is_slack=is_slack,
         on_behalf_of=on_behalf_of,
@@ -193,6 +195,9 @@ def run_agent_turn(
             on_behalf_of=on_behalf_of,
             provider_tag_filter=tag_filter,
             surface=surface,
+            # A web turn gets the web system prompt and CURRENT CONTEXT, not Slack's
+            # (which would look up a Slack channel called "web").
+            platform=None if is_slack else WebPlatform(client),
             debug_timer=debug_timer,
             fast=fast,
         )
@@ -352,7 +357,7 @@ def run_agent_turn(
         # Whatever happened, this thread is no longer "actively running" —
         # any message.py/app_mentioned.py check from here on should start a
         # fresh turn rather than queuing as a steer for a run that's over.
-        mark_run_finished(channel_id, thread_ts)
+        mark_run_finished(channel_id, thread_ts, run_started_at)
         _record_inflight_finished(channel_id, thread_ts)
         if is_slack:
             thread_status.stop(channel_id, thread_ts)
@@ -365,23 +370,28 @@ def run_agent_turn(
         # arriving in the last moment before the run's own final response. Simply
         # discarding it here (the old behavior) silently drops it — the thread then
         # looks like it stopped answering anything at all. Drain and actually answer
-        # it with a fresh turn instead.
-        from agent.steering_store import clear_steering_messages, peek_steering_messages
-        stranded = peek_steering_messages(channel_id, thread_ts)
-        clear_steering_messages(channel_id, thread_ts)
+        # it with a fresh turn instead. Messages from anyone but the person this turn
+        # was for were never folded in (agent.steering_store), so they're answered
+        # here too, each sender in their own turn.
+        from agent.steering_store import take_next_sender_messages
+        stranded = take_next_sender_messages(channel_id, thread_ts)
         if stranded and _stranded_recursion_depth >= _MAX_STRANDED_RECURSION_DEPTH:
             # Give up recursing rather than risk an unbounded stack — this
             # should never actually happen (it would take that many turns
             # each stranding another message in the narrow window between
-            # this turn ending and the queue being drained), but silently
-            # dropping the last stranded message is still better than a
-            # crash, and it's logged so a real pathological case is visible.
+            # this turn ending and the queue being drained), but dropping
+            # what's left is still better than a crash, and it's logged so a
+            # real pathological case is visible.
+            from agent.steering_store import clear_steering_messages
+            clear_steering_messages(channel_id, thread_ts)
             logger.error(
                 "Stranded-steering recursion hit its depth limit (%d) in %s/%s; "
-                "dropping the last stranded message instead of recursing further.",
+                "dropping the rest of the queue instead of recursing further.",
                 _MAX_STRANDED_RECURSION_DEPTH, channel_id, thread_ts,
             )
         elif stranded:
+            # One sender's messages make one turn; anyone after them stays queued,
+            # and that turn's own end picks them up the same way.
             last = stranded[-1]
             run_agent_turn(
                 client=client,
@@ -394,7 +404,7 @@ def run_agent_turn(
                 message_ts=last["message_ts"] or thread_ts,
                 user_id=last["user_id"],
                 user_token=user_token,
-                text=last["text"],
+                text="\n\n".join(m["text"] for m in stranded),
                 history=conversation_store.get_history(channel_id, thread_ts),
                 _stranded_recursion_depth=_stranded_recursion_depth + 1,
             )

@@ -63,3 +63,18 @@ def test_network_error_falls_through_to_mermaid_ink(monkeypatch):
 
     monkeypatch.setattr("agent.tools.mermaid_tool.requests.get", fake_get)
     assert render_mermaid("graph TD; A-->B;").startswith("https://mermaid.ink/")
+
+
+def test_mermaid_ink_gets_its_pako_format_which_decodes_back_to_the_diagram(monkeypatch):
+    import base64
+    import json
+    import zlib
+
+    from agent.tools import mermaid_tool
+
+    monkeypatch.setattr(mermaid_tool, "_verify_get", lambda url: True)
+    url = mermaid_tool._render_with_mermaid_ink("graph TD; A-->B;", "dark")
+
+    encoded = url.split("/img/pako:", 1)[1].split("?", 1)[0]
+    state = json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))))
+    assert state["code"] == "graph TD; A-->B;" and json.loads(state["mermaid"]) == {"theme": "dark"}

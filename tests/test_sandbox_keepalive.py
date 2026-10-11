@@ -1,5 +1,6 @@
 import pytest
 
+from agent import sandbox_helpers
 from agent import sandbox_keepalive as ka
 
 
@@ -90,12 +91,12 @@ def test_firing_the_timer_pauses_the_sandbox_and_clears_the_entry(monkeypatch):
 
     class _FakeSandboxAPI:
         @staticmethod
-        def connect(sandbox_id):
+        def connect(sandbox_id, timeout=None):
             assert sandbox_id == "sbx-1"
             return _FakeSandbox()
 
-    monkeypatch.setattr(ka, "get_thread_sandbox_id", lambda c, t: "sbx-1")
-    monkeypatch.setattr(ka, "Sandbox", _FakeSandboxAPI)
+    monkeypatch.setattr(sandbox_helpers, "get_thread_sandbox_id", lambda c, t: "sbx-1")
+    monkeypatch.setattr(sandbox_helpers, "Sandbox", _FakeSandboxAPI)
 
     ka.arm("C1", "1.1", 120)
     timer = ka._timers[("C1", "1.1")]
@@ -107,8 +108,8 @@ def test_firing_the_timer_pauses_the_sandbox_and_clears_the_entry(monkeypatch):
 
 def test_firing_the_timer_is_a_noop_when_no_sandbox_is_stored(monkeypatch):
     connected = []
-    monkeypatch.setattr(ka, "get_thread_sandbox_id", lambda c, t: None)
-    monkeypatch.setattr(ka, "Sandbox", type("S", (), {"connect": staticmethod(lambda sid: connected.append(sid))}))
+    monkeypatch.setattr(sandbox_helpers, "get_thread_sandbox_id", lambda c, t: None)
+    monkeypatch.setattr(sandbox_helpers, "Sandbox", type("S", (), {"connect": staticmethod(lambda sid, timeout=None: connected.append(sid))}))
 
     ka.arm("C1", "1.1", 120)
     ka._timers[("C1", "1.1")].fire()
@@ -117,11 +118,11 @@ def test_firing_the_timer_is_a_noop_when_no_sandbox_is_stored(monkeypatch):
 
 
 def test_firing_the_timer_swallows_errors(monkeypatch):
-    def boom(sandbox_id):
+    def boom(sandbox_id, timeout=None):
         raise RuntimeError("connect failed")
 
-    monkeypatch.setattr(ka, "get_thread_sandbox_id", lambda c, t: "sbx-1")
-    monkeypatch.setattr(ka, "Sandbox", type("S", (), {"connect": staticmethod(boom)}))
+    monkeypatch.setattr(sandbox_helpers, "get_thread_sandbox_id", lambda c, t: "sbx-1")
+    monkeypatch.setattr(sandbox_helpers, "Sandbox", type("S", (), {"connect": staticmethod(boom)}))
 
     ka.arm("C1", "1.1", 120)
     ka._timers[("C1", "1.1")].fire()  # must not raise

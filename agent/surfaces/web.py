@@ -64,9 +64,6 @@ class WebSurface:
         self._append({"type": "reaction", "op": "remove", "emoji": emoji_name, "target_seq": self.target_seq})
         return f"Removed :{emoji_name}: reaction."
 
-    def set_activity(self, text: str) -> None:
-        self._append({"type": "turn_status", "text": text})
-
     def download_attachments(self, sandbox: Any, limit: int = 20) -> str:
         from web.conversations import download_conversation_attachments
         return download_conversation_attachments(self.conversation_id, sandbox, limit)
