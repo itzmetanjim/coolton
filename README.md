@@ -151,7 +151,7 @@ reached through a browser instead of chat. a few things underpin that:
   vision-capable models.
 - **image generation**: generate and post images directly to the thread.
 - **mermaid diagrams**, **whiteboard embeds** (tldraw), and **HTML embeds**: rendered and hosted
-  via `coolton_web_helper.py`, a small file host + base64-HTML-decoder service.
+  via `coolton_web_helper.py`, a small file host.
 
 ### scheduling & automation
 
@@ -179,9 +179,8 @@ account or OAuth needed on the user's end. See the `slack-bot-deploy` and `cf-wr
 | path | what it is |
 | --- | --- |
 | `app.py` | main entry point, Socket Mode, single workspace. |
-| `app_oauth.py` | alternative entry point, HTTP mode with a multi-workspace OAuth installation store. |
 | `oauth_server.py` | small standalone service that handles single-workspace reinstall (token exchange, `.env` update, service restart). |
-| `coolton_web_helper.py` | file host + base64-HTML-decoder, used for embeds and sandbox output; runs alongside `app.py`. |
+| `coolton_web_helper.py` | file host, used for embeds and sandbox output; runs alongside `app.py`. |
 | `github_proxy.py` | host-side GitHub proxy. issues/revokes per-sandbox tokens, rewrites them to the real PAT for outbound requests. |
 | `agent/agent.py` | the pydantic-ai agent: system prompt, every `@agent.tool`, and provider/model selection. |
 | `agent/kevinton.py` | the silent skill-capture agent + the `spawn_kevinton()` daemon hook. |
@@ -273,8 +272,6 @@ pip install -r requirements.txt
 ```sh
 python3 app.py                    # Socket Mode (single workspace, local dev)
 python3 coolton_web_helper.py     # optional but needed for embeds/file hosting
-# or, for multi-workspace HTTP/OAuth mode:
-python3 app_oauth.py
 ```
 
 in production, `coolton_start.sh` runs `app.py` and `coolton_web_helper.py` together and tears

@@ -4,8 +4,7 @@ import time. If an entrypoint imports anything from the `agent` package before
 calling load_dotenv(), those ids are permanently empty for the process's whole
 lifetime, while build_context_prompt (same file) re-reads them correctly every
 turn — the model then sees two contradictory values for its own identity in
-every prompt. Both app.py and app_oauth.py must call load_dotenv() before any
-`agent`-package import.
+every prompt. app.py must call load_dotenv() before any `agent`-package import.
 """
 
 from pathlib import Path
@@ -15,10 +14,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def test_app_py_calls_load_dotenv_before_any_agent_import():
     _assert_load_dotenv_precedes_agent_import(REPO_ROOT / "app.py")
-
-
-def test_app_oauth_py_calls_load_dotenv_before_any_agent_import():
-    _assert_load_dotenv_precedes_agent_import(REPO_ROOT / "app_oauth.py")
 
 
 def _assert_load_dotenv_precedes_agent_import(path: Path) -> None:

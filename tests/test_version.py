@@ -3,11 +3,18 @@ import subprocess
 from unittest.mock import Mock
 
 
-def test_commit_hash_resolves_from_real_git_repo():
+def test_the_footer_shows_the_running_commit(monkeypatch):
+    commit = "0123456789abcdef0123456789abcdef01234567"
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(stdout=commit + "\n")))
     import agent.version as version
-    assert version.COMMIT_HASH
-    assert version.COMMIT_SHORT_HASH == version.COMMIT_HASH[:10]
-    assert version.COMMIT_URL == f"{version.REPO_URL}/commit/{version.COMMIT_HASH}"
+    importlib.reload(version)
+    try:
+        assert version.COMMIT_HASH == commit
+        assert version.COMMIT_SHORT_HASH == "0123456789"
+        assert version.COMMIT_URL == f"https://github.com/itzmetanjim/coolton/commit/{commit}"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(version)  # restore real state for any later test
 
 
 def test_falls_back_gracefully_when_git_unavailable(monkeypatch):
