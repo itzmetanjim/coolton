@@ -124,6 +124,15 @@ def test_endpoint_url_rejects_unsafe_urls(tmp_store, url):
         store.add_endpoint("U1", "unsafe", url, "key", "model")
 
 
+@pytest.mark.parametrize("resolved", [["127.0.0.1"], ["93.184.216.34", "10.0.0.5"], ["::ffff:169.254.169.254"], []])
+def test_endpoint_url_rejects_a_host_that_resolves_somewhere_local_or_nowhere(tmp_store, monkeypatch, resolved):
+    """A name (127.0.0.1.nip.io) or a bare number (2130706433) can point at a local
+    address as well as a literal IP can."""
+    monkeypatch.setattr(store, "_resolve_host", lambda hostname: resolved)
+    with pytest.raises(ValueError):
+        store.add_endpoint("U1", "sneaky", "https://127.0.0.1.nip.io/v1", "key", "model")
+
+
 def test_endpoint_url_accepts_public_https_and_normalizes(tmp_store):
     ep_id = store.add_endpoint(
         "U1", "safe", " https://api.example.com/v1/ ", "key", "model"

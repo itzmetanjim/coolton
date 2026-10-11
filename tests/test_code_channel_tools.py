@@ -177,14 +177,59 @@ def test_archiving_posts_the_summary_and_archives_without_it_when_there_is_no_or
     calls, responses = slack
     unregistered = []
     monkeypatch.setattr("agent.code_channel_store.unregister_code_channel", unregistered.append)
-    responses["agents.conversations.archive"] = {"ok": False, "error": "no_origin_link"}
+    archive_results = iter([{"ok": False, "error": "no_origin_link"}, {"ok": True}])
+
+    def call(method, **params):
+        calls.append((method, params))
+        return next(archive_results)
+
+    monkeypatch.setattr(tools, "call", call)
     client = Mock()
     client.chat_postMessage.return_value = {"ts": "9.9"}
 
-    tools.archive(client, "CCODE", "done: shipped the fix")
+    tools.archive(client, "CCODE", "done: shipped the fix", "U0ASKER1")
 
-    client.chat_postMessage.assert_called_once_with(channel="CCODE", markdown_text="done: shipped the fix")
+    client.chat_postMessage.assert_called_once_with(
+        channel="CCODE", markdown_text="done: shipped the fix\n\n_Archived by <@U0ASKER1>._")
     assert [p for _, p in calls] == [{"channel_id": "CCODE", "summary_message_ts": "9.9"}, {"channel_id": "CCODE"}]
+    client.chat_delete.assert_not_called()
+    assert unregistered == ["CCODE"]
+
+
+def test_a_failed_archive_takes_back_its_message(slack, monkeypatch):
+    calls, responses = slack
+    responses["agents.conversations.archive"] = {"ok": False, "error": "restricted_action"}
+    client = Mock()
+    client.chat_postMessage.return_value = {"ts": "9.9"}
+
+    result = tools.archive(client, "CCODE", "", "U0ASKER1")
+
+    assert result.startswith("Error")
+    client.chat_postMessage.assert_called_once_with(channel="CCODE", markdown_text="_Archived by <@U0ASKER1>._")
+    client.chat_delete.assert_called_once_with(channel="CCODE", ts="9.9")
+
+
+def test_a_banned_persons_command_gets_nothing_posted(monkeypatch):
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda user_id: user_id == "UBANNED")
+    coolton, app_client = Mock(), Mock()
+
+    code_channel_app.handle_command({"command": "/run-tests", "text": "<!channel>", "channel_id": "CCODE",
+                                     "user_id": "UBANNED"}, app_client, coolton)
+
+    coolton.chat_postMessage.assert_not_called()
+    app_client.conversations_invite.assert_not_called()
+
+
+def test_a_commands_text_never_pings_a_group(monkeypatch):
+    monkeypatch.setattr("agent.ban_store.is_banned", lambda user_id: False)
+    monkeypatch.setattr(code_channel_app, "handle_code_channel_app_mention", lambda *a: None)
+    coolton = Mock()
+    coolton.chat_postMessage.return_value = {"ts": "1.1"}
+
+    code_channel_app.handle_command({"command": "/run-tests", "text": "x` <!channel> `", "channel_id": "CCODE",
+                                     "user_id": "U1"}, Mock(), coolton)
+
+    assert "<!channel>" not in coolton.chat_postMessage.call_args.kwargs["text"]
 
 
 def test_a_code_channel_session_is_set_by_the_code_channels_app(monkeypatch):

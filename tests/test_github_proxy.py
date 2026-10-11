@@ -505,3 +505,33 @@ def test_multi_member_gzip_is_checked_in_full(monkeypatch):
         _json.dumps({"query": "mutation { deleteRepository(input: {}) { clientMutationId } }"}).encode())
     sent, code = _send(monkeypatch, "/api/graphql", {"Content-Encoding": "gzip", "Content-Length": str(len(body))}, body)
     assert sent is None and code == 403
+
+
+def test_sandbox_tokens_expire_and_survive_a_proxy_restart(tmp_path, monkeypatch):
+    allowlist = gp._Allowlist()
+    allowlist.add("fresh")
+    allowlist.add("old", ttl=-1)
+    assert "fresh" in allowlist and "old" not in allowlist
+
+    path = tmp_path / "tokens.json"
+    allowlist.save(path)
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    restarted = gp._Allowlist()
+    restarted.load(path)
+    assert "fresh" in restarted and "old" not in restarted
+
+
+def test_the_admin_token_is_its_own_secret_never_the_github_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("GH_PROXY_ADMIN_TOKEN", raising=False)
+    monkeypatch.setattr(gp, "ADMIN_TOKEN_FILE", tmp_path / "admin")
+    monkeypatch.setattr(gp, "GITHUB_TOKEN", "ghp_real")
+
+    token = gp._load_admin_token()
+
+    assert token and token != "ghp_real"
+    assert (tmp_path / "admin").read_text() == token and gp._load_admin_token() == token
+    assert oct((tmp_path / "admin").stat().st_mode & 0o777) == "0o600"
+
+    from agent import github_proxy_client
+    monkeypatch.setattr(github_proxy_client, "ADMIN_TOKEN_FILE", tmp_path / "admin")
+    assert github_proxy_client._admin_token() == token  # coolton reads the same one

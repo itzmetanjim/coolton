@@ -16,7 +16,6 @@ fetched files are staged under <repo>/STAGING_DIR until approved or rejected.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import threading
@@ -24,6 +23,7 @@ import time
 import uuid
 
 from agent.admin_alerts import ADMIN_USER_ID, notify_admin
+from agent.json_file import load_json, save_json
 
 PROPOSALS_FILE = "skill_proposals.json"
 STAGING_DIR = "skill_proposals"
@@ -69,19 +69,11 @@ def new_staging_dir(repo_root: str) -> str:
 
 
 def _load() -> dict:
-    try:
-        with open(PROPOSALS_FILE) as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return load_json(PROPOSALS_FILE)
 
 
 def _save(data: dict) -> None:
-    temp = f"{PROPOSALS_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, PROPOSALS_FILE)
+    save_json(PROPOSALS_FILE, data)
 
 
 def _review_blocks(proposal_id: str, summary: str, preview: str) -> list[dict]:
@@ -98,6 +90,11 @@ def _review_blocks(proposal_id: str, summary: str, preview: str) -> list[dict]:
     return blocks
 
 
+# Pending proposals one person (or kevinton) may have waiting at once: each is a DM to
+# the maintainer, and an install's staged files on disk.
+MAX_PENDING_PER_REQUESTER = 5
+
+
 def submit(spec: dict, deps, description: str, preview: str = "") -> str:
     """Store a proposed skill change, DM it to the maintainer for review, and
     return the message for the model to relay."""
@@ -106,6 +103,13 @@ def submit(spec: dict, deps, description: str, preview: str = "") -> str:
     requested_by = getattr(deps, "user_id", "") or ""
     with _lock:
         data = _load()
+        pending = [p for p in data.values()
+                   if p.get("from_kevinton") == from_kevinton and (from_kevinton or p.get("requested_by") == requested_by)]
+        if len(pending) >= MAX_PENDING_PER_REQUESTER:
+            discard({"spec": spec})
+            return (f"Not submitted: {MAX_PENDING_PER_REQUESTER} skill changes from "
+                    f"{'kevinton' if from_kevinton else 'this person'} are already waiting for the maintainer's "
+                    "review. Tell the user to wait for those to be approved or rejected first.")
         data[proposal_id] = {
             "spec": spec,
             "description": description,

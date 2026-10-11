@@ -29,6 +29,7 @@ STOPS_THE_REQUEST = {"nsfw", "spam", "other"}
 ALLOWED_AFTER_STOP = {"add_emoji_reaction", "report_abuse_tool", "skip"}
 
 _MESSAGE_CHARS = 1500
+_REPORT_INTERVAL_SECONDS = 10 * 60
 
 
 def _link(deps) -> str:
@@ -62,12 +63,15 @@ def report(deps, category: str, reason: str) -> str:
         reported.add(category)
         message = redact((deps.request_text or "")[:_MESSAGE_CHARS], context="abuse report")
         quoted = "\n".join(f"> {line}" for line in message.splitlines()) or "> (no text)"
+        # At most one DM per person per category every 10 minutes: anyone can make coolton
+        # file these (a message claiming a security hole, say), and a DM each turn is spam.
         notify_admin(
             f":rotating_light: *coolton abuse report: {CATEGORIES[category]}*\n"
             f"*From:* <@{deps.user_id}> (`{deps.user_id}`)\n"
             f"*Where:* {_link(deps)}\n"
             f"*Coolton's note:* {redact(reason or '(none)', context='abuse report')}\n"
-            f"*Flagged message:*\n{quoted}"
+            f"*Flagged message:*\n{quoted}",
+            dedupe_key=f"abuse:{deps.user_id}:{category}", min_interval_seconds=_REPORT_INTERVAL_SECONDS,
         )
         logger.warning("Abuse report (%s) from %s in %s/%s: %s", category, deps.user_id,
                        deps.channel_id, deps.thread_ts, reason)

@@ -62,6 +62,10 @@ def handle_code_channel_app_mention(event: dict, app_client: WebClient, coolton:
     channel_id, user_id = event.get("channel", ""), event.get("user", "")
     if not channel_id or not user_id:
         return
+    from agent.ban_store import is_banned
+
+    if is_banned(user_id):
+        return
     _add_coolton(app_client, channel_id)
     _register_if_code_channel(coolton, channel_id, user_id)
 
@@ -99,9 +103,16 @@ def handle_session_stopped(event: dict, coolton: WebClient) -> None:
 
 def _hand_to_coolton(coolton: WebClient, app_client: WebClient, channel_id: str, user_id: str,
                      notice: str, text: str, team_id: str | None = None) -> None:
-    """Post `notice` in the channel as coolton, then answer `text` as `user_id`'s message there."""
+    """Post `notice` in the channel as coolton, then answer `text` as `user_id`'s message there.
+    Nothing for a banned user, and the notice (which quotes what they typed) never pings a
+    group (agent.mentions)."""
+    from agent.ban_store import is_banned
+    from agent.mentions import defuse_mass_mentions
+
+    if is_banned(user_id):
+        return
     try:
-        ts = coolton.chat_postMessage(channel=channel_id, text=notice)["ts"]
+        ts = coolton.chat_postMessage(channel=channel_id, text=defuse_mass_mentions(notice))["ts"]
     except Exception:
         logger.exception("Code channels app: couldn't post in %s", channel_id)
         return

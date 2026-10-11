@@ -34,8 +34,19 @@ def _redirect_uri() -> str:
     )
 
 
+def _without_secrets(value):
+    """`value` with every token- or secret-named key dropped, recursively: Slack's
+    oauth.v2.access response carries the new bot and user tokens."""
+    if isinstance(value, dict):
+        return {k: _without_secrets(v) for k, v in value.items()
+                if not any(hint in k.lower() for hint in ("token", "secret"))}
+    if isinstance(value, list):
+        return [_without_secrets(v) for v in value]
+    return value
+
+
 def _log_error(payload: dict) -> None:
-    entry = {"ts": datetime.now(timezone.utc).isoformat(), **payload}
+    entry = _without_secrets({"ts": datetime.now(timezone.utc).isoformat(), **payload})
     try:
         with open(ERROR_LOG_PATH, "a") as f:
             f.write(json.dumps(entry) + "\n")
@@ -70,6 +81,8 @@ def _update_env(bot_token: str, user_token: str) -> int:
             changed += 1
     tmp = ENV_PATH.with_name(".env.tmp")
     tmp.write_text("".join(lines))
+    # .env is full of secrets: keep whatever permissions it had (0600), not the umask's.
+    os.chmod(tmp, ENV_PATH.stat().st_mode & 0o777)
     os.replace(tmp, ENV_PATH)
     return changed
 

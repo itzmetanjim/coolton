@@ -110,3 +110,27 @@ def test_oauth_redirect_restarts_when_update_env_changes_lines(client, monkeypat
     assert resp.status_code == 200
     assert restarted == [("UBOT1",)]
     assert "SLACK_BOT_TOKEN=xoxb-new" in env_path.read_text()
+
+
+def test_a_failed_install_never_logs_the_tokens_slack_sent(client, monkeypatch, tmp_path):
+    """The wrong person completing the install still gets real tokens back from Slack;
+    those must not land in oauth_errors.log."""
+    import json as _json
+
+    monkeypatch.setenv("COOLTON_USER_ID", "UOWNER")
+    with patch.object(oauth_server, "_exchange", return_value=_ok_exchange_result(user_id="USOMEONE_ELSE")):
+        resp = client.get("/slack/oauth_redirect?code=abc")
+    assert resp.status_code == 403
+    logged = oauth_server.ERROR_LOG_PATH.read_text()
+    assert "xoxb-new" not in logged and "xoxp-new" not in logged
+    assert _json.loads(logged.splitlines()[-1])["authed_user_id"] == "USOMEONE_ELSE"
+
+
+def test_rewriting_env_keeps_it_private(monkeypatch, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("SLACK_BOT_TOKEN=old\nSLACK_USER_TOKEN=old\n")
+    env.chmod(0o600)
+    monkeypatch.setattr(oauth_server, "ENV_PATH", env)
+
+    assert oauth_server._update_env("xoxb-new", "xoxp-new") == 2
+    assert oct(env.stat().st_mode & 0o777) == "0o600"

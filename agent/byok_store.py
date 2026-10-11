@@ -1,15 +1,10 @@
-import os
-import json
-import base64
 import logging
-import tempfile
 import threading
 import uuid
 import ipaddress
 from urllib.parse import urlparse
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from agent.json_file import load_json, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +12,6 @@ BYOK_STORE_FILE = "byok_store.json"
 BYOK_KEY_FILE = "byok_key.bin"
 BYOK_ENV_KEY = "BYOK_ENCRYPTION_KEY"
 store_lock = threading.Lock()
-_key_lock = threading.Lock()
 
 
 def validate_endpoint_url(base_url: str) -> str:
@@ -46,70 +40,38 @@ def validate_endpoint_url(base_url: str) -> str:
     hostname = hostname.rstrip(".").lower()
     if hostname in {"localhost", "metadata.google.internal", "metadata.google.com"}:
         raise ValueError("Endpoint URL must not target a local or metadata host")
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        address = None
-    if address is not None and (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_unspecified
-    ):
+    # Every address the name resolves to, not just a literal IP in the URL: a name like
+    # 127.0.0.1.nip.io, or a number like 2130706433, reaches a local address too.
+    addresses = _resolve_host(hostname)
+    if not addresses:
+        raise ValueError(f"Endpoint URL's host {hostname} doesn't resolve")
+    if any(not ipaddress.ip_address(address).is_global for address in addresses):
         raise ValueError("Endpoint URL must not target a private or local address")
     return value.rstrip("/")
 
 
+def _resolve_host(hostname: str) -> list[str]:
+    """Every IP address `hostname` resolves to (it may itself be an IP), or [] if none."""
+    import socket
+
+    try:
+        return sorted({info[4][0].split("%")[0] for info in socket.getaddrinfo(hostname, 443)})
+    except (OSError, UnicodeError):
+        return []
+
+
 def _get_fernet() -> Fernet:
-    key = os.environ.get(BYOK_ENV_KEY)
-    if key:
-        key_bytes = key.encode() if isinstance(key, str) else key
-        if len(key_bytes) != 44:
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=b"coolton-byok-salt",
-                iterations=100000,
-            )
-            key_bytes = base64.urlsafe_b64encode(kdf.derive(key_bytes))
-        else:
-            key_bytes = (
-                key_bytes if isinstance(key_bytes, bytes) else key_bytes.encode()
-            )
-        return Fernet(key_bytes)
+    from agent.secret_box import fernet
 
-    with _key_lock:
-        if os.path.exists(BYOK_KEY_FILE):
-            with open(BYOK_KEY_FILE, "rb") as f:
-                return Fernet(f.read().strip())
-
-        key = Fernet.generate_key()
-        fd, name = tempfile.mkstemp(prefix="byok-key-", dir=os.path.dirname(os.path.abspath(BYOK_KEY_FILE)) or ".")
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "wb") as f:
-                f.write(key)
-            os.replace(name, BYOK_KEY_FILE)
-        finally:
-            if os.path.exists(name):
-                os.unlink(name)
-        logger.info("Generated new BYOK encryption key at %s", BYOK_KEY_FILE)
-        return Fernet(key)
+    return fernet(BYOK_ENV_KEY, BYOK_KEY_FILE, b"coolton-byok-salt")
 
 
 def _load_store() -> dict:
-    if not os.path.exists(BYOK_STORE_FILE):
-        return {}
-    with open(BYOK_STORE_FILE, "r") as f:
-        return json.load(f)
+    return load_json(BYOK_STORE_FILE)
 
 
 def _save_store(data: dict):
-    temp = f"{BYOK_STORE_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, BYOK_STORE_FILE)
+    save_json(BYOK_STORE_FILE, data, private=True)
 
 
 def _enc(fernet: Fernet, value: str) -> str:

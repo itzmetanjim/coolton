@@ -359,9 +359,10 @@ def test_mcp_scheduled_message_is_footed():
     assert args["message"] == f"later\n\n(sent from <@{ASKER}>)"
 
 
-def test_mcp_canvas_create_and_update_are_not_footed():
+def test_mcp_canvas_create_and_update_are_not_footed(monkeypatch):
     """A canvas is one document edited repeatedly — a footer per edit piled
     up inside it, headings included."""
+    monkeypatch.setattr(slack_access, "fetch_file_info", lambda file_id, token: ({"is_public": True}, None))
     create = {"title": "t", "content": "# Hi\n\nbody"}
     args, _ = guard_args("slack_create_canvas", create, _deps())
     assert args == create
@@ -382,6 +383,44 @@ def test_mcp_automated_turn_is_credited_to_the_owner():
         _deps(user_id="AUTOMATED", on_behalf_of=ASKER),
     )
     assert args["message"].endswith(f"(sent from <@{ASKER}>)")
+
+
+@pytest.mark.parametrize("name,args", [
+    ("slack_list_user_channels", {}),  # its default includes private channels
+    ("slack_list_user_channels", {"types": "public_channel,im"}),
+    ("slack_search_channels", {"channel_types": "public_channel,private_channel"}),
+])
+def test_mcp_channel_listings_never_reveal_private_channels_or_dms(name, args):
+    _, error = guard_args(name, args, SimpleNamespace(channel_id="C1", user_id=ASKER))
+    assert "only lists public channels" in error
+
+
+@pytest.mark.parametrize("name,args", [
+    ("slack_list_user_channels", {"types": "public_channel"}),
+    ("slack_search_channels", {"keywords": ["eng"]}),  # public by default
+])
+def test_mcp_public_channel_listings_are_fine(name, args):
+    assert guard_args(name, args, SimpleNamespace(channel_id="C1", user_id=ASKER))[1] is None
+
+
+@pytest.mark.parametrize("name,args", [
+    ("slack_update_canvas", {"canvas_id": "F1", "sections": []}),
+    ("slack_update_list", {"list_id": "F1", "name": "x"}),
+    ("slack_add_list_record", {"list_id": "F1", "columns": {"Task": "x"}}),
+    ("slack_update_list_record", {"list_id": "F1", "record_id": "Rec1", "updated_columns": {"Task": "x"}}),
+])
+def test_mcp_edits_follow_the_file_rule(monkeypatch, name, args):
+    """A canvas or list only in a private channel can't be edited from outside it."""
+    monkeypatch.setattr(slack_access, "fetch_file_info", lambda file_id, token: ({"groups": ["GSECRET"]}, None))
+    _, error = guard_args(name, args, SimpleNamespace(channel_id="C1", user_id=ASKER))
+    assert "refused" in error
+    assert guard_args(name, args, SimpleNamespace(channel_id="GSECRET", user_id=ASKER))[1] is None
+
+
+def test_mcp_channel_creation_goes_through_the_api_tool_but_dms_are_fine():
+    deps = SimpleNamespace(channel_id="C1", user_id=ASKER)
+    assert "conversations.create" in guard_args("slack_create_conversation", {"channel_name": "x"}, deps)[1]
+    assert guard_args("slack_create_conversation", {"user_ids": ["U2"]}, deps)[1] is None
 
 
 def test_guarded_toolset_hides_blocked_tools_and_returns_refusals():

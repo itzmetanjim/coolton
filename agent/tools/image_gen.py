@@ -19,6 +19,13 @@ ASPECT_TO_SIZE = {
 }
 
 
+# Starts the result for a reply that's text instead of an image. That text is the
+# model's (and so whoever wrote the prompt's), so it's never read as a provider error:
+# a prompt asking for the reply "spending limit reached" would otherwise mark coolton's
+# keys out and HCAI dead for everyone.
+_NO_IMAGE = "Image error: the model returned no image"
+
+
 def _with_key_fallback(call, api_key: str, provider: str | None) -> str:
     """`call(api_key)`, retried with the provider's next API key while the one it used
     is out of credits or at a spending limit (agent.provider_config.on_outage, the same
@@ -27,7 +34,7 @@ def _with_key_fallback(call, api_key: str, provider: str | None) -> str:
 
     result = call(api_key)
     for _ in range(5):
-        if "image(s)" in result or not provider:
+        if "image(s)" in result or not provider or result.startswith(_NO_IMAGE):
             return result
         outage, next_key = on_outage(provider, api_key, result)
         if outage != "next_key":
@@ -185,7 +192,7 @@ def _edit_via_chat_completions(api_key: str, base_url: str, model: str, prompt: 
     urls = [u for u in urls if u]
     if not urls:
         reply = (message.get("content") or "").strip()
-        return f"Image error: the model returned no image{': ' + reply[:300] if reply else ''}"
+        return f"{_NO_IMAGE}{': ' + reply[:300] if reply else ''}"
     return "Generated {} image(s):\n".format(len(urls)) + "\n".join(f"{i}. {u}" for i, u in enumerate(urls, 1))
 
 

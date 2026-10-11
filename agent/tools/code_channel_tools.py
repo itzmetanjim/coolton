@@ -8,26 +8,20 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 
 from agent.code_channel_api import call, error_text
 from agent.code_channel_store import (
     canvas_views, forget_canvas_view, forget_view, is_code_channel, remember_canvas_view, remember_view,
     views as stored_views,
 )
+from agent.keyed_locks import KeyedLocks
 
 VIEW_TYPES = ("html", "diff", "block_kit", "canvas", "pull_request")
 CONTEXT_BAR_ICONS = ("branch", "folder", "hierarchy", "life-ring", "link", "globe", "terminal", "code", "search", "lock")
 # One setView at a time per channel: Slack fails tab creations that race each other in
 # the same channel with view_creation_failed (seen live when coolton made several tabs
 # with parallel tool calls).
-_view_locks: dict[str, threading.Lock] = {}
-_view_locks_guard = threading.Lock()
-
-
-def _view_lock(channel_id: str) -> threading.Lock:
-    with _view_locks_guard:
-        return _view_locks.setdefault(channel_id, threading.Lock())
+_view_locks = KeyedLocks()
 
 
 _COMMAND_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
@@ -112,7 +106,7 @@ def set_view(channel_id: str, view_type: str, view_key: str = "", name: str = ""
         if not created.get("ok"):
             return error_text(created)
         params.update(canvas_id=created["canvas_id"], access_level=access_level or "comment")
-    with _view_lock(channel_id):
+    with _view_locks.hold(channel_id):
         response = call("agents.conversations.setView", **params)
     if view_type == "block_kit" and response.get("error") == "invalid_blocks":
         # setView gives no detail for this; Slack's validator points at the problems.
@@ -335,23 +329,30 @@ def rename(channel_id: str, title: str) -> str:
     return "Renamed." if response.get("ok") else error_text(response)
 
 
-def archive(client, channel_id: str, summary: str) -> str:
-    """Post `summary` in the channel (as coolton), then archive it with that message
-    as its summary (also shared on the request's original message, when it has one)."""
+def archive(client, channel_id: str, summary: str, requester_id: str = "") -> str:
+    """Post `summary` in the channel (as coolton), naming who asked for the archive, then
+    archive it with that message as its summary (also shared on the request's original
+    message, when it has one). Nothing can be posted once it's archived, so that message
+    goes first, and it's deleted again if the archive fails (like agent.change_notices)."""
     denied = not_a_code_channel(channel_id)
     if denied:
         return denied
-    summary_ts = None
-    if summary:
-        try:
-            summary_ts = client.chat_postMessage(channel=channel_id, markdown_text=summary)["ts"]
-        except Exception as e:
-            return f"Error: couldn't post the summary: {e}"
-    response = call("agents.conversations.archive", channel_id=channel_id,
-                    **({"summary_message_ts": summary_ts} if summary_ts else {}))
-    if not response.get("ok") and response.get("error") == "no_origin_link" and summary_ts:
+    from agent.attribution import _attributable
+
+    who = f"<@{requester_id}>" if _attributable(requester_id) else "coolton automatically"
+    text = f"{summary.rstrip()}\n\n_Archived by {who}._" if summary else f"_Archived by {who}._"
+    try:
+        summary_ts = client.chat_postMessage(channel=channel_id, markdown_text=text)["ts"]
+    except Exception as e:
+        return f"Error: couldn't post the summary, so the channel wasn't archived: {e}"
+    response = call("agents.conversations.archive", channel_id=channel_id, summary_message_ts=summary_ts)
+    if not response.get("ok") and response.get("error") == "no_origin_link":
         response = call("agents.conversations.archive", channel_id=channel_id)
     if not response.get("ok"):
+        try:
+            client.chat_delete(channel=channel_id, ts=summary_ts)
+        except Exception:
+            pass
         return error_text(response)
     from agent.code_channel_store import unregister_code_channel
     unregister_code_channel(channel_id)
