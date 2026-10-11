@@ -89,6 +89,21 @@ def test_message_skips_hardcoded_channel(ctx, monkeypatch):
         run_turn.assert_not_called()
 
 
+@pytest.mark.parametrize("subtype, answered", [
+    ("file_share", True), ("thread_broadcast", True), ("message_changed", False), ("channel_join", False),
+])
+def test_message_answers_a_message_with_a_file_but_not_an_edit(ctx, monkeypatch, subtype, answered):
+    """Every subtype used to be dropped, so a DM with a screenshot attached got no answer."""
+    from unittest.mock import patch
+
+    monkeypatch.setattr("listeners.events.message.is_thread_engaged", lambda *a: True)
+    with patch("listeners.events.message.run_agent_turn") as run_turn, \
+         patch("listeners.events.shared.is_run_active", return_value=False), \
+         patch("agent.tools.vision.download_attached_images", return_value=[]):
+        _msg(ctx, channel_type="im", subtype=subtype)
+        assert run_turn.called is answered
+
+
 def test_message_mentions_are_handled_by_app_mentioned(monkeypatch):
     from unittest.mock import patch
 
@@ -130,7 +145,7 @@ def test_message_stop_requests_halt_in_dm(monkeypatch):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
         context.channel_id = "D123"
         context.user_id = "U1"
@@ -147,7 +162,7 @@ def test_message_embedded_stop_word_in_dm_does_not_halt(monkeypatch):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.request_stop") as request_stop, \
+         patch("listeners.events.shared.request_stop") as request_stop, \
          patch("listeners.events.message.is_thread_engaged", return_value=True):
         client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
         context.channel_id = "D123"
@@ -198,8 +213,8 @@ def test_message_steers_into_active_run_instead_of_starting_a_new_one(ctx):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.is_run_active", return_value=True), \
-         patch("listeners.events.message.queue_steering_message") as queue_steering:
+         patch("listeners.events.shared.is_run_active", return_value=True), \
+         patch("listeners.events.shared.queue_steering_message") as queue_steering:
         _msg(ctx, channel_type="im", text="also check the other thing")
 
         run_turn.assert_not_called()
@@ -213,7 +228,7 @@ def test_message_does_not_steer_when_no_run_is_active(ctx):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.is_run_active", return_value=False):
+         patch("listeners.events.shared.is_run_active", return_value=False):
         _msg(ctx, channel_type="im")
 
         run_turn.assert_called_once()
@@ -247,7 +262,7 @@ def test_app_mentioned_stop(ctx):
     from unittest.mock import patch
 
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
-         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         _mention(ctx, text="!stop")
         request_stop.assert_called_once_with("C123", "111.111")
         ctx.say.assert_called_once()
@@ -271,8 +286,8 @@ def test_app_mentioned_steers_into_active_run_instead_of_starting_a_new_one(ctx)
 
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
          patch("listeners.events.app_mentioned.ensure_coolton_user_in_channel"), \
-         patch("listeners.events.app_mentioned.is_run_active", return_value=True), \
-         patch("listeners.events.app_mentioned.queue_steering_message") as queue_steering:
+         patch("listeners.events.shared.is_run_active", return_value=True), \
+         patch("listeners.events.shared.queue_steering_message") as queue_steering:
         _mention(ctx, text="<@BOT1> also check the other thing", ts="1.1", thread_ts="1.1")
 
         run_turn.assert_not_called()
@@ -288,7 +303,7 @@ def test_app_mentioned_does_not_steer_when_no_run_is_active(ctx):
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
          patch("listeners.events.app_mentioned.ensure_coolton_user_in_channel"), \
          patch("listeners.events.app_mentioned.join_thread"), \
-         patch("listeners.events.app_mentioned.is_run_active", return_value=False):
+         patch("listeners.events.shared.is_run_active", return_value=False):
         _mention(ctx, text="<@BOT1> hi", ts="1.1", thread_ts="1.1")
 
         run_turn.assert_called_once()
@@ -429,7 +444,7 @@ def test_app_mentioned_stop_works_without_consent(ctx, monkeypatch):
     from unittest.mock import patch
 
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
-         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         _mention(ctx, text="!stop")
     request_stop.assert_called_once_with("C123", "111.111")
     ctx.say.assert_called_once()
@@ -462,7 +477,7 @@ def test_message_double_hash_blocks_stop_command_in_dm(ctx, monkeypatch):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         _msg(ctx, text="## !stop", channel_type="im")
         request_stop.assert_not_called()
         run_turn.assert_not_called()
@@ -478,7 +493,7 @@ def test_app_mentioned_stop_in_thread(ctx, monkeypatch):
 
     monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
-         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         _mention(ctx, text="<@BOT1> !stop", ts="111.111", thread_ts="1.1")
         request_stop.assert_called_once_with("C123", "1.1")
         ctx.say.assert_called_once()
@@ -493,7 +508,7 @@ def test_app_mentioned_embedded_stop_word_does_not_halt(ctx, monkeypatch):
 
     monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
-         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         _mention(ctx, text="<@BOT1> what does !stop do?", ts="111.111", thread_ts="1.1")
         request_stop.assert_not_called()
         run_turn.assert_called_once()
@@ -504,7 +519,7 @@ def test_message_stop_in_dm_only(ctx, monkeypatch):
 
     monkeypatch.setenv("COOLTON_BOT_ID", "BOT1")
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         _msg(ctx, text="<@BOT1> !stop", channel_type="im")
         request_stop.assert_called_once_with("C123", "111.111")
         ctx.say.assert_called_once()
@@ -515,7 +530,7 @@ def test_message_stop_ignored_in_channel_without_mention(ctx, monkeypatch):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         _msg(ctx, text="please !stop now", channel_type="channel", thread_ts="1.1")
         request_stop.assert_not_called()
         run_turn.assert_not_called()
@@ -624,7 +639,7 @@ def test_message_dm_ban_by_admin_applies_and_reacts(monkeypatch):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.apply_ban_command") as apply_ban:
+         patch("listeners.events.shared.apply_ban_command") as apply_ban:
         client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
         context.channel_id = "D123"
         context.user_id = "U0B2VTYER33"
@@ -642,7 +657,7 @@ def test_message_dm_ban_by_non_admin_is_silently_ignored(monkeypatch):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.apply_ban_command") as apply_ban:
+         patch("listeners.events.shared.apply_ban_command") as apply_ban:
         client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
         context.channel_id = "D123"
         context.user_id = "U_SOME_RANDOM_USER"
@@ -661,7 +676,7 @@ def test_message_dm_unban_by_admin_applies(monkeypatch):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.apply_ban_command") as apply_ban:
+         patch("listeners.events.shared.apply_ban_command") as apply_ban:
         client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
         context.channel_id = "D123"
         context.user_id = "U0B2VTYER33"
@@ -678,7 +693,7 @@ def test_app_mentioned_ban_by_admin_applies_and_reacts(ctx):
     from unittest.mock import patch
 
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
-         patch("listeners.events.app_mentioned.apply_ban_command") as apply_ban:
+         patch("listeners.events.shared.apply_ban_command") as apply_ban:
         ctx.context.user_id = "U0B2VTYER33"
         _mention(ctx, text="!ban <@U999> spamming")
         apply_ban.assert_called_once_with(ctx.client, "ban", "U999", "spamming")
@@ -690,7 +705,7 @@ def test_app_mentioned_ban_by_non_admin_is_silently_ignored(ctx):
     from unittest.mock import patch
 
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
-         patch("listeners.events.app_mentioned.apply_ban_command") as apply_ban:
+         patch("listeners.events.shared.apply_ban_command") as apply_ban:
         ctx.context.user_id = "U_SOME_RANDOM_USER"
         _mention(ctx, text="!ban <@U999> spamming")
         apply_ban.assert_not_called()
@@ -720,8 +735,8 @@ def test_message_banned_user_cannot_steer_an_active_run(ctx, monkeypatch):
 
     monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.is_run_active", return_value=True), \
-         patch("listeners.events.message.queue_steering_message") as queue_steering:
+         patch("listeners.events.shared.is_run_active", return_value=True), \
+         patch("listeners.events.shared.queue_steering_message") as queue_steering:
         _msg(ctx, channel_type="im", text="do something else")
         run_turn.assert_not_called()
         queue_steering.assert_not_called()
@@ -733,7 +748,7 @@ def test_message_banned_user_cannot_stop(ctx, monkeypatch):
 
     monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         _msg(ctx, channel_type="im", text="!stop")
         request_stop.assert_not_called()
         ctx.say.assert_not_called()
@@ -755,8 +770,8 @@ def test_app_mentioned_banned_user_cannot_steer_an_active_run(ctx, monkeypatch):
 
     monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
-         patch("listeners.events.app_mentioned.is_run_active", return_value=True), \
-         patch("listeners.events.app_mentioned.queue_steering_message") as queue_steering:
+         patch("listeners.events.shared.is_run_active", return_value=True), \
+         patch("listeners.events.shared.queue_steering_message") as queue_steering:
         _mention(ctx, text="<@BOT1> also check this", ts="1.1", thread_ts="1.1")
         run_turn.assert_not_called()
         queue_steering.assert_not_called()
@@ -768,7 +783,7 @@ def test_app_mentioned_banned_user_cannot_stop(ctx, monkeypatch):
 
     monkeypatch.setattr("agent.ban_store.is_banned", lambda uid: uid == "U1")
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
-         patch("listeners.events.app_mentioned.request_stop") as request_stop:
+         patch("listeners.events.shared.request_stop") as request_stop:
         _mention(ctx, text="!stop")
         request_stop.assert_not_called()
         ctx.say.assert_not_called()
@@ -826,7 +841,7 @@ def test_message_bare_stop_at_code_channel_level_halts(ctx):
     from unittest.mock import patch
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
-         patch("listeners.events.message.request_stop") as request_stop, \
+         patch("listeners.events.shared.request_stop") as request_stop, \
          patch("listeners.events.message.is_code_channel", return_value=True):
         _msg(ctx, channel_type="channel", text="!stop")
         request_stop.assert_called_once_with("C123", "")
@@ -839,8 +854,8 @@ def test_message_steers_at_code_channel_level_when_a_run_is_active(ctx):
 
     with patch("listeners.events.message.run_agent_turn") as run_turn, \
          patch("listeners.events.message.is_code_channel", return_value=True), \
-         patch("listeners.events.message.is_run_active", return_value=True), \
-         patch("listeners.events.message.queue_steering_message") as queue_steering:
+         patch("listeners.events.shared.is_run_active", return_value=True), \
+         patch("listeners.events.shared.queue_steering_message") as queue_steering:
         _msg(ctx, channel_type="channel", text="also do this")
         run_turn.assert_not_called()
         queue_steering.assert_called_once_with("C123", "", "also do this", "U1", "111.111")
