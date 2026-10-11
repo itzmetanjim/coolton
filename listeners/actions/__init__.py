@@ -39,3 +39,10 @@ def register(app: App):
     app.action(re.compile(r"^mcp_server_delete_(.+)$"))(mcp_server_delete_pattern)
     app.action("skill_review_approve")(handle_skill_review_approve)
     app.action("skill_review_reject")(handle_skill_review_reject)
+    # Last, so it only gets what nothing above handles: clicks on Block Kit coolton posted
+    # in a message (link buttons included), which Slack still sends and expects acknowledged.
+    app.action(re.compile(r".*"))(acknowledge_unhandled_action)
+
+
+def acknowledge_unhandled_action(ack):
+    ack()

@@ -17,6 +17,7 @@ kevinton writes new skills into `skills/` after real conversation turns.
 | `code-channels` | Creating and working in Slack code channels. Moved out of the system prompt. |
 | `computer-use` | The XFCE desktop and live agent-browser sessions. The system prompt keeps only when to use which. |
 | `huddlefm-dj` | DJing a HuddleFM session. Moved out of the system prompt. |
+| `block-kit` | Building Block Kit for code channel tabs and messages, with condensed references for every block, element and composition object (`references/`, from Slack's docs) and recipes checked with `blocks.validate`. |
 
 ## Merged overlaps (history)
 

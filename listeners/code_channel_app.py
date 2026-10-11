@@ -127,7 +127,10 @@ def _describe_action(action: dict) -> str:
     label = ((action.get("text") or {}).get("text")) or action.get("action_id", "")
     value = (action.get("value") or (action.get("selected_option") or {}).get("value")
              or ", ".join(o.get("value", "") for o in action.get("selected_options") or [])
-             or action.get("selected_date") or action.get("selected_user") or "")
+             or action.get("selected_date") or action.get("selected_time") or action.get("selected_date_time")
+             or action.get("selected_user") or action.get("selected_channel") or action.get("selected_conversation")
+             or ", ".join(action.get("selected_users") or action.get("selected_channels")
+                          or action.get("selected_conversations") or []) or "")
     return f"{what} \"{label}\"" + (f" (value: {value})" if value else "") + f" [action_id: {action.get('action_id')}]"
 
 
