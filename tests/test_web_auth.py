@@ -38,33 +38,33 @@ def test_verify_fails_closed_with_no_secret_configured(monkeypatch):
 
 def test_get_session_reads_a_valid_cookie():
     token = auth.create_session_token("U1")
-    request = Mock()
+    request = Mock(headers={})
     request.cookies = {auth.SESSION_COOKIE: token}
     session = auth.get_session(request)
     assert session["slack_id"] == "U1"
 
 
 def test_get_session_none_without_a_cookie():
-    request = Mock()
+    request = Mock(headers={})
     request.cookies = {}
     assert auth.get_session(request) is None
 
 
 def test_get_session_rejects_an_expired_session():
     token = auth._sign({"slack_id": "U1", "issued_at": 0.0})
-    request = Mock()
+    request = Mock(headers={})
     request.cookies = {auth.SESSION_COOKIE: token}
     assert auth.get_session(request) is None
 
 
 def test_require_slack_id_returns_none_when_signed_out():
-    request = Mock()
+    request = Mock(headers={})
     request.cookies = {}
     assert auth.require_slack_id(request) is None
 
 
 def test_require_slack_id_returns_the_id_when_signed_in():
-    request = Mock()
+    request = Mock(headers={})
     request.cookies = {auth.SESSION_COOKIE: auth.create_session_token("U1")}
     assert auth.require_slack_id(request) == "U1"
 
@@ -92,7 +92,9 @@ def test_logout_clears_the_session_cookie_and_lands_on_signed_out():
     Auth silently re-approves since it has its own SSO session coolton can't
     end. Redirecting to "?signed_out=1" instead is what stops that loop; see
     the frontend's init() for the other half of this."""
-    response = auth.logout()
+    request = Mock()
+    request.headers = {}
+    response = auth.logout(request)
     assert response.status_code == 302
     assert response.headers["location"] == "/?signed_out=1"
     set_cookie = response.headers.get("set-cookie", "")
@@ -101,7 +103,7 @@ def test_logout_clears_the_session_cookie_and_lands_on_signed_out():
 
 
 def test_callback_rejects_a_mismatched_state():
-    request = Mock()
+    request = Mock(headers={})
     request.cookies = {auth.STATE_COOKIE: "expected"}
     request.headers = {}
     response = auth.callback(request, code="abc", state="different")
@@ -110,7 +112,7 @@ def test_callback_rejects_a_mismatched_state():
 
 
 def test_callback_rejects_a_missing_code():
-    request = Mock()
+    request = Mock(headers={})
     request.cookies = {auth.STATE_COOKIE: "expected"}
     request.headers = {}
     response = auth.callback(request, code="", state="expected")
@@ -118,7 +120,7 @@ def test_callback_rejects_a_missing_code():
 
 
 def test_callback_sets_a_session_cookie_on_success():
-    request = Mock()
+    request = Mock(headers={})
     request.cookies = {auth.STATE_COOKIE: "expected"}
     request.headers = {}
     with patch.object(auth, "_exchange_code", return_value={"access_token": "tok"}), \
@@ -131,7 +133,7 @@ def test_callback_sets_a_session_cookie_on_success():
 
 
 def test_callback_redirects_with_error_when_no_slack_id_comes_back():
-    request = Mock()
+    request = Mock(headers={})
     request.cookies = {auth.STATE_COOKIE: "expected"}
     request.headers = {}
     with patch.object(auth, "_exchange_code", return_value={"access_token": "tok"}), \
@@ -255,10 +257,42 @@ def test_login_and_callback_use_the_matching_host_end_to_end(monkeypatch):
     assert "coolton.tanjim.org" not in login_response.headers["location"]
 
     callback_request = Mock()
-    callback_request.cookies = {auth.STATE_COOKIE: "expected"}
+    callback_request.cookies = {"__Host-" + auth.STATE_COOKIE: "expected"}  # an https host
     callback_request.headers = real_headers
     captured = {}
     with patch.object(auth, "_exchange_code", side_effect=lambda code, redirect_uri: captured.update(redirect_uri=redirect_uri) or {"access_token": "tok"}), \
          patch.object(auth, "_fetch_slack_id", return_value="U42"):
         auth.callback(callback_request, code="abc", state="expected")
     assert captured["redirect_uri"] == "https://coolton.lily.hackclub.app/oauth/callback"
+
+
+def test_over_https_the_cookies_carry_the_host_prefix(monkeypatch):
+    """A page on another *.tanjim.org host (an HTML embed) can set a Domain=tanjim.org
+    cookie named coolton_session, but browsers only take a __Host- one from this host."""
+    monkeypatch.setenv("HCA_REDIRECT_URI", "https://coolton.tanjim.org/oauth/callback")
+    request = Mock()
+    request.headers = {}
+
+    login = auth.login(request).headers["set-cookie"]
+    assert login.startswith("__Host-oauth_state=") and "Secure" in login and "Path=/" in login
+
+    request.cookies = {"__Host-oauth_state": "expected", "oauth_state": "tossed"}
+    with patch.object(auth, "_exchange_code", return_value={"access_token": "tok"}), \
+         patch.object(auth, "_fetch_slack_id", return_value="U42"):
+        callback = auth.callback(request, code="abc", state="expected")
+    assert any(c.startswith("__Host-coolton_session=") for c in callback.headers.getlist("set-cookie"))
+
+    request.cookies = {auth.SESSION_COOKIE: auth.create_session_token("UATTACKER")}
+    assert auth.get_session(request) is None  # an unprefixed (tossed) cookie isn't read
+    request.cookies = {"__Host-coolton_session": auth.create_session_token("U42")}
+    assert auth.require_slack_id(request) == "U42"
+
+
+def test_a_bot_install_link_is_not_a_session_and_a_session_is_not_an_install_link():
+    from agent.tools import slack_bot_deploy
+
+    request = Mock()
+    request.headers = {}
+    request.cookies = {auth.SESSION_COOKIE: slack_bot_deploy.sign_install_state("U1")}
+    assert auth.get_session(request) is None
+    assert slack_bot_deploy.verify_install_state(auth.create_session_token("A123")) is None

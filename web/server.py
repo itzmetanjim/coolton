@@ -12,9 +12,10 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from web import auth, bot_oauth, conversation_log as log, conversations
@@ -31,6 +32,21 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="coolton", lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def _same_origin_writes(request: Request, call_next):
+    """Refuse a write a browser sends from another site. SameSite=Lax cookies don't
+    stop this from a *.tanjim.org page (that's the same site), and some writes here
+    are "simple" requests a page can send without a preflight (a multipart upload, an
+    empty POST to stop a turn)."""
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).hostname != auth._request_host(request):
+            return JSONResponse({"detail": "Cross-site request refused"}, status_code=403)
+    return await call_next(request)
+
+
 app.include_router(auth.router)
 app.include_router(conversations.router)
 app.include_router(bot_oauth.router)

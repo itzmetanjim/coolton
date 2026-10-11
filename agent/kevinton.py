@@ -214,8 +214,8 @@ def run_kevinton(
         return f"kevinton error: {e}"
 
 
-def _kevinton_model(deps: AgentDeps) -> str:
-    """Use the same provider/model selection as coolton, and set its env key."""
+def _kevinton_model(deps: AgentDeps):
+    """Use the same provider/model selection as coolton."""
     from agent.agent import get_runtime_model
 
     return get_runtime_model(deps.user_id)

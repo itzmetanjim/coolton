@@ -7,21 +7,24 @@ from logging import Logger
 from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
-from agent.active_runs import is_run_active
-from agent.ban_store import apply_ban_command, is_authorized, parse_ban_command
-from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel, is_expected_origin_context
+from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel
 from agent.leave_thread_store import is_thread_engaged
-from agent.steering_store import queue_steering_message
-from agent.stop_store import is_stop_command, request_stop
+from agent.stop_store import is_stop_command
 from listeners.commands import parse_command, respond
-from thread_context import conversation_store
+from listeners.events.shared import handled_ban_command, is_ignored, report_failure, steered_into_active_run, stop_thread
 from listeners.events.turn import run_agent_turn
+from thread_context import conversation_store
 
 _module_logger = logging.getLogger(__name__)
 
 # Slack broadcast / user-group mentions: @channel, @here, @everyone, named
 # user groups (e.g. <!subteam^S123|name>).
 PING_GROUP_MENTION_RE = re.compile(r"<!(channel|here|everyone)>|<!subteam\^")
+
+# Message subtypes that are still someone writing to the thread: a message with a file
+# attached, and a thread reply also sent to the channel. Every other subtype (edits,
+# deletes, joins, ...) is skipped.
+_ANSWERED_SUBTYPES = {None, "file_share", "thread_broadcast"}
 
 if not os.environ.get("COOLTON_BOT_ID"):
     _module_logger.warning(
@@ -41,32 +44,7 @@ def handle_message(
 ):
     """Handle messages sent to the agent via DM or in threads the bot is part of."""
 
-    # Skip message subtypes (edits, deletes, etc.), bot messages, and messages an app posted
-    # with a user token (those carry an app_id but no bot_id; cooltonUser's own posts too).
-    if event.get("subtype"):
-        return
-    if event.get("bot_id") or event.get("app_id"):
-        return
-    # Slack's "Context from" opener in a code channel coolton made (agent.code_channel_store).
-    if is_expected_origin_context(event.get("text", "")):
-        return
-
-    # Hardcoded: never respond in this channel, no matter what. The agent
-    # doesn't even start.
-    if context.channel_id == "C06QV2T1P4G":
-        return
-
-    # Banned users get nothing at all — not even !stop or a steering fold-in
-    # into someone else's active run (both of those live further down this
-    # function, well before any is_banned() check would otherwise run). This
-    # must be the very first thing checked once the message is known to be a
-    # real, human message, so there is no path in this handler that can still
-    # reach run_agent_turn, request_stop, or queue_steering_message for a
-    # banned user. run_agent_turn (listeners.events.turn) does the same check
-    # again as defense-in-depth, but that check alone was not enough — a
-    # steered message never goes through run_agent_turn at all.
-    from agent.ban_store import is_banned
-    if is_banned(context.user_id):
+    if event.get("subtype") not in _ANSWERED_SUBTYPES or is_ignored(context, event):
         return
 
     text = event.get("text", "")
@@ -122,11 +100,7 @@ def handle_message(
         if not is_dm and not at_channel_level:
             logger.info("Ignoring '!stop' without an @mention")
         else:
-            request_stop(channel_id, thread_ts)
-            say(
-                text="⏹️ stopping all your running coolton instances…",
-                thread_ts=thread_ts,
-            )
+            stop_thread(say, channel_id, thread_ts)
         return
 
     # !help / !connections: same addressing rule as !stop (a DM or a code
@@ -140,19 +114,8 @@ def handle_message(
 
     # !ban / !unban: only handled in a DM, same reasoning as !stop above — a
     # bare command in a channel thread without a mention is not addressed to
-    # the bot at all. Silently ignored (not even a "not authorized" reply) for
-    # anyone but ban_store.BAN_ADMIN_USER_ID, so the mechanism isn't exposed
-    # to random users typing the syntax.
-    ban_command = parse_ban_command(text, bot_id) if is_dm else None
-    if ban_command:
-        if not is_authorized(user_id):
-            return
-        action, target_user_id, reason = ban_command
-        apply_ban_command(client, action, target_user_id, reason)
-        try:
-            client.reactions_add(channel=channel_id, timestamp=event["ts"], name="white_check_mark")
-        except Exception:
-            logger.exception("Failed to react to ban/unban command")
+    # the bot at all.
+    if is_dm and handled_ban_command(client, logger, text, bot_id, user_id, channel_id, event["ts"]):
         return
 
     # Messages starting with "<>" are only answered when the bot is explicitly
@@ -198,22 +161,10 @@ def handle_message(
     ):
         return
 
-    # coolton is already working in this thread — steer the run already in
-    # flight instead of racing a second one alongside it. See
-    # agent/steering_store.py + plan_block.after_tool for how the running
-    # turn picks this up.
-    if is_run_active(channel_id, thread_ts):
-        logger.info(f"Steering: queuing message into active run {channel_id}/{thread_ts}: {text[:200]}")
-        queue_steering_message(channel_id, thread_ts, text, user_id, event["ts"])
-        try:
-            client.reactions_add(channel=channel_id, timestamp=event["ts"], name="white_check_mark")
-        except Exception:
-            logger.exception("Failed to react to steering message")
+    if steered_into_active_run(client, logger, channel_id, thread_ts, text, user_id, event["ts"]):
         return
 
     try:
-        text = event.get("text", "")
-
         # Get conversation history
         history = conversation_store.get_history(channel_id, thread_ts)
 
@@ -236,12 +187,4 @@ def handle_message(
         )
 
     except Exception as e:
-        # Note: run_agent_turn handles its own plan-block error reporting with its
-        # real deps (see turn.py); an exception only lands here if it happened
-        # before/around that call, when no plan block was ever sent.
-        logger.exception(f"Failed to handle message: {e}")
-        from agent.redact import redact as _redact
-        say(
-            text=f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})",
-            thread_ts=event.get("thread_ts") or event.get("ts"),
-        )
+        report_failure(say, logger, event, e)

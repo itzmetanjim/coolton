@@ -94,10 +94,19 @@ def test_key_generated_when_no_env(tmp_store, monkeypatch, tmp_path):
     assert os.path.exists(store.MCP_SERVER_KEY_FILE)
 
 
-def test_probe_server_reports_failure_for_unreachable_host(tmp_store):
-    ok, detail, _ = store.probe_server("https://this-host-should-not-resolve.invalid/mcp", "")
+def test_probe_server_reports_failure_for_unreachable_host(tmp_store, monkeypatch):
+    async def refused(url, transport, token, headers):
+        return False, "connection refused"
+
+    monkeypatch.setattr(store, "_try", refused)
+    ok, detail, _ = store.probe_server("https://mcp.unreachable.example/mcp", "")
     assert ok is False
     assert "Streamable HTTP" in detail and "SSE" in detail  # auto-detect tried both
+
+
+def test_probe_server_refuses_a_host_that_doesnt_resolve(tmp_store):
+    ok, detail, _ = store.probe_server("https://this-host-should-not-resolve.invalid/mcp", "")
+    assert ok is False and "doesn't resolve" in detail
 
 
 def test_auto_detect_keeps_whichever_transport_the_server_speaks(tmp_store, monkeypatch):
@@ -128,3 +137,14 @@ def test_servers_keep_their_transport_and_encrypted_headers(tmp_store):
     assert store.request_headers("tok", {"Authorization": "Basic x"}) == {"Authorization": "Basic x"}
     with pytest.raises(ValueError):
         store.parse_headers("not a header")
+
+
+def test_probe_never_connects_to_a_local_or_private_address(tmp_store, monkeypatch):
+    """The add-server form probes before saving: the URL is checked first, so it can't
+    be used to make coolton's server request its own local services."""
+    tried = []
+    monkeypatch.setattr(store, "_try", lambda *a: tried.append(a))
+    for url in ("http://127.0.0.1:29057/agent_tools", "https://10.0.0.1/mcp", "https://localhost/mcp"):
+        ok, detail, _ = store.probe_server(url)
+        assert not ok and detail
+    assert tried == []

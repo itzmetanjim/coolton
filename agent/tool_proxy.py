@@ -99,7 +99,7 @@ class _Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0].rstrip("/")
         parts = path.split("/")
         # /agent_tools/<sandbox_id>/<tool_name>
-        if len(parts) != 4 or parts[1] != "agent_tools" or not parts[2] or not parts[3]:
+        if len(parts) != 4 or parts[1] != URL_PREFIX.strip("/") or not parts[2] or not parts[3]:
             return self._send_json(404, {"ok": False, "error": "not found"})
         sandbox_id, tool_name = parts[2], parts[3]
 
@@ -117,6 +117,8 @@ class _Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length).decode("utf-8") or b"{}")
         except Exception as e:
             return self._send_json(400, {"ok": False, "error": f"bad body: {e}"})
+        if not isinstance(body, dict):
+            return self._send_json(400, {"ok": False, "error": "bad body: expected a JSON object"})
 
         func = reg["resolver"](tool_name)
         if func is None:

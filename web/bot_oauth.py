@@ -1,6 +1,6 @@
 """Automatic OAuth capture for Slack bots coolton builds for other people
 (agent.tools.slack_bot_deploy.create_slack_bot) — NOT coolton's own OAuth,
-which is app_oauth.py/oauth_server.py, a separate install flow for coolton
+which is oauth_server.py, a separate install flow for coolton
 itself.
 
 create_slack_bot bakes this route's URL into the new app's

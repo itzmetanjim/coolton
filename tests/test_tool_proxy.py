@@ -103,6 +103,17 @@ def test_valid_call_invokes_resolved_tool_with_bound_deps():
     assert seen_ctx["kwargs"] == {"k": "v"}
 
 
+def test_a_body_that_isnt_a_json_object_is_a_400_not_a_crash():
+    token, sandbox_id, _, seen_ctx = _register()
+    for body in ([], "x", 3):
+        resp = requests.post(
+            f"{BASE}/{sandbox_id}/echo_tool", json=body, headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 400
+        assert "JSON object" in resp.json()["error"]
+    assert seen_ctx == {}
+
+
 def test_unregistered_sandbox_token_no_longer_works():
     token, sandbox_id, _, _ = _register()
     tool_proxy.unregister_sandbox(sandbox_id)

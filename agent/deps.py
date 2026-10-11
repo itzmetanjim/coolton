@@ -89,13 +89,6 @@ class AgentDeps:
     # and that must stay in history and keep its plan/thinking block, instead
     # of being discarded as if the turn never happened (skip()'s default).
     skip_preserve: bool = False
-    # Set whenever something needs run_agent's finally block to pause the sandbox for
-    # it at the end of the turn, rather than pausing immediately after its own call:
-    # computer_use never pauses per-action (a live stream needs the desktop to survive
-    # between actions), and run_linux_command skips its own immediate pause whenever
-    # sandbox_keepalive_seconds > 0 (see agent.sandbox_keepalive) in favor of a
-    # countdown-based auto-pause instead.
-    keep_sandbox_warm: bool = False
     # How long (seconds) the sandbox stays up after the last action before
     # agent.sandbox_keepalive auto-pauses it, while a VNC stream is being watched —
     # 0 (the default, reset at the start of every turn) means "pause immediately after

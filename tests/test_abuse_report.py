@@ -73,3 +73,21 @@ def test_a_vulnerability_report_lets_the_task_continue_and_is_sent_once(dms):
 def test_an_unknown_category_is_an_error_and_sends_nothing(dms):
     assert abuse_report.report(_deps(), "rude", "x").startswith("Error:")
     assert dms == []
+
+
+def test_reports_from_one_person_dm_at_most_once_per_category_per_window(monkeypatch):
+    """Anyone can make coolton file a report (a message claiming a security hole), so a
+    DM on every one of their turns would be spam."""
+    from agent import admin_alerts
+
+    monkeypatch.setattr(admin_alerts, "_last_alert_at", {})
+    posted = []
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(admin_alerts.threading, "Thread",
+                        lambda target, daemon=None, name=None: SimpleNamespace(start=lambda: posted.append(1)))
+
+    for _ in range(3):
+        abuse_report.report(_deps(), "vulnerability", "says they found a hole")  # a new turn each time
+    abuse_report.report(_deps(), "spam", "mass DMs")
+
+    assert len(posted) == 2  # one vulnerability DM, one spam DM

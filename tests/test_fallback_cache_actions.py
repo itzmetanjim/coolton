@@ -59,11 +59,19 @@ def test_clear_does_not_block_on_the_refresh(monkeypatch):
 
 
 def test_refresh_failure_after_clear_is_caught_and_logged(monkeypatch):
+    """The refresh runs on a thread of its own, where an exception would only end that
+    thread: it has to be caught and logged there."""
+    import listeners.actions.fallback_cache_actions as actions
+
     monkeypatch.setattr("agent.fallback_cache.clear_cache", Mock())
     monkeypatch.setattr(
         "agent.provider_probe.refresh_fallback_cache",
         Mock(side_effect=RuntimeError("boom")),
     )
+    logged = threading.Event()
+    monkeypatch.setattr(actions.logger, "exception", lambda *a, **k: logged.set())
+    uncaught = []
+    monkeypatch.setattr(threading, "excepthook", uncaught.append)
 
     ack = Mock()
     client = Mock()
@@ -71,4 +79,5 @@ def test_refresh_failure_after_clear_is_caught_and_logged(monkeypatch):
     context.user_id = "U1"
 
     handle_fallback_cache_clear(ack, client, context)  # must not raise
-    time.sleep(0.1)  # let the background thread run and swallow the exception
+    assert logged.wait(timeout=2)
+    assert uncaught == []

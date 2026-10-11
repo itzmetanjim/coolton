@@ -6,7 +6,12 @@ cooltonUser, so each call goes through the same rules as coolton's own Slack
 tools:
 
 - reads of a channel, thread, file, canvas, or list follow agent.slack_access
-  (the current conversation, or public channels/files, only);
+  (the current conversation, or public channels/files, only), and so do edits
+  of an existing canvas or list;
+- listing or searching channels only ever covers public ones (cooltonUser's own
+  private channels and DMs aren't anyone else's to know about);
+- creating a channel goes through slack_api_call's conversations.create instead,
+  which posts who asked for it in the new channel (agent.change_notices);
 - anything that puts a new post in front of other people (scheduled
   messages, file shares, new lists) carries the "(sent from <@user>)"
   footer (agent.attribution). Canvases don't: a canvas is one document
@@ -40,11 +45,21 @@ _CHANNEL_READ_TOOLS = {
     "slack_get_reactions": "channel_id",
 }
 
-# Tool -> the arg naming the file (canvases and lists are files too) it reads.
+# Tool -> the arg naming the file (canvases and lists are files too) it reads or edits.
 _FILE_READ_TOOLS = {
     "slack_read_file": "file_id",
     "slack_read_canvas": "canvas_id",
     "slack_read_list": "list_id",
+    "slack_update_canvas": "canvas_id",
+    "slack_update_list": "list_id",
+    "slack_add_list_record": "list_id",
+    "slack_update_list_record": "list_id",
+}
+
+# Tool -> the arg naming the channel types it lists, and what it lists when that's left out.
+_CHANNEL_LISTING_TOOLS = {
+    "slack_list_user_channels": ("types", "public_channel,private_channel"),
+    "slack_search_channels": ("channel_types", "public_channel"),
 }
 
 
@@ -59,6 +74,14 @@ def guard_args(name: str, args: dict[str, Any], deps: Any) -> tuple[dict[str, An
         denied = channel_read_error(str(args.get(_CHANNEL_READ_TOOLS[name]) or ""), current)
         if denied:
             return None, f"Error: {name} refused — {denied}"
+    if name in _CHANNEL_LISTING_TOOLS:
+        param, default = _CHANNEL_LISTING_TOOLS[name]
+        types = {t.strip() for t in str(args.get(param) or default).split(",") if t.strip()}
+        if types != {"public_channel"}:
+            return None, f"Error: {name} only lists public channels: pass {param}=\"public_channel\"."
+    if name == "slack_create_conversation" and args.get("channel_name"):
+        return None, ("Error: create channels with slack_api_call(method=\"conversations.create\"), which "
+                      "says in the new channel who asked for it. This tool is only for opening DMs.")
     if name in _FILE_READ_TOOLS:
         file_id = str(args.get(_FILE_READ_TOOLS[name]) or "")
         if not file_id:

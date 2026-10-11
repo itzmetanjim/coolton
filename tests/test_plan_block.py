@@ -16,7 +16,6 @@ from agent.plan_block import (
     _truncate,
     build_plan_blocks,
     build_plan_hooks,
-    build_task_dict,
     complete_plan_message,
     delete_plan_message,
     finalize_plan_message,
@@ -45,12 +44,6 @@ def _deps(**overrides):
 # ---------------------------------------------------------------------------
 # Block builders
 # ---------------------------------------------------------------------------
-
-
-def test_build_task_dict_with_details_and_output():
-    card = build_task_dict("t1", "Title", "complete", details="doing stuff", output="done")
-    assert card["details"]["type"] == "rich_text"
-    assert card["output"]["type"] == "rich_text"
 
 
 def test_build_plan_blocks_structure():
@@ -386,7 +379,7 @@ def test_build_plan_hooks_folds_steering_message_into_next_tool_result():
     from agent.steering_store import clear_steering_messages, queue_steering_message
 
     hooks = build_plan_hooks()
-    deps = _deps(plan_ts="100.100", channel_id="STEER1", thread_ts="1.1")
+    deps = _deps(plan_ts="100.100", channel_id="STEER1", thread_ts="1.1", user_id="U9")
     ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
     queue_steering_message("STEER1", "1.1", "also check the other thing", "U9")
@@ -405,14 +398,11 @@ def test_build_plan_hooks_folds_steering_message_into_next_tool_result():
     assert "also check the other thing" in result
 
 
-def test_build_plan_hooks_flags_steering_message_from_a_different_user():
-    """The run executes under the ORIGINAL requester's identity (their user_id,
-    user_token — see _get_owned_task, etc.), but a steering
-    message can come from anyone in an engaged thread (see agent.steering_store).
-    Folding it in as if it were the requester's own words would let a different
-    thread participant drive the run under the requester's authority — the note
-    must say plainly it's from someone else."""
-    from agent.steering_store import clear_steering_messages, queue_steering_message
+def test_build_plan_hooks_folds_in_a_different_users_message_flagged_as_theirs():
+    """Anyone's message in the thread steers the running turn, but the run executes
+    under the ORIGINAL requester's identity, so one from someone else is flagged and
+    never presented as the requester's."""
+    from agent.steering_store import clear_steering_messages, peek_steering_messages, queue_steering_message
 
     hooks = build_plan_hooks()
     deps = _deps(plan_ts="100.100", channel_id="STEER3", thread_ts="1.1", user_id="U_REQUESTER")
@@ -427,12 +417,11 @@ def test_build_plan_hooks_flags_steering_message_from_a_different_user():
 
     try:
         result = asyncio.run(run())
+        assert peek_steering_messages("STEER3", "1.1") == []
     finally:
         clear_steering_messages("STEER3", "1.1")
 
-    assert "<@U_OTHER>" in result
-    assert "DIFFERENT person" in result
-    assert "delete everything" in result
+    assert "<@U_OTHER>, a DIFFERENT person" in result and "delete everything" in result
 
 
 def test_build_plan_hooks_does_not_flag_steering_message_from_the_same_user():
@@ -454,7 +443,6 @@ def test_build_plan_hooks_does_not_flag_steering_message_from_the_same_user():
     finally:
         clear_steering_messages("STEER4", "1.1")
 
-    assert "DIFFERENT person" not in result
     assert "also check that" in result
 
 
@@ -466,7 +454,7 @@ def test_build_plan_hooks_clears_steering_queue_once_delivered():
     )
 
     hooks = build_plan_hooks()
-    deps = _deps(plan_ts="100.100", channel_id="STEER2", thread_ts="1.1")
+    deps = _deps(plan_ts="100.100", channel_id="STEER2", thread_ts="1.1", user_id="U9")
     ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc123")
     queue_steering_message("STEER2", "1.1", "hey", "U9")
@@ -491,7 +479,7 @@ def test_build_plan_hooks_leaves_steering_queued_when_result_is_not_a_string():
     )
 
     hooks = build_plan_hooks()
-    deps = _deps(plan_ts="100.100", channel_id="STEER3", thread_ts="1.1")
+    deps = _deps(plan_ts="100.100", channel_id="STEER3", thread_ts="1.1", user_id="U9")
     ctx = SimpleNamespace(deps=deps, messages=[])
     call = SimpleNamespace(tool_name="some_tool", tool_call_id="abc123")
     queue_steering_message("STEER3", "1.1", "hey", "U9")

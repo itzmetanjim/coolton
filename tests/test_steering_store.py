@@ -2,48 +2,42 @@ from agent.steering_store import (
     clear_steering_messages,
     peek_steering_messages,
     queue_steering_message,
+    take_next_sender_messages,
+    take_steering_messages,
 )
 
 
-def test_queued_message_is_visible():
-    queue_steering_message("SS2", "1.1", "also check the other thing", "U1")
-    messages = peek_steering_messages("SS2", "1.1")
-    assert len(messages) == 1
-    assert messages[0]["text"] == "also check the other thing"
-    assert messages[0]["user_id"] == "U1"
-
-
-def test_peek_does_not_clear():
-    queue_steering_message("SS3", "1.1", "one", "U1")
-    peek_steering_messages("SS3", "1.1")
-    assert len(peek_steering_messages("SS3", "1.1")) == 1
-
-
-def test_clear_removes_queued_messages():
-    queue_steering_message("SS4", "1.1", "one", "U1")
-    clear_steering_messages("SS4", "1.1")
-    assert peek_steering_messages("SS4", "1.1") == []
-
-
-def test_multiple_messages_queue_in_order():
+def test_queued_messages_are_per_thread_and_in_order():
     queue_steering_message("SS5", "1.1", "first", "U1")
     queue_steering_message("SS5", "1.1", "second", "U2")
-    messages = peek_steering_messages("SS5", "1.1")
-    assert [m["text"] for m in messages] == ["first", "second"]
+    assert [m["text"] for m in peek_steering_messages("SS5", "1.1")] == ["first", "second"]
+    assert peek_steering_messages("SS5", "2.2") == []
+    clear_steering_messages("SS5", "1.1")
 
 
-def test_queue_is_per_thread():
-    queue_steering_message("SS6", "1.1", "one", "U1")
-    assert peek_steering_messages("SS6", "2.2") == []
+def test_a_running_turn_folds_in_everyones_messages_and_labels_other_peoples():
+    """Everyone's message steers the turn already running in the thread; one from
+    someone other than the person the turn is for is marked so it isn't taken as theirs."""
+    from agent.plan_block import steering_note
+
+    queue_steering_message("SS1", "1.1", "mine", "U1")
+    queue_steering_message("SS1", "1.1", "theirs", "U2")
+    queue_steering_message("SS1", "1.1", "[SYSTEM: job done]", "")
+
+    taken = take_steering_messages("SS1", "1.1")
+
+    assert [m["text"] for m in taken] == ["mine", "theirs", "[SYSTEM: job done]"]
+    assert peek_steering_messages("SS1", "1.1") == []
+    notes = [steering_note(m, {"U1"}) for m in taken]
+    assert "DIFFERENT person" not in notes[0] and "<@U2>, a DIFFERENT person" in notes[1]
+    assert notes[2] == "[SYSTEM: job done]"
 
 
-def test_clear_on_untracked_thread_is_a_noop():
-    clear_steering_messages("SS7", "never-queued")
-    assert peek_steering_messages("SS7", "never-queued") == []
+def test_leftovers_come_out_one_senders_run_at_a_time():
+    for text, user in (("a1", "UA"), ("a2", "UA"), ("b1", "UB"), ("a3", "UA")):
+        queue_steering_message("SS2", "1.1", text, user)
 
-
-def test_stale_messages_are_filtered_out_of_peek():
-    queue_steering_message("SS8", "1.1", "old", "U1")
-    import agent.steering_store as ss
-    ss._queued[("SS8", "1.1")][0]["queued_at"] -= 3600
-    assert peek_steering_messages("SS8", "1.1") == []
+    assert [m["text"] for m in take_next_sender_messages("SS2", "1.1")] == ["a1", "a2"]
+    assert [m["text"] for m in take_next_sender_messages("SS2", "1.1")] == ["b1"]
+    assert [m["text"] for m in take_next_sender_messages("SS2", "1.1")] == ["a3"]
+    assert take_next_sender_messages("SS2", "1.1") == []

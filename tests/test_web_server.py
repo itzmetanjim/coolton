@@ -56,3 +56,20 @@ def test_root_serves_the_app_for_signed_out_param_even_without_a_session(client)
 def test_root_serves_the_app_for_auth_error_param_even_without_a_session(client):
     resp = client.get("/?auth_error=exchange")
     assert resp.status_code == 200
+
+
+def test_a_write_from_another_site_is_refused(monkeypatch):
+    """A page on another *.tanjim.org host is the same site, so SameSite cookies would
+    still ride along; its Origin gives it away."""
+    from fastapi.testclient import TestClient
+
+    from web import auth, server
+
+    monkeypatch.setenv("COOLTON_WEB_SECRET", "test-secret")
+    client = TestClient(server.app)
+    client.cookies.set(auth.SESSION_COOKIE, auth.create_session_token("U1"))
+
+    refused = client.post("/api/conversations", headers={"origin": "https://2390.proxy.tanjim.org"})
+    assert refused.status_code == 403
+    allowed = client.post("/api/conversations", headers={"origin": "http://testserver"})
+    assert allowed.status_code != 403

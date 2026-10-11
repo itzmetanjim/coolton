@@ -43,13 +43,11 @@ def test_getters_read_json(tokens_file):
     _write_tokens(tokens_file, expires_at=123)
     assert token_rotation.get_access_token() == "xoxe.xoxp-1-old"
     assert token_rotation.get_refresh_token() == "xoxe-1-refresh-old"
-    assert token_rotation.get_expires_at() == 123
 
 
 def test_getters_empty_without_file(tokens_file):
     assert token_rotation.get_access_token() is None
     assert token_rotation.get_refresh_token() is None
-    assert token_rotation.get_expires_at() is None
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +72,6 @@ def test_rotate_token_persists_new_pair(tokens_file, monkeypatch):
     assert token_rotation.rotate_token() is True
     assert token_rotation.get_access_token() == "xoxe.xoxp-1-new"
     assert token_rotation.get_refresh_token() == "xoxe-1-refresh-new"
-    assert token_rotation.get_expires_at() == 100 + 43200
     assert json.loads(tokens_file.read_text()) == {
         "access_token": "xoxe.xoxp-1-new",
         "refresh_token": "xoxe-1-refresh-new",

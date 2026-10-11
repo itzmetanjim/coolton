@@ -13,14 +13,13 @@ This only manages the xoxe pair. The env-based xoxb/xoxp tokens are untouched.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import threading
 import time
 from pathlib import Path
 
 import requests
+from agent.json_file import load_json, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -43,21 +42,12 @@ def _load() -> dict:
     global _cache
     with _lock:
         if _cache is None:
-            try:
-                data = json.loads(TOKENS_FILE.read_text())
-                _cache = data if isinstance(data, dict) else {}
-            except OSError:
-                _cache = {}
-            except json.JSONDecodeError:
-                logger.exception("%s is corrupt; treating it as empty", TOKENS_FILE)
-                _cache = {}
+            _cache = load_json(TOKENS_FILE)
         return _cache
 
 
 def _persist(data: dict) -> None:
-    tmp = TOKENS_FILE.with_name("xoxe_tokens.json.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
-    os.replace(tmp, TOKENS_FILE)
+    save_json(TOKENS_FILE, data, private=True)
     global _cache
     _cache = data
 
@@ -70,16 +60,6 @@ def get_access_token() -> str | None:
 def get_refresh_token() -> str | None:
     value = _load().get("refresh_token")
     return value if isinstance(value, str) and value else None
-
-
-def get_expires_at() -> float | None:
-    value = _load().get("expires_at")
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _call_rotate(refresh_token: str) -> dict | None:

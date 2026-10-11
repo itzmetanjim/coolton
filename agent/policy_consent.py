@@ -1,12 +1,11 @@
 """Persist policy consent and pending first-use requests."""
 from __future__ import annotations
 
-import json
-import os
 import threading
 import time
 import uuid
 from pathlib import Path
+from agent.json_file import load_json, save_json
 
 POLICY_CHANNEL_ID = "C0BCNM6SQA0"
 POLICY_URL = "https://hackclub.enterprise.slack.com/docs/T0266FRGM/F0BQMKLK5MJ"
@@ -15,21 +14,12 @@ _LOCK = threading.Lock()
 
 
 def _load() -> dict:
-    if not _STORE_PATH.exists():
-        return {"consents": {}, "pending": {}}
-    try:
-        data = json.loads(_STORE_PATH.read_text())
-        if not isinstance(data, dict):
-            return {"consents": {}, "pending": {}}
-        return {"consents": data.get("consents", {}), "pending": data.get("pending", {})}
-    except (OSError, ValueError):
-        return {"consents": {}, "pending": {}}
+    data = load_json(_STORE_PATH)
+    return {"consents": data.get("consents", {}), "pending": data.get("pending", {})}
 
 
 def _save(data: dict) -> None:
-    temporary = _STORE_PATH.with_suffix(".tmp")
-    temporary.write_text(json.dumps(data, indent=2) + "\n")
-    os.replace(temporary, _STORE_PATH)
+    save_json(_STORE_PATH, data)
 
 
 def user_is_in_policy_channel(client, user_id: str) -> bool:

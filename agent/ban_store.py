@@ -4,24 +4,23 @@
 user's messages never start a run, on Slack or the web UI, since both funnel
 through that one pipeline. The `!ban`/`!unban` command syntax that manages
 this list lives here too: parsing and enforcement are two views of the same
-data, and only agent.ban_store.BAN_ADMIN_USER_ID may issue either command
+data, and only the maintainer (agent.admin_alerts.ADMIN_USER_ID) may issue either command
 (listeners.events.message / app_mentioned check that before calling ban_user/
 unban_user — this module doesn't enforce it itself, so it stays a pure store).
 """
 
 from __future__ import annotations
 
-import json
-import os
 import re
 import threading
 import time
 
+from agent.admin_alerts import ADMIN_USER_ID
+from agent.json_file import load_json, save_json
+
 BAN_STORE_FILE = "ban_store.json"
 _lock = threading.Lock()
 
-# Hardcoded, not configurable at runtime — only this Slack user may ban/unban.
-BAN_ADMIN_USER_ID = "U0B2VTYER33"
 # Every ban/unban is announced here regardless of which channel or DM the
 # command was issued from.
 ANNOUNCE_CHANNEL_ID = "C0BCNM6SQA0"
@@ -37,27 +36,15 @@ _BAN_COMMAND_RE = re.compile(r"^!(ban|unban)\s+<@([A-Z0-9]+)(?:\|[^>]*)?>\s*(.*)
 
 
 def _load() -> dict:
-    try:
-        with open(BAN_STORE_FILE) as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
-    # A non-dict top-level value (corrupt/hand-edited file) must fall back to
-    # "no bans" rather than raise AttributeError the next time something
-    # calls .get() on it (e.g. is_banned) — mirrors the same defensive check
-    # agent.scheduler / agent.policy_consent already make on their own stores.
-    return data if isinstance(data, dict) else {}
+    return load_json(BAN_STORE_FILE)
 
 
 def _save(data: dict) -> None:
-    temp = f"{BAN_STORE_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, BAN_STORE_FILE)
+    save_json(BAN_STORE_FILE, data)
 
 
 def is_authorized(user_id: str) -> bool:
-    return user_id == BAN_ADMIN_USER_ID
+    return user_id == ADMIN_USER_ID
 
 
 def ban_user(target_user_id: str, reason: str = "") -> None:

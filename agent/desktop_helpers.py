@@ -14,7 +14,6 @@ commands run through the sandbox coolton already has, wrapped in an idempotent
 DISPLAY is never inherited — every command must pass `envs=_desktop_env(proxy_info)`.
 """
 
-import re
 import shlex
 import secrets
 import string
@@ -204,45 +203,6 @@ def launch_app(sandbox, proxy_info, application: str) -> None:
     ensure_desktop(sandbox, proxy_info)
     handle = _run(sandbox, proxy_info, f"gtk-launch {shlex.quote(application)}", background=True, timeout=0)
     handle.disconnect()
-
-
-def get_current_window_id(sandbox, proxy_info) -> str:
-    ensure_desktop(sandbox, proxy_info)
-    return _run(sandbox, proxy_info, "xdotool getwindowfocus").stdout.strip()
-
-
-def get_application_windows(sandbox, proxy_info, application: str) -> list[str]:
-    # `|| true`: xdotool search exits non-zero (which commands.run raises on) when no
-    # window matches — a real, non-error outcome here, not a failure.
-    ensure_desktop(sandbox, proxy_info)
-    out = _run(
-        sandbox, proxy_info,
-        f"xdotool search --onlyvisible --class {shlex.quote(application)} || true",
-    ).stdout.strip()
-    return out.split("\n") if out else []
-
-
-def get_window_title(sandbox, proxy_info, window_id: str) -> str:
-    ensure_desktop(sandbox, proxy_info)
-    return _run(sandbox, proxy_info, f"xdotool getwindowname {shlex.quote(window_id)}").stdout.strip()
-
-
-def screen_size(sandbox, proxy_info) -> tuple[int, int]:
-    ensure_desktop(sandbox, proxy_info)
-    result = _run(sandbox, proxy_info, "xrandr")
-    match = re.search(r"current (\d+) x (\d+)", result.stdout)
-    if not match:
-        raise RuntimeError(f"Could not parse screen size from xrandr output: {result.stdout}")
-    return int(match.group(1)), int(match.group(2))
-
-
-def cursor_position(sandbox, proxy_info) -> tuple[int, int]:
-    ensure_desktop(sandbox, proxy_info)
-    result = _run(sandbox, proxy_info, "xdotool getmouselocation")
-    match = re.search(r"x:(\d+)\s+y:(\d+)", result.stdout)
-    if not match:
-        raise RuntimeError(f"Could not parse cursor position from: {result.stdout}")
-    return int(match.group(1)), int(match.group(2))
 
 
 def _vnc_running(sandbox, proxy_info) -> bool:

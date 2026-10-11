@@ -41,7 +41,25 @@ def _free_port() -> int:
 # holds the default port once anyone has used code mode (agent.tool_proxy).
 os.environ.setdefault("COOLTON_TOOL_PROXY_PORT", str(_free_port()))
 
-from agent import fallback_cache, feedback_store, leave_thread_store, provider_config
+from agent import byok_store, fallback_cache, feedback_store, leave_thread_store, provider_config  # noqa: E402
+
+
+def _fake_resolve_host(hostname: str) -> list[str]:
+    """No real DNS in tests: an IP stays itself, `*.invalid` doesn't resolve, and any
+    other name resolves to one public address."""
+    import ipaddress
+
+    try:
+        return [str(ipaddress.ip_address(hostname))]
+    except ValueError:
+        return [] if hostname.endswith(".invalid") else ["93.184.216.34"]
+
+
+@pytest.fixture(autouse=True)
+def _no_real_dns(monkeypatch):
+    """Endpoint URLs are checked against every address their host resolves to
+    (agent.byok_store.validate_endpoint_url); tests use made-up hosts."""
+    monkeypatch.setattr(byok_store, "_resolve_host", _fake_resolve_host)
 
 
 @pytest.fixture(autouse=True)

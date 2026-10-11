@@ -129,6 +129,20 @@ def test_hcai_status_checked_on_a_slack_turn(mocks):
     mocks.hcai_warn.assert_called_once_with(mocks.client, "C1", "1.1")
 
 
+def test_a_web_turn_runs_on_the_web_platform(mocks):
+    """Web turns used to run as Slack ones: Slack's prompt, a Slack channel "web"."""
+    from agent.platforms.web import WebPlatform
+
+    _run_turn(mocks)
+    assert turn.AgentDeps.call_args.kwargs["platform"] is None  # Slack's, the default
+
+    surface = Mock()
+    surface.name = "web"
+    turn.run_agent_turn(client=mocks.client, logger=mocks.logger, channel_id="web", thread_ts="convo-1",
+                        message_ts="1.0", user_id="U1", user_token=None, text="hi", history=None, surface=surface)
+    assert isinstance(turn.AgentDeps.call_args.kwargs["platform"], WebPlatform)
+
+
 def test_skip_path_deletes_plan_and_does_not_stream(mocks):
     import agent.plan_block as pb
 
@@ -436,6 +450,23 @@ def test_stranded_steering_message_gets_a_fresh_turn(mocks):
     second_deps = second_call.args[1]
     assert second_deps.user_id == "U2"
     assert second_deps.message_ts == "222.222"
+
+
+def test_each_stranded_sender_gets_their_own_turn_in_order(mocks):
+    """Only the requester's messages fold into a running turn, so several people's can
+    be left over: every one is answered, one turn per sender, in order."""
+    from agent.steering_store import clear_steering_messages, queue_steering_message
+
+    queue_steering_message("C1", "1.1", "first from U2", "U2", "1.2")
+    queue_steering_message("C1", "1.1", "more from U2", "U2", "1.3")
+    queue_steering_message("C1", "1.1", "from U3", "U3", "1.4")
+    try:
+        _run_turn(mocks)
+    finally:
+        clear_steering_messages("C1", "1.1")
+
+    later = [(c.args[0], c.args[1].user_id) for c in turn.run_agent.call_args_list[1:]]
+    assert later == [("first from U2\n\nmore from U2", "U2"), ("from U3", "U3")]
 
 
 def test_stopped_run_context_preserved_for_stranded_steering_message(mocks, monkeypatch):

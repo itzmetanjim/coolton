@@ -6,6 +6,8 @@ current conversation" and "talk to Slack itself" that lets a second transport
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from agent.surface import get_surface
 from agent.surfaces.slack import SlackSurface
 
@@ -149,14 +151,19 @@ def test_slack_surface_set_engaged_delegates_to_leave_thread_store(monkeypatch):
     assert calls == [("join", "C1", "1.1"), ("leave", "C1", "1.1")]
 
 
-def test_slack_surface_build_hooks_is_none_without_a_plan_message():
-    surface = SlackSurface(Mock(), "C1", "1.1", "1.2")
-    deps = SimpleNamespace(plan_ts=None)
-    assert surface.build_hooks(deps) is None
+def test_slack_surface_stop_still_works_when_the_plan_message_failed_to_post(monkeypatch):
+    """The hooks that honor !stop, steering and checkpoints used to be skipped
+    along with the plan updates whenever there was no plan message."""
+    import asyncio
 
+    from agent.stop_store import HaltRun
 
-def test_slack_surface_build_hooks_returns_something_when_a_plan_message_exists():
-    surface = SlackSurface(Mock(), "C1", "1.1", "1.2")
-    deps = SimpleNamespace(plan_ts="100.100")
-    assert surface.build_hooks(deps) is not None
+    monkeypatch.setattr("agent.plan_block.stop_requested_for", lambda *a, **k: True)
+    hooks = SlackSurface(Mock(), "C1", "1.1", "1.2").build_hooks(SimpleNamespace(plan_ts=None))
+    deps = SimpleNamespace(plan_ts=None, channel_id="C1", thread_ts="1.1", run_started_at=0.0, plan_tasks={})
+    before_tool = hooks._registry["before_tool_execute"][0].func
+    call = SimpleNamespace(tool_name="fetch_url_tool", tool_call_id="abc")
+
+    with pytest.raises(HaltRun):
+        asyncio.run(before_tool(SimpleNamespace(deps=deps, messages=[]), call=call, tool_def=None, args={}))
 

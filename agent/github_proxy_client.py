@@ -12,13 +12,30 @@ real GitHub PAT never leaves the host.
 import logging
 import os
 import secrets
+from pathlib import Path
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 ADMIN_URL = os.environ.get("GH_PROXY_ADMIN_URL", "http://127.0.0.1:29055")
-ADMIN_TOKEN = os.environ.get("GH_PROXY_ADMIN_TOKEN", "") or os.environ.get("COOLTON_GH_TOKEN", "")
+# github_proxy.py's own ADMIN_TOKEN_FILE (it creates it when GH_PROXY_ADMIN_TOKEN isn't set).
+ADMIN_TOKEN_FILE = Path(__file__).resolve().parent.parent / ".gh_proxy_admin_token"
+# Sandbox tokens expire after 24h on the proxy side (github_proxy.TOKEN_TTL_SECONDS);
+# a token this old is replaced before it's used again (agent.sandbox_helpers).
+TOKEN_REFRESH_AFTER_SECONDS = 12 * 3600
+
+
+def _admin_token() -> str:
+    """GH_PROXY_ADMIN_TOKEN, else the one github_proxy.py keeps in ADMIN_TOKEN_FILE.
+    Never the GitHub token itself."""
+    token = os.environ.get("GH_PROXY_ADMIN_TOKEN", "")
+    if token:
+        return token
+    try:
+        return ADMIN_TOKEN_FILE.read_text().strip()
+    except OSError:
+        return ""
 
 # Public endpoint the sandbox uses for GitHub traffic (TLS terminated by Caddy).
 PUBLIC_PROXY_HOST = os.environ.get("GH_PROXY_HOST", "ghproxy.tanjim.org")
@@ -29,7 +46,7 @@ def issue_sandbox_token(sandbox_id: str) -> str:
     tok = secrets.token_urlsafe(32)
     resp = requests.post(
         f"{ADMIN_URL}/tokens",
-        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        headers={"Authorization": f"Bearer {_admin_token()}"},
         json={"token": tok},
         timeout=10,
     )
@@ -44,7 +61,7 @@ def revoke_sandbox_token(token: str) -> None:
     try:
         requests.delete(
             f"{ADMIN_URL}/tokens",
-            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+            headers={"Authorization": f"Bearer {_admin_token()}"},
             json={"token": token},
             timeout=10,
         )

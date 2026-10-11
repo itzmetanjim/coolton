@@ -56,10 +56,6 @@ class Surface(Protocol):
         """Remove a reaction from a message in this conversation."""
         ...
 
-    def set_activity(self, text: str) -> None:
-        """Live 'what's coolton doing right now' status, refreshed through the turn."""
-        ...
-
     def download_attachments(self, sandbox: Any, limit: int = 20) -> str:
         """Download this conversation's attachments into the sandbox."""
         ...
@@ -76,7 +72,9 @@ class Surface(Protocol):
 
     def build_hooks(self, deps: Any) -> Any | None:
         """Return a pydantic_ai Hooks capability (or None) for showing live
-        turn progress — the "thinking block" equivalent for this platform."""
+        turn progress — the "thinking block" equivalent for this platform — and
+        for what runs alongside it before and after each tool: !stop, steering,
+        checkpoints."""
         ...
 
     def set_model(self, deps: Any, model_used: str) -> None:

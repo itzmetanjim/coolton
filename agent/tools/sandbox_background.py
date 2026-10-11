@@ -39,7 +39,7 @@ import re
 import shlex
 import uuid
 
-from agent.sandbox_helpers import get_or_create_sandbox, pause_if_idle
+from agent.sandbox_helpers import get_or_create_sandbox, pause_if_idle, run_command
 
 _JOB_ID_RE = re.compile(r"^[a-f0-9]{8}$")
 _BG_DIR = "~/.coolton_bg"
@@ -96,7 +96,7 @@ def run_background_command(channel_id: str, thread_ts: str, command: str, user_i
     script = "\n".join(lines)
 
     try:
-        result = sandbox.commands.run(script, timeout=30)
+        result = run_command(sandbox, script, timeout=30)
     except Exception as e:
         pause_if_idle(channel_id, thread_ts, sandbox)
         return f"Error starting background command: {e}"
@@ -140,8 +140,8 @@ def get_job_status(channel_id: str, thread_ts: str, job_id: str, tail_lines: int
     )
     output_cmd = f"tail -n {max(1, tail_lines)} {log_path} 2>/dev/null"
     try:
-        status_result = sandbox.commands.run(status_cmd, timeout=15)
-        output_result = sandbox.commands.run(output_cmd, timeout=15)
+        status_result = run_command(sandbox, status_cmd, timeout=15)
+        output_result = run_command(sandbox, output_cmd, timeout=15)
     except Exception as e:
         _rearm_or_pause(sandbox, channel_id, thread_ts, still_running=False)
         return f"Error checking background command: {e}"
@@ -196,11 +196,13 @@ def kill_background_command(channel_id: str, thread_ts: str, job_id: str) -> str
     cmd = (
         f'if [ -f {pid_path} ]; then '
         f'pid=$(cat {pid_path}); '
-        f'kill "$pid" 2>/dev/null && echo KILLED || echo NOT_RUNNING; '
+        # setsid made the job its own process group: kill all of it (a dev server's
+        # children too), not just the bash wrapper.
+        f'{{ kill -- -"$pid" || kill "$pid"; }} 2>/dev/null && echo KILLED || echo NOT_RUNNING; '
         f'else echo UNKNOWN; fi'
     )
     try:
-        result = sandbox.commands.run(cmd, timeout=15)
+        result = run_command(sandbox, cmd, timeout=15)
     except Exception as e:
         _rearm_or_pause(sandbox, channel_id, thread_ts, still_running=False)
         return f"Error killing background command: {e}"

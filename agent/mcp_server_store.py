@@ -10,19 +10,15 @@ transport: Streamable HTTP or the older HTTP+SSE.
 """
 
 import asyncio
-import base64
 import json
 import logging
-import os
-import tempfile
 import threading
 import uuid
 
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from agent.byok_store import validate_endpoint_url
+from agent.json_file import load_json, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -32,58 +28,20 @@ MCP_SERVER_ENV_KEY = "MCP_SERVER_ENCRYPTION_KEY"
 MAX_SERVERS_PER_USER = 5
 
 store_lock = threading.Lock()
-_key_lock = threading.Lock()
 
 
 def _get_fernet() -> Fernet:
-    key = os.environ.get(MCP_SERVER_ENV_KEY)
-    if key:
-        key_bytes = key.encode() if isinstance(key, str) else key
-        if len(key_bytes) != 44:
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=b"coolton-mcp-server-salt",
-                iterations=100000,
-            )
-            key_bytes = base64.urlsafe_b64encode(kdf.derive(key_bytes))
-        else:
-            key_bytes = key_bytes if isinstance(key_bytes, bytes) else key_bytes.encode()
-        return Fernet(key_bytes)
+    from agent.secret_box import fernet
 
-    with _key_lock:
-        if os.path.exists(MCP_SERVER_KEY_FILE):
-            with open(MCP_SERVER_KEY_FILE, "rb") as f:
-                return Fernet(f.read().strip())
-
-        key = Fernet.generate_key()
-        fd, name = tempfile.mkstemp(
-            prefix="mcp-server-key-", dir=os.path.dirname(os.path.abspath(MCP_SERVER_KEY_FILE)) or "."
-        )
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "wb") as f:
-                f.write(key)
-            os.replace(name, MCP_SERVER_KEY_FILE)
-        finally:
-            if os.path.exists(name):
-                os.unlink(name)
-        logger.info("Generated new MCP server encryption key at %s", MCP_SERVER_KEY_FILE)
-        return Fernet(key)
+    return fernet(MCP_SERVER_ENV_KEY, MCP_SERVER_KEY_FILE, b"coolton-mcp-server-salt")
 
 
 def _load() -> dict:
-    if not os.path.exists(MCP_SERVER_STORE_FILE):
-        return {}
-    with open(MCP_SERVER_STORE_FILE, "r") as f:
-        return json.load(f)
+    return load_json(MCP_SERVER_STORE_FILE)
 
 
 def _save(data: dict) -> None:
-    temp = f"{MCP_SERVER_STORE_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, MCP_SERVER_STORE_FILE)
+    save_json(MCP_SERVER_STORE_FILE, data, private=True)
 
 
 def _enc(fernet: Fernet, value: str) -> str:
@@ -232,5 +190,11 @@ def probe_server(url: str, token: str = "", transport: str = "auto", headers: di
     """Connect to an MCP server and list its tools, so a bad URL, transport or credential
     is caught when the user adds it rather than silently on every future turn
     (agent/platforms/slack.py's toolsets() just drops a toolset that fails to build).
-    `transport` "auto" tries Streamable HTTP and SSE. Returns (ok, detail, transport)."""
+    `transport` "auto" tries Streamable HTTP and SSE. Returns (ok, detail, transport).
+    The URL is checked first (validate_endpoint_url), so a local or private address is
+    never even connected to."""
+    try:
+        url = validate_endpoint_url(url)
+    except ValueError as e:
+        return False, str(e), transport
     return asyncio.run(_probe(url, token or None, transport, headers))

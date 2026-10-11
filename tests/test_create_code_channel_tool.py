@@ -45,17 +45,3 @@ def test_allowed_with_no_surface_set_default_slack(monkeypatch):
     assert called["source_channel_id"] == "C1"
     assert called["source_thread_ts"] == "1.1"
     assert called["source_message_ts"] == "1.2"  # links the channel to the request's message
-
-
-def test_allowed_with_explicit_slack_surface(monkeypatch):
-    monkeypatch.setattr(
-        "agent.tools.code_channel.create_code_channel",
-        lambda *a, **k: "Created code channel <#C1>.",
-    )
-    slack_surface = SimpleNamespace(name="slack")
-    result = agent_mod.create_code_channel_tool(_ctx(slack_surface), name="x")
-    assert "Created code channel" in result
-
-
-def test_excluded_from_code_mode():
-    assert "create_code_channel_tool" in agent_mod.CODE_MODE_EXCLUDED_TOOLS

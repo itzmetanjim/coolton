@@ -18,10 +18,11 @@ from agent.plan_block import (
     _looks_like_tool_call_leakage,
     _messages_safe_for_resume,
     _safe_str,
-    _steering_note,
+    steering_note,
+    steering_senders,
 )
 from agent.redact import redact as _redact
-from agent.steering_store import clear_steering_messages, peek_steering_messages
+from agent.steering_store import take_steering_messages
 from agent.stop_store import HaltRun, ended_turn_on_purpose, stop_requested_for
 
 logger = logging.getLogger(__name__)
@@ -132,12 +133,9 @@ def build_web_hooks(conversation_id: str):
     async def after_tool(ctx, *, call, tool_def, args, result):
         deps = ctx.deps
 
-        steering = peek_steering_messages(deps.channel_id, deps.thread_ts)
-        if steering and isinstance(result, str):
-            requester_id = getattr(deps, "user_id", "")
-            notes = "\n\n".join(_steering_note(s, requester_id) for s in steering)
-            result = f"{result}\n\n{notes}"
-            clear_steering_messages(deps.channel_id, deps.thread_ts)
+        steering = take_steering_messages(deps.channel_id, deps.thread_ts) if isinstance(result, str) else []
+        if steering:
+            result = f"{result}\n\n" + "\n\n".join(steering_note(s, steering_senders(deps)) for s in steering)
 
         if is_preload_call(call):
             return result

@@ -1,4 +1,5 @@
 import base64
+import json
 import zlib
 from urllib.parse import quote
 
@@ -62,11 +63,15 @@ def _render_with_kroki(diagram_code: str, theme: str) -> str:
 
 
 def _render_with_mermaid_ink(diagram_code: str, theme: str) -> str:
-    """Fallback renderer using mermaid.ink."""
+    """Fallback renderer using mermaid.ink. Its compressed form is `pako:` plus the
+    deflated, base64url'd JSON state the Mermaid live editor uses ({"code", "mermaid"});
+    without the prefix mermaid.ink reads the path as plain base64 text, so zlib bytes
+    there never rendered."""
     try:
-        compressed = zlib.compress(diagram_code.encode())
+        state = {"code": diagram_code, "mermaid": json.dumps({"theme": theme})}
+        compressed = zlib.compress(json.dumps(state).encode(), 9)
         encoded = base64.urlsafe_b64encode(compressed).decode().rstrip("=")
-        url = f"{MERMAID_INK_URL}/img/{encoded}?theme={quote(theme, safe='')}"
+        url = f"{MERMAID_INK_URL}/img/pako:{encoded}?theme={quote(theme, safe='')}"
         if _verify_get(url):
             return url
     except Exception:

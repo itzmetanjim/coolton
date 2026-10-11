@@ -1,17 +1,14 @@
 """Slack app creation, token registration, and safe Worker deployment helpers."""
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import os
 import shlex
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
+from agent.json_file import load_json, save_json
 
 STORE = Path(os.environ.get("COOLTON_BOT_STORE", "~/.coolton_bots.json")).expanduser()
 
@@ -21,17 +18,11 @@ STORE = Path(os.environ.get("COOLTON_BOT_STORE", "~/.coolton_bots.json")).expand
 PUBLIC_BASE_URL = os.environ.get("COOLTON_PUBLIC_URL", "https://coolton.tanjim.org")
 OAUTH_CALLBACK_PATH = "/bot-oauth/callback"
 _STATE_MAX_AGE_SECONDS = 24 * 3600
+_DEPLOY_TIMEOUT_SECONDS = 600
 
 
 def oauth_callback_url() -> str:
     return PUBLIC_BASE_URL.rstrip("/") + OAUTH_CALLBACK_PATH
-
-
-def _state_secret() -> bytes:
-    # Reuses the same secret web/auth.py signs its session cookies with —
-    # there's nothing web-UI-specific about it, it's just coolton's one
-    # general-purpose "sign a short-lived server-issued token" key.
-    return os.environ.get("COOLTON_WEB_SECRET", "").encode()
 
 
 def sign_install_state(app_id: str) -> str:
@@ -39,52 +30,33 @@ def sign_install_state(app_id: str) -> str:
     app it was created for. web/bot_oauth.py verifies this on the way back
     from Slack so a forged/foreign `state` can never register a token onto an
     app it doesn't belong to."""
-    payload = f"{app_id}:{time.time()}"
-    body = base64.urlsafe_b64encode(payload.encode()).rstrip(b"=").decode()
-    sig = hmac.new(_state_secret(), body.encode(), hashlib.sha256).hexdigest()
-    return f"{body}.{sig}"
+    from agent.signing import sign
+
+    return sign("bot-install", {"app_id": app_id, "issued_at": time.time()})
 
 
 def verify_install_state(state: str) -> str | None:
     """Inverse of sign_install_state: the app_id if `state` is validly signed
     and not expired, else None."""
-    if not _state_secret() or not state:
+    from agent.signing import verify
+
+    payload = verify("bot-install", state)
+    if not payload or not isinstance(payload.get("app_id"), str):
         return None
     try:
-        body, sig = state.rsplit(".", 1)
-    except ValueError:
-        return None
-    expected_sig = hmac.new(_state_secret(), body.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(sig, expected_sig):
-        return None
-    try:
-        padding = "=" * (-len(body) % 4)
-        app_id, ts = base64.urlsafe_b64decode(body + padding).decode().rsplit(":", 1)
-        if time.time() - float(ts) > _STATE_MAX_AGE_SECONDS:
+        if time.time() - float(payload.get("issued_at")) > _STATE_MAX_AGE_SECONDS:
             return None
-        return app_id
-    except Exception:
+    except (TypeError, ValueError):
         return None
+    return payload["app_id"]
 
 
 def _load() -> dict[str, Any]:
-    try:
-        return json.loads(STORE.read_text())
-    except FileNotFoundError:
-        return {}
+    return load_json(STORE)
 
 
 def _save(data: dict[str, Any]) -> None:
-    STORE.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix="coolton-bots-", dir=STORE.parent)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f)
-        os.replace(name, STORE)
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
+    save_json(STORE, data, private=True, indent=None)  # bot tokens and signing secrets
 
 
 def _api(method: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -286,7 +258,7 @@ def wrangler_bot_deploy(
 
     Injects stored secrets, runs wrangler deploy, then cleans up.
     """
-    from agent.sandbox_helpers import get_or_create_sandbox
+    from agent.sandbox_helpers import get_or_create_sandbox, run_command
 
     record, error = _owned_record(_load(), uuid, requester_id)
     if error:
@@ -311,11 +283,12 @@ def wrangler_bot_deploy(
 
     try:
         sandbox.files.write(env_path, env_content)
-        cmd_parts = ["cd", working_dir, "&&", "npx", "wrangler@latest", "deploy", "--temporary", "--secrets-file", ".env_slack"]
+        deploy = ["npx", "wrangler@latest", "deploy", "--temporary", "--secrets-file", ".env_slack"]
         if additional_flags:
-            cmd_parts += shlex.split(additional_flags)
-        cmd = " ".join(cmd_parts)
-        result = sandbox.commands.run(cmd)
+            deploy += shlex.split(additional_flags)
+        cmd = f"cd {shlex.quote(working_dir)} && {shlex.join(deploy)}"
+        # An npx download plus a deploy routinely takes longer than the 60s default.
+        result = run_command(sandbox, cmd, timeout=_DEPLOY_TIMEOUT_SECONDS)
         output = (result.stdout or "") + (result.stderr or "")
         if result.exit_code:
             return f"Error: wrangler deploy failed (exit {result.exit_code}):\n{output}"
@@ -324,6 +297,6 @@ def wrangler_bot_deploy(
         return f"Error: {e}"
     finally:
         try:
-            sandbox.commands.run(f"rm -f {env_path}")
+            sandbox.commands.run(f"rm -f {shlex.quote(env_path)}")
         except Exception:
             pass

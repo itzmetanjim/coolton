@@ -153,10 +153,10 @@ def test_provider_redacts_secret_in_error_message(monkeypatch):
     secret-adjacent path in the codebase."""
     monkeypatch.setenv("JAMS_API_KEY", "sk-super-secret-123")
 
-    def boom(provider_name, api_key):
-        raise RuntimeError(f"auth failed with key sk-super-secret-123 for {provider_name}")
+    def boom(model_name, api_key):
+        raise RuntimeError(f"auth failed with key sk-super-secret-123 for {model_name}")
 
-    monkeypatch.setattr("agent.provider_probe.provider_config.apply_provider_env", boom)
+    monkeypatch.setattr("agent.provider_probe.provider_config.build_model", boom)
     from agent.redact import invalidate_secret_cache
     invalidate_secret_cache()
 
@@ -218,10 +218,10 @@ def test_provider_no_raw_body_prefix_for_non_base_url_providers(monkeypatch):
     through pydantic_ai's own model resolution, not the http_client this codebase
     constructs — there's no raw body to capture there, and detail must stay exactly
     the plain redacted error, not gain a stray 'raw HTTP' prefix."""
-    def boom(provider_name, api_key):
+    def boom(model_name, api_key):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("agent.provider_probe.provider_config.apply_provider_env", boom)
+    monkeypatch.setattr("agent.provider_probe.provider_config.build_model", boom)
 
     ok, display, elapsed, detail = provider_probe.test_provider(
         "anthropic", {"model": "m", "api_key": "k"}

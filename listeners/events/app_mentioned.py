@@ -4,16 +4,14 @@ from logging import Logger
 from slack_bolt import BoltContext, Say, SayStream
 from slack_sdk import WebClient
 
-from agent.active_runs import is_run_active
-from agent.ban_store import apply_ban_command, is_authorized, parse_ban_command
-from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel, is_expected_origin_context
+from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel
 from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import join_thread
-from agent.steering_store import queue_steering_message
-from agent.stop_store import is_stop_command, request_stop
+from agent.stop_store import is_stop_command
 from listeners.commands import parse_command, respond
-from thread_context import conversation_store
+from listeners.events.shared import handled_ban_command, is_ignored, report_failure, steered_into_active_run, stop_thread
 from listeners.events.turn import run_agent_turn
+from thread_context import conversation_store
 
 
 def handle_app_mentioned(
@@ -28,34 +26,13 @@ def handle_app_mentioned(
     """Handle @mentions in channels."""
     try:
         channel_id = context.channel_id
-
-        # Hardcoded: never respond in this channel, no matter what. The agent
-        # doesn't even start.
-        if channel_id == "C06QV2T1P4G":
-            return
-
-        # Never reply to bot messages, not even @mentions from other bots, nor to messages an
-        # app posted with a user token (an app_id but no bot_id).
-        if event.get("bot_id") or event.get("app_id"):
-            return
-        # Slack's "Context from" opener in a code channel coolton made quotes the request,
-        # mention included (agent.code_channel_store); the handoff turn already covers it.
-        if is_expected_origin_context(event.get("text", "")):
+        if is_ignored(context, event):
             return
 
         # One answer per message: coolton's app_mention and message events and the code
         # channels app's app_mention can all deliver the same mention (agent.mention_ids).
         from agent.mention_ids import claim_mention
         if event.get("ts") and not claim_mention(channel_id, event["ts"]):
-            return
-
-        # Banned users get nothing at all — not even !stop or a steering
-        # fold-in into someone else's active run (both live further down this
-        # function). This must run before either of those, since neither path
-        # reaches run_agent_turn (listeners.events.turn), which does its own
-        # is_banned() check but only guards a real turn, not a steer.
-        from agent.ban_store import is_banned
-        if is_banned(context.user_id):
             return
 
         text = event.get("text", "")
@@ -86,11 +63,7 @@ def handle_app_mentioned(
         # a normal prompt that merely contains the word "!stop" must not halt
         # anything.
         if is_stop_command(command_text, bot_id):
-            request_stop(channel_id, thread_ts)
-            say(
-                text="⏹️ stopping all your running coolton instances…",
-                thread_ts=thread_ts,
-            )
+            stop_thread(say, channel_id, thread_ts)
             return
 
         # !help / !connections: answered ephemerally, no turn started.
@@ -99,19 +72,7 @@ def handle_app_mentioned(
             respond(client, command, channel_id, context.user_id, thread_ts)
             return
 
-        # !ban / !unban: silently ignored (not even a "not authorized" reply)
-        # for anyone but ban_store.BAN_ADMIN_USER_ID, so the mechanism isn't
-        # exposed to random users typing the syntax.
-        ban_command = parse_ban_command(command_text, bot_id)
-        if ban_command:
-            if not is_authorized(user_id):
-                return
-            action, target_user_id, reason = ban_command
-            apply_ban_command(client, action, target_user_id, reason)
-            try:
-                client.reactions_add(channel=channel_id, timestamp=event["ts"], name="white_check_mark")
-            except Exception:
-                logger.exception("Failed to react to ban/unban command")
+        if handled_ban_command(client, logger, command_text, bot_id, user_id, channel_id, event["ts"]):
             return
 
         from agent.policy_consent import ensure_consent
@@ -121,17 +82,7 @@ def handle_app_mentioned(
         ):
             return
 
-        # coolton is already working in this thread — steer the run already in
-        # flight instead of racing a second one alongside it. See
-        # agent/steering_store.py + plan_block.after_tool for how the running
-        # turn picks this up.
-        if is_run_active(channel_id, thread_ts):
-            logger.info(f"Steering: queuing mention into active run {channel_id}/{thread_ts}: {text[:200]}")
-            queue_steering_message(channel_id, thread_ts, text, user_id, event["ts"])
-            try:
-                client.reactions_add(channel=channel_id, timestamp=event["ts"], name="white_check_mark")
-            except Exception:
-                logger.exception("Failed to react to steering message")
+        if steered_into_active_run(client, logger, channel_id, thread_ts, text, user_id, event["ts"]):
             return
 
         # Silently make sure cooltonUser is a member of this channel (not in DMs).
@@ -197,12 +148,4 @@ def handle_app_mentioned(
             images=images,
         )
     except Exception as e:
-        # Note: run_agent_turn handles its own plan-block error reporting with its
-        # real deps (see turn.py); an exception only lands here if it happened
-        # before/around that call, when no plan block was ever sent.
-        logger.exception(f"Failed to handle app mention: {e}")
-        from agent.redact import redact as _redact
-        say(
-            text=f":warning: Something went wrong! ({type(e).__name__}: {_redact(str(e))})",
-            thread_ts=event.get("thread_ts") or event["ts"],
-        )
+        report_failure(say, logger, event, e)

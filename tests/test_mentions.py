@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic_ai.messages import ToolCallPart
 
-from agent.mentions import defuse_mass_mentions
+from agent.mentions import defuse_args, defuse_mass_mentions
 
 agent_mod = importlib.import_module("agent.agent")
 
@@ -36,3 +36,24 @@ def test_a_reply_and_a_posting_tool_cant_ping_a_group(monkeypatch):
     asyncio.run(agent_mod._enforce_slack_budget(SimpleNamespace(deps=deps), call=call,
                 tool_def=SimpleNamespace(name="post_message_tool"), args=call.args, handler=handler))
     assert seen["text"] == "@channel hi"
+
+
+def test_block_kit_group_mentions_and_link_names_are_defused_even_inside_a_json_string():
+    import json
+
+    blocks = [{"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": [
+        {"type": "broadcast", "range": "channel"}, {"type": "usergroup", "usergroup_id": "S0123"},
+        {"type": "user", "user_id": "U0123"}]}]}]
+    params = {"channel": "C1", "text": "hi @channel", "link_names": True, "blocks": blocks}
+
+    defused = json.loads(defuse_args({"api_parameters": json.dumps(params)})["api_parameters"])
+
+    assert "link_names" not in defused
+    elements = defused["blocks"][0]["elements"][0]["elements"]
+    assert elements == [{"type": "text", "text": "@channel"}, {"type": "text", "text": "@S0123"},
+                        {"type": "user", "user_id": "U0123"}]  # a person's mention still links
+
+
+def test_a_json_string_with_nothing_to_defuse_is_left_byte_for_byte():
+    raw = '{"channel":"C1",  "text":"hi"}'
+    assert defuse_args(raw) == raw

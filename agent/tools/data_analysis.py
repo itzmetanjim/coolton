@@ -1,7 +1,7 @@
 import json
 import shlex
 
-from agent.sandbox_helpers import get_or_create_sandbox
+from agent.sandbox_helpers import get_or_create_sandbox, run_command
 
 
 def _get_sandbox(channel_id: str, thread_ts: str):
@@ -51,17 +51,17 @@ def extract_tar_gz_in_sandbox(channel_id: str, thread_ts: str, archive_path: str
         sandbox.commands.run(f"mkdir -p {shlex.quote(extract_to)}")
         
         # Validate tar members before extraction to prevent path traversal
-        check_result = sandbox.commands.run(f"tar -tzf {shlex.quote(archive_path)} 2>&1")
+        check_result = run_command(sandbox, f"tar -tzf {shlex.quote(archive_path)} 2>&1")
         if check_result.exit_code != 0:
             return f"Error reading archive: {check_result.stderr or check_result.stdout}"
         for member in check_result.stdout.splitlines():
             if member.startswith("/") or ".." in member or member.startswith("./.."):
                 return f"Error: Archive contains unsafe path: {member}"
         # Extract using tar
-        result = sandbox.commands.run(f"tar -xzf {shlex.quote(archive_path)} -C {shlex.quote(extract_to)} 2>&1")
+        result = run_command(sandbox, f"tar -xzf {shlex.quote(archive_path)} -C {shlex.quote(extract_to)} 2>&1")
         
         # List extracted files
-        list_result = sandbox.commands.run(f"find {shlex.quote(extract_to)} -type f | head -20")
+        list_result = run_command(sandbox, f"find {shlex.quote(extract_to)} -type f | head -20")
         
         output = []
         if result.stdout:
@@ -101,7 +101,7 @@ def analyze_csv_in_sandbox(channel_id: str, thread_ts: str, csv_path: str, query
         py_path = csv_path.replace("\\", "\\\\").replace("'", "\\'")
 
         # First check the CSV structure
-        check_result = sandbox.commands.run(f"head -5 {shell_path}")
+        check_result = run_command(sandbox, f"head -5 {shell_path}")
         if check_result.exit_code != 0 or not check_result.stdout:
             return f"Error: Could not read {csv_path}: {check_result.stderr or check_result.stdout}"
         
@@ -145,7 +145,7 @@ except Exception as e:
     print(f"Error: {{e}}")
 """
         
-        result = sandbox.commands.run(f"python3 -c {shlex.quote(script)}")
+        result = run_command(sandbox, f"python3 -c {shlex.quote(script)}")
         output = []
         if result.stdout:
             output.append(result.stdout)
@@ -194,7 +194,7 @@ def run_sql_on_csv(channel_id: str, thread_ts: str, csv_path: str, sql_query: st
             "    print(' | '.join(str(v) for v in row))\n"
             f"print(f'\\nRows returned: {{len(result)}}')"
         )
-        result = sandbox.commands.run(f"python3 -c {shlex.quote(script)}")
+        result = run_command(sandbox, f"python3 -c {shlex.quote(script)}")
         output = []
         if result.stdout:
             output.append(result.stdout)
@@ -225,20 +225,18 @@ def run_opencode_in_sandbox(channel_id: str, thread_ts: str, task: str, model: s
         return err
     try:
         # Install opencode if not present
-        install_check = sandbox.commands.run("which opencode || echo 'not found'")
+        install_check = run_command(sandbox, "which opencode || echo 'not found'")
         if "not found" in install_check.stdout:
             # Install via npm (requires node/npm)
-            install_result = sandbox.commands.run("npm install -g opencode-ai 2>&1 || curl -fsSL https://opencode.ai/install | bash 2>&1")
+            install_result = run_command(sandbox, "npm install -g opencode-ai 2>&1 || curl -fsSL https://opencode.ai/install | bash 2>&1")
             if install_result.stderr and "error" in install_result.stderr.lower():
                 return f"Failed to install opencode: {install_result.stderr}"
         
-        # Prepare the task
-        model_flag = f"--model {model}" if model else ""
-        
-        # Run opencode with the task
-        # opencode reads from stdin or takes task as argument
-        cmd = f"echo '{task}' | opencode run {model_flag} 2>&1"
-        result = sandbox.commands.run(cmd, timeout=300)
+        # opencode reads the task from stdin; both it and the model are quoted, so an
+        # apostrophe in the task doesn't end the string early.
+        model_flag = f"--model {shlex.quote(model)}" if model else ""
+        cmd = f"printf '%s' {shlex.quote(task)} | opencode run {model_flag} 2>&1"
+        result = run_command(sandbox, cmd, timeout=300)
         
         output = []
         if result.stdout:
@@ -266,12 +264,12 @@ def install_opencode_in_sandbox(channel_id: str, thread_ts: str) -> str:
         return err
     try:
         # Check if already installed
-        check = sandbox.commands.run("which opencode")
+        check = run_command(sandbox, "which opencode")
         if check.stdout.strip():
             return f"Opencode already installed at: {check.stdout.strip()}"
         
         # Install via npm
-        result = sandbox.commands.run("npm install -g opencode-ai 2>&1")
+        result = run_command(sandbox, "npm install -g opencode-ai 2>&1")
         if result.stdout:
             return f"Installed via npm:\n{result.stdout}"
         if result.stderr:
@@ -311,7 +309,7 @@ conn = duckdb.connect()
 
 {code}
 """
-        result = sandbox.commands.run(f"python3 -c {shlex.quote(wrapped_code)}", timeout=120)
+        result = run_command(sandbox, f"python3 -c {shlex.quote(wrapped_code)}", timeout=120)
         output = []
         if result.stdout:
             output.append(result.stdout)

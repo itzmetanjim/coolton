@@ -14,12 +14,11 @@ How it works (no CA, no MITM, no CONNECT):
   * If the presented token is in the allowlist, the proxy rewrites it to the real
     PAT (`Authorization: Basic <PAT>`) and forwards the request to github.com,
     mapping ghproxy.tanjim.org hostnames back to github.com.
-  * Unknown tokens get 403.
+  * Unknown and expired tokens get 403. Tokens last TOKEN_TTL_SECONDS and survive a
+    restart of this proxy (TOKENS_FILE).
 
 Run:
     python3 github_proxy.py
-Importable:
-    from github_proxy import add_token, remove_token, start_proxy, stop_proxy
 """
 
 import base64
@@ -30,8 +29,10 @@ import logging
 import os
 import re
 import threading
+import time
 import zlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, urlunparse
 
@@ -49,9 +50,48 @@ ADMIN_PORT = 29055
 TOOL_PROXY_PORT = 29057
 PROXY_HOST_SUFFIX = "ghproxy.tanjim.org"
 GITHUB_TOKEN = os.environ.get("COOLTON_GH_TOKEN", "")
-# Token used to authenticate admin calls (set via GH_PROXY_ADMIN_TOKEN; defaults to the
-# GitHub token so a single secret protects both). Never exposed to sandboxes.
-ADMIN_TOKEN = os.environ.get("GH_PROXY_ADMIN_TOKEN", "") or GITHUB_TOKEN
+# Authenticates admin calls (issuing/revoking sandbox tokens). Its own secret, never the
+# GitHub token: GH_PROXY_ADMIN_TOKEN if set, else a random one start_proxy() keeps in
+# ADMIN_TOKEN_FILE, which coolton reads too (agent.github_proxy_client). Empty until
+# then, and an empty one authorizes nothing.
+ADMIN_TOKEN = ""
+ADMIN_TOKEN_FILE = Path(__file__).resolve().parent / ".gh_proxy_admin_token"
+# Sandbox tokens stop working this long after they're issued; coolton issues a fresh
+# one well before then (agent.sandbox_helpers). They're kept in TOKENS_FILE, so a
+# restart of this proxy doesn't cut every sandbox off.
+TOKEN_TTL_SECONDS = 24 * 3600
+TOKENS_FILE = Path(__file__).resolve().parent / ".gh_proxy_tokens.json"
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write `path` atomically, readable by this user only."""
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _load_admin_token() -> str:
+    token = os.environ.get("GH_PROXY_ADMIN_TOKEN", "")
+    if token:
+        return token
+    try:
+        token = ADMIN_TOKEN_FILE.read_text().strip()
+    except OSError:
+        token = ""
+    if not token:
+        import secrets
+
+        token = secrets.token_urlsafe(32)
+        _write_private(ADMIN_TOKEN_FILE, token)
+    return token
 
 
 def _real_auth(upstream: str) -> str:
@@ -271,40 +311,57 @@ def _forbidden_reason(method: str, upstream: str, body: bytes | None) -> str | N
 
 
 class _Allowlist:
+    """Authorized sandbox tokens, each until its expiry (None: never)."""
+
     def __init__(self):
-        self._set = set()
+        self._expiry: dict[str, float | None] = {}
         self._lock = threading.Lock()
 
-    def add(self, tok: str):
+    def add(self, tok: str, ttl: float | None = TOKEN_TTL_SECONDS):
         if tok:
             with self._lock:
-                self._set.add(tok)
+                self._expiry[tok] = None if ttl is None else time.time() + ttl
 
     def remove(self, tok: str):
         with self._lock:
-            self._set.discard(tok)
+            self._expiry.pop(tok, None)
 
     def __contains__(self, tok: str) -> bool:
         with self._lock:
-            return tok in self._set
+            if tok not in self._expiry:
+                return False
+            expires = self._expiry[tok]
+            if expires is not None and time.time() >= expires:
+                del self._expiry[tok]
+                return False
+            return True
+
+    def save(self, path: Path) -> None:
+        """Persist the expiring tokens (not GH_PROXY_TOKEN's, which comes from the env)."""
+        now = time.time()
+        with self._lock:
+            live = {t: e for t, e in self._expiry.items() if e is not None and e > now}
+        _write_private(path, json.dumps(live))
+
+    def load(self, path: Path) -> None:
+        try:
+            saved = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return
+        now = time.time()
+        with self._lock:
+            for tok, expires in (saved.items() if isinstance(saved, dict) else []):
+                if isinstance(tok, str) and isinstance(expires, (int, float)) and expires > now:
+                    self._expiry[tok] = float(expires)
 
 
 allowlist = _Allowlist()
 # A long-lived test token may be supplied via GH_PROXY_TOKEN (handy for manual testing);
-# the agent issues short-lived per-sandbox tokens at runtime via add_token()/remove_token()
-# (or the admin HTTP endpoint). If GH_PROXY_TOKEN is set it is always authorized.
+# the agent issues expiring per-sandbox tokens at runtime via the admin HTTP endpoint.
+# If GH_PROXY_TOKEN is set it is always authorized.
 _test_token = os.environ.get("GH_PROXY_TOKEN", "")
 if _test_token:
-    allowlist.add(_test_token)
-
-
-# Importable helpers (these are what the agent will call later).
-def add_token(tok: str):
-    allowlist.add(tok)
-
-
-def remove_token(tok: str):
-    allowlist.remove(tok)
+    allowlist.add(_test_token, ttl=None)
 
 
 class _AdminHandler(BaseHTTPRequestHandler):
@@ -358,7 +415,8 @@ class _AdminHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "missing token"})
             return
         allowlist.add(tok)
-        self._send_json(200, {"ok": True})
+        allowlist.save(TOKENS_FILE)
+        self._send_json(200, {"ok": True, "ttl_seconds": TOKEN_TTL_SECONDS})
 
     def do_DELETE(self):
         if self.path != "/tokens" or not self._admin_ok():
@@ -367,6 +425,7 @@ class _AdminHandler(BaseHTTPRequestHandler):
         tok = (self._read_json() or {}).get("token", "")
         if tok:
             allowlist.remove(tok)
+            allowlist.save(TOKENS_FILE)
         self._send_json(200, {"ok": True})
 
     def log_message(self, *a): pass
@@ -639,11 +698,13 @@ _server = None
 
 
 def start_proxy(host=LISTEN_HOST, port=LISTEN_PORT):
-    global _server
+    global _server, ADMIN_TOKEN
     if _server is not None:
         return _server
     if not GITHUB_TOKEN:
         raise RuntimeError("COOLTON_GH_TOKEN not set")
+    ADMIN_TOKEN = _load_admin_token()
+    allowlist.load(TOKENS_FILE)
 
     class _S(ThreadingMixIn, HTTPServer):
         daemon_threads = True
@@ -671,7 +732,6 @@ def stop_proxy():
 if __name__ == "__main__":
     start_proxy()
     try:
-        import time
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:

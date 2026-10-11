@@ -42,6 +42,28 @@ def test_mark_sent_removes_from_due(tmp_files):
     assert scheduler._get_due_reminders() == []
 
 
+def test_a_reminder_that_fails_backs_off_then_gives_up(tmp_files, monkeypatch):
+    """A failed reminder used to be retried every 30 seconds forever."""
+    rid = scheduler.schedule_reminder("U1", "C1", "ping", delay_seconds=-10)
+    scheduler._record_reminder_failure(rid, "ratelimited")
+    assert scheduler._get_due_reminders() == []  # waits before the next try
+
+    now = scheduler.time.time()
+    monkeypatch.setattr(scheduler.time, "time", lambda: now + 3600)
+    assert [r["id"] for r in scheduler._get_due_reminders()] == [rid]
+
+    monkeypatch.setattr(scheduler.time, "time", lambda: now + 2 * 86400)
+    scheduler._record_reminder_failure(rid, "ratelimited")
+    assert scheduler._get_due_reminders() == []
+    assert scheduler._load_reminders()["reminders"][0]["failed"] is True
+
+
+def test_a_reminder_no_one_can_receive_is_given_up_on_at_once(tmp_files):
+    rid = scheduler.schedule_reminder("AUTOMATED", "C1", "ping", delay_seconds=-10)
+    scheduler._record_reminder_failure(rid, "channel_not_found")
+    assert scheduler._load_reminders()["reminders"][0]["failed"] is True
+
+
 def test_load_reminders_missing_or_corrupt(tmp_files):
     assert scheduler._load_reminders() == {"reminders": []}
     (tmp_files / "reminders.json").write_text("{broken")
@@ -343,6 +365,22 @@ def test_fire_task_posts_a_banner_and_updates_next_run(tmp_files, monkeypatch):
     task = scheduler._load_tasks()["tasks"][0]
     assert task["last_run_at"] is not None
     assert task["next_run_at"] is not None
+
+
+def test_fire_task_banner_credits_its_creator_and_cant_ping_a_group(tmp_files, monkeypatch):
+    """The banner repeats its creator's prompt every time it fires: a prompt with
+    <!channel> would ping the channel every half hour, unattributed."""
+    scheduler.create_scheduled_task(OWNER, "C1", "1.1", "<!channel> standup!", "0 9 * * *")
+    task_id = scheduler._load_tasks()["tasks"][0]["id"]
+    monkeypatch.setattr(scheduler, "_scheduler", None)
+    monkeypatch.setattr(scheduler._task_executor, "submit", lambda *a, **k: None)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    calls = _fake_web_client(monkeypatch)
+
+    scheduler._fire_task(task_id)
+
+    assert "<!channel>" not in calls[0]["text"] and "@channel standup!" in calls[0]["text"]
+    assert calls[0]["text"].endswith(f"(sent from <@{OWNER}>)")
 
 
 def test_fire_task_runs_a_real_turn_threaded_off_the_banner(tmp_files, monkeypatch):

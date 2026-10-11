@@ -149,6 +149,21 @@ def test_approved_install_moves_the_staged_files_into_place(repo):
     assert not os.path.exists(staging)
 
 
+def test_one_person_can_only_have_so_many_changes_waiting(repo):
+    """Each proposal is a DM to the maintainer (and an install's files on disk)."""
+    for i in range(skill_review.MAX_PENDING_PER_REQUESTER):
+        assert skill_review.submit({"op": "delete", "slug": f"s{i}"}, _ctx().deps, f"delete s{i}").startswith("Submitted")
+    staging = _staged_install(repo)
+    sent = len(repo.dms)
+
+    result = skill_review.submit({"op": "install", "staged_dir": staging, "slugs": ["cool-skill"]},
+                                 _ctx().deps, "install cool-skill")
+
+    assert result.startswith("Not submitted") and len(repo.dms) == sent
+    assert not os.path.exists(staging)  # its staged files don't pile up either
+    assert skill_review.submit({"op": "delete", "slug": "x"}, _ctx("U0SOMEONEELSE").deps, "delete x").startswith("Submitted")
+
+
 def test_rejected_install_deletes_the_staged_files(repo):
     staging = _staged_install(repo)
     spec = {"op": "install", "staged_dir": staging, "slugs": ["cool-skill"]}

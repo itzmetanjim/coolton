@@ -7,8 +7,10 @@ _active_since: dict[tuple[str, str], float] = {}
 # A run that "started" this long ago and never called mark_run_finished (e.g.
 # it crashed hard enough to skip the finally block) is presumed dead — this
 # stops a stuck entry from silently steering every future message in the
-# thread into a queue nothing will ever drain.
-_STALE_AFTER_SECONDS = 30 * 60
+# thread into a queue nothing will ever drain. Far past any real turn: with
+# subagents and 30-minute commands a live one can take well over an hour, and
+# treating it as dead starts a second turn alongside it.
+_STALE_AFTER_SECONDS = 6 * 60 * 60
 
 
 def mark_run_started(channel_id: str, thread_ts: str, started_at: float) -> None:
@@ -16,9 +18,12 @@ def mark_run_started(channel_id: str, thread_ts: str, started_at: float) -> None
         _active_since[(channel_id, thread_ts)] = started_at
 
 
-def mark_run_finished(channel_id: str, thread_ts: str) -> None:
+def mark_run_finished(channel_id: str, thread_ts: str, started_at: float) -> None:
+    """Clear the thread's mark if it is still this run's (the one that started at
+    `started_at`), not a newer run's that started after this one went stale."""
     with _lock:
-        _active_since.pop((channel_id, thread_ts), None)
+        if _active_since.get((channel_id, thread_ts)) == started_at:
+            del _active_since[(channel_id, thread_ts)]
 
 
 def is_run_active(channel_id: str, thread_ts: str) -> bool:

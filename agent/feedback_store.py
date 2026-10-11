@@ -3,16 +3,15 @@
 Every rating is saved the moment the button is clicked (so it's kept even if
 the comment box is skipped), then the optional comment is added to the same
 record on submit. One record per (channel, message, user): clicking again or
-changing your mind overwrites the rating. The admin DM in
+changing your mind overwrites the rating. Feedback given in conversation
+(submit_feedback_tool) is kept here too, one record each. The admin DM in
 listeners/views/feedback_views.py is unchanged; this is the durable copy.
 """
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 import threading
 import time
+from agent.json_file import load_json, save_json
 
 FEEDBACK_FILE = "feedback.json"
 _RESPONSE_CHARS = 2000
@@ -20,20 +19,11 @@ _lock = threading.Lock()
 
 
 def _load() -> dict:
-    try:
-        with open(FEEDBACK_FILE) as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return load_json(FEEDBACK_FILE)
 
 
 def _save(data: dict) -> None:
-    directory = os.path.dirname(os.path.abspath(FEEDBACK_FILE)) or "."
-    fd, temp = tempfile.mkstemp(prefix=".feedback-", suffix=".tmp", dir=directory)
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, FEEDBACK_FILE)
+    save_json(FEEDBACK_FILE, data)
 
 
 def _key(channel_id: str, message_ts: str, user_id: str) -> str:
@@ -68,6 +58,20 @@ def add_comment(channel_id: str, message_ts: str, user_id: str, rating: str, com
         record = data.get(key) or {"channel_id": channel_id, "message_ts": message_ts, "user_id": user_id, "created_at": time.time()}
         record.update({"rating": rating, "comment": comment, "updated_at": time.time()})
         data[key] = record
+        _save(data)
+
+
+def record_submitted(user_id: str, channel_id: str, kind: str, body: str) -> None:
+    """Save feedback someone gave coolton in conversation (agent.tools.feedback)."""
+    import uuid
+
+    now = time.time()
+    with _lock:
+        data = _load()
+        data[f"submitted:{uuid.uuid4().hex[:12]}"] = {
+            "channel_id": channel_id, "user_id": user_id, "kind": kind, "comment": body,
+            "created_at": now, "updated_at": now,
+        }
         _save(data)
 
 

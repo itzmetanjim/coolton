@@ -33,3 +33,15 @@ def test_submit_feedback_rejects_empty_body(monkeypatch):
 def test_submit_feedback_kind_is_case_insensitive(monkeypatch):
     monkeypatch.setattr(feedback, "notify_admin", lambda text, **k: None)
     assert feedback.submit_feedback("U1", "C1", "BUG", "body").startswith("Logged bug")
+
+
+def test_every_piece_of_feedback_is_kept_even_when_the_dm_is_rate_limited(monkeypatch):
+    from agent import feedback_store
+
+    dms = []
+    monkeypatch.setattr(feedback, "notify_admin", lambda text, **k: dms.append(k))
+    feedback.submit_feedback("U1", "C1", "bug", "first")
+    feedback.submit_feedback("U1", "C1", "bug", "second")
+
+    assert [r["comment"] for r in feedback_store.all_feedback()] == ["first", "second"]
+    assert dms[0]["dedupe_key"] == "feedback:U1" and dms[0]["min_interval_seconds"] > 0

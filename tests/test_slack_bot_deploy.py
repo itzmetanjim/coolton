@@ -391,6 +391,21 @@ def test_wrangler_bot_deploy_reports_nonzero_exit_code(monkeypatch):
     assert "boom" in result
 
 
+def test_wrangler_bot_deploy_quotes_the_directory_and_allows_a_slow_deploy(monkeypatch):
+    _seed_bot(monkeypatch)
+    sandbox = Mock()
+    sandbox.commands.run.return_value = Mock(stdout="deployed ok", stderr="", exit_code=0)
+    monkeypatch.setattr(
+        "agent.sandbox_helpers.get_or_create_sandbox", lambda c, t: (sandbox, {})
+    )
+
+    sbd.wrangler_bot_deploy("app123", "/work/my bot; rm -rf ~", "C1", "1.1", requester_id=OWNER)
+
+    (deploy,) = [c for c in sandbox.commands.run.call_args_list if "wrangler" in c.args[0]]
+    assert deploy.args[0].startswith("cd '/work/my bot; rm -rf ~' && ")
+    assert deploy.kwargs["timeout"] == 600
+
+
 # ---------------------------------------------------------------------------
 # Ownership — a bot belongs to whoever created it; nobody else (except the
 # maintainer) can check, re-token, re-manifest, or deploy it.

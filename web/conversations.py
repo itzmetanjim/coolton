@@ -270,8 +270,11 @@ def download_conversation_attachments(conversation_id: str, sandbox, limit: int 
     agent.surfaces.web.WebSurface.download_attachments."""
     if not os.path.isdir(ATTACHMENTS_DIR):
         return "No attachments found in this conversation."
+    from agent.sandbox_helpers import attachment_filename
+
     sandbox.commands.run("mkdir -p ~/attachments")
     results = []
+    taken: set[str] = set()
     for name in sorted(os.listdir(ATTACHMENTS_DIR)):
         if len(results) >= limit:
             break
@@ -286,7 +289,7 @@ def download_conversation_attachments(conversation_id: str, sandbox, limit: int 
             continue
         with open(path, "rb") as f:
             content = f.read()
-        filename = meta.get("name", asset_id)
+        filename = attachment_filename(meta.get("name") or asset_id, taken)
         sandbox.files.write(f"/home/user/attachments/{filename}", content)
         results.append(f"✓ {filename} ({len(content)} bytes)")
     if not results:

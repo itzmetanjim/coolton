@@ -10,6 +10,7 @@ click a button under. Modeled on gorkie's submit_feedback tool.
 from agent.admin_alerts import notify_admin
 
 _KINDS = {"bug", "praise", "suggestion", "other"}
+_DM_INTERVAL_SECONDS = 5 * 60
 _EMOJI = {
     "bug": ":lady_beetle:",
     "praise": ":tada:",
@@ -29,5 +30,10 @@ def submit_feedback(user_id: str, channel_id: str, kind: str, body: str) -> str:
         f"{_EMOJI.get(kind, ':speech_balloon:')} *Agent-submitted feedback ({kind})* "
         f"from <@{user_id}> in `{channel_id}`:\n{body.strip()}"
     )
-    notify_admin(text)
+    # Every piece is kept (feedback.json); the DM is at most one per person every few
+    # minutes, so nobody can flood the maintainer through this tool.
+    from agent.feedback_store import record_submitted
+
+    record_submitted(user_id, channel_id, kind, body.strip())
+    notify_admin(text, dedupe_key=f"feedback:{user_id}", min_interval_seconds=_DM_INTERVAL_SECONDS)
     return f"Logged {kind} feedback. Thanks!"

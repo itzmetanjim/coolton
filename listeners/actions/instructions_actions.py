@@ -1,5 +1,3 @@
-import json
-import os
 import logging
 import threading
 
@@ -7,6 +5,7 @@ from slack_bolt import Ack, BoltContext
 from slack_sdk import WebClient
 
 from listeners.views.instructions_views import build_instructions_modal
+from agent.json_file import load_json, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -15,17 +14,11 @@ instructions_lock = threading.Lock()
 
 
 def _load_instructions() -> dict:
-    if not os.path.exists(INSTRUCTIONS_FILE):
-        return {}
-    with open(INSTRUCTIONS_FILE, "r") as f:
-        return json.load(f)
+    return load_json(INSTRUCTIONS_FILE)
 
 
 def _save_instructions(data: dict):
-    temp = f"{INSTRUCTIONS_FILE}.tmp"
-    with open(temp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp, INSTRUCTIONS_FILE)
+    save_json(INSTRUCTIONS_FILE, data)
 
 
 def get_user_instructions(user_id: str) -> str:

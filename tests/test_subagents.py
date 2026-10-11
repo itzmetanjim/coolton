@@ -135,13 +135,13 @@ def test_a_sandbox_is_paused_only_by_the_last_call_using_it():
     sandbox.pause.assert_called_once()
 
 
-def test_a_subagent_that_keeps_the_sandbox_warm_keeps_it_warm_for_the_turn(monkeypatch):
+def test_a_subagents_keepalive_countdown_outlives_it(monkeypatch):
     turn = _deps()
 
     def run_chain(agent_dynamic, run_kwargs, deps, run_label=None):
-        deps.keep_sandbox_warm = True
+        deps.sandbox_keepalive_seconds = 300
         return SimpleNamespace(output="ok"), "p"
 
     monkeypatch.setattr(agent_mod, "_run_with_provider_chain", run_chain)
     assert subagents.run_subagent("summarizer", "summarize", turn) == "ok"
-    assert turn.keep_sandbox_warm
+    assert turn.sandbox_keepalive_seconds == 300

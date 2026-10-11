@@ -85,13 +85,9 @@ def test_serve_file_404_for_unknown_name(client):
     assert resp.status_code == 404
 
 
-def test_decode_base64_html_renders_content(client):
+def test_nothing_but_uploaded_files_is_served(client):
+    """The old /<base64> route rendered any HTML anyone put in a URL on a tanjim.org
+    host; nothing used it, so it's gone."""
+
     encoded = base64.urlsafe_b64encode(b"<h1>hi</h1>").decode().rstrip("=")
-    resp = client.get(f"/{encoded}")
-    assert resp.status_code == 200
-    assert "<h1>hi</h1>" in resp.text
-
-
-def test_decode_base64_html_rejects_invalid_input(client):
-    resp = client.get("/not valid base64!!!")
-    assert resp.status_code == 400
+    assert client.get(f"/{encoded}").status_code == 404

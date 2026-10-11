@@ -16,19 +16,20 @@ CSRF is handled with a standard double-submit cookie: /oauth/login sets a random
 `oauth_state` cookie and puts the same value in the `state` param; /oauth/callback
 requires them to match before exchanging the code.
 
-The session itself is a signed, stateless cookie (HMAC-SHA256 over
-{slack_id, issued_at} with COOLTON_WEB_SECRET) — no server-side session store,
-so it survives a restart and needs no cleanup job. hmac.compare_digest is used
-throughout for the same reason coolton_web_helper.py's Bearer check uses it:
-timing-safe comparison of anything secret-derived.
+The session itself is a signed, stateless cookie ({slack_id, issued_at}, signed
+by agent.signing) — no server-side session store, so it survives a restart and
+needs no cleanup job.
+
+Over HTTPS both cookies carry the `__Host-` prefix, which browsers only accept when
+the site's own host set it (Secure, Path=/, no Domain). Other *.tanjim.org hosts
+serve pages anyone can write (HTML embeds), and without the prefix such a page could
+set a Domain=tanjim.org cookie of the same name: logging a visitor into someone
+else's session, or fixing the OAuth state.
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import hmac
-import json
 import logging
 import os
 import secrets
@@ -124,45 +125,28 @@ def _secure_cookies(redirect_uri: str) -> bool:
     return redirect_uri.startswith("https://")
 
 
-def _secret() -> bytes:
-    key = os.environ.get("COOLTON_WEB_SECRET", "")
-    return key.encode()
+def _cookie_name(base: str, secure: bool) -> str:
+    """`base` with the `__Host-` prefix over HTTPS (see the module docstring); plain
+    HTTP (local dev) can't set a prefixed cookie, so it keeps the bare name."""
+    return f"__Host-{base}" if secure else base
 
 
-def _b64encode(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-
-def _b64decode(data: str) -> bytes:
-    padding = "=" * (-len(data) % 4)
-    return base64.urlsafe_b64decode(data + padding)
+def _request_cookie_name(base: str, request: Request) -> str:
+    return _cookie_name(base, _secure_cookies(_redirect_uri(request)))
 
 
 def _sign(payload: dict) -> str:
-    """Encode + HMAC-sign a payload dict into a `<payload>.<sig>` cookie value."""
-    body = _b64encode(json.dumps(payload, separators=(",", ":")).encode())
-    sig = hmac.new(_secret(), body.encode(), hashlib.sha256).hexdigest()
-    return f"{body}.{sig}"
+    """A signed session token (agent.signing) for `payload`."""
+    from agent.signing import sign
+
+    return sign("web-session", payload)
 
 
 def _verify(token: str) -> dict | None:
-    """Verify a `_sign`-produced token, returning its payload or None if invalid."""
-    if not _secret():
-        # Fail closed: no configured signing key means no session is ever valid,
-        # not that verification is skipped (same posture as coolton_web_helper's
-        # _authorized when its token file is empty/missing).
-        return None
-    try:
-        body, sig = token.rsplit(".", 1)
-    except ValueError:
-        return None
-    expected_sig = hmac.new(_secret(), body.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(sig, expected_sig):
-        return None
-    try:
-        return json.loads(_b64decode(body))
-    except Exception:
-        return None
+    """The payload of a session token `_sign` made, or None if it isn't one."""
+    from agent.signing import verify
+
+    return verify("web-session", token)
 
 
 def create_session_token(slack_id: str) -> str:
@@ -171,7 +155,7 @@ def create_session_token(slack_id: str) -> str:
 
 def get_session(request: Request) -> dict | None:
     """The signed-in user's session payload ({slack_id, issued_at}), or None."""
-    token = request.cookies.get(SESSION_COOKIE)
+    token = request.cookies.get(_request_cookie_name(SESSION_COOKIE, request))
     if not token:
         return None
     payload = _verify(token)
@@ -229,7 +213,8 @@ def _fetch_slack_id(access_token: str) -> str | None:
     )
     resp.raise_for_status()
     data = resp.json()
-    logger.info("HCA /api/v1/me raw response: %s", data)
+    # Just its shape: the values are the person's profile.
+    logger.info("HCA /api/v1/me response keys: %s", sorted(data) if isinstance(data, dict) else type(data).__name__)
     # The strategy's own raw_info hash nests fields directly; be tolerant of an
     # extra "user"/"data" wrapper, or a differently-cased/named key, since the
     # actual response shape isn't pinned down in the public docs.
@@ -245,15 +230,17 @@ def login(request: Request):
     redirect_uri = _redirect_uri(request)
     state = secrets.token_urlsafe(24)
     response = RedirectResponse(_authorize_url(state, redirect_uri), status_code=302)
+    secure = _secure_cookies(redirect_uri)
     response.set_cookie(
-        STATE_COOKIE, state, max_age=600, httponly=True, secure=_secure_cookies(redirect_uri), samesite="lax",
+        _cookie_name(STATE_COOKIE, secure), state, max_age=600, path="/", httponly=True, secure=secure,
+        samesite="lax",
     )
     return response
 
 
 @router.get("/oauth/callback")
 def callback(request: Request, code: str = "", state: str = ""):
-    expected_state = request.cookies.get(STATE_COOKIE, "")
+    expected_state = request.cookies.get(_request_cookie_name(STATE_COOKIE, request), "")
     if not code or not state or not expected_state or not hmac.compare_digest(state, expected_state):
         logger.warning("HCA callback rejected: missing/mismatched state")
         return RedirectResponse("/?auth_error=state", status_code=302)
@@ -272,16 +259,17 @@ def callback(request: Request, code: str = "", state: str = ""):
         return RedirectResponse("/?auth_error=no_slack_id", status_code=302)
 
     response = RedirectResponse("/", status_code=302)
-    response.delete_cookie(STATE_COOKIE)
+    secure = _secure_cookies(redirect_uri)
+    response.delete_cookie(_cookie_name(STATE_COOKIE, secure), path="/", secure=secure, httponly=True)
     response.set_cookie(
-        SESSION_COOKIE, create_session_token(slack_id),
-        max_age=SESSION_MAX_AGE_SECONDS, httponly=True, secure=_secure_cookies(redirect_uri), samesite="lax",
+        _cookie_name(SESSION_COOKIE, secure), create_session_token(slack_id),
+        max_age=SESSION_MAX_AGE_SECONDS, path="/", httponly=True, secure=secure, samesite="lax",
     )
     return response
 
 
 @router.get("/oauth/logout")
-def logout():
+def logout(request: Request):
     # Not "/" — the frontend calls /api/me on load and bounces any 401 straight
     # to /oauth/login, and Hack Club Auth itself stays signed in across that
     # round trip (it's a separate SSO session coolton has no way to end), so
@@ -289,5 +277,6 @@ def logout():
     # user ever sees it. "/?signed_out=1" tells the frontend to show a plain
     # "signed out" screen instead of calling any authenticated endpoint.
     response = RedirectResponse("/?signed_out=1", status_code=302)
-    response.delete_cookie(SESSION_COOKIE)
+    secure = _secure_cookies(_redirect_uri(request))
+    response.delete_cookie(_cookie_name(SESSION_COOKIE, secure), path="/", secure=secure, httponly=True)
     return response
