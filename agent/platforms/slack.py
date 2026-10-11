@@ -249,8 +249,9 @@ class SlackPlatform(PlatformAdapter):
             if not server:
                 continue
             try:
-                headers = {"Authorization": f"Bearer {server['token']}"} if server.get("token") else {}
-                transport = StreamableHttpTransport(server["url"], headers=headers)
+                from agent.mcp_server_store import build_transport
+                transport = build_transport(server["url"], server.get("transport", "http"), server.get("token"),
+                                            server.get("headers"))
                 result.append(HiddenToolset(MCPToolset(transport, id=f"user_mcp_{server['id']}")))
             except Exception:
                 logger.exception("Failed to build user MCP toolset %s (%s) for %s", server["id"], server["name"], user_id)

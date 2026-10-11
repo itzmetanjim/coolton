@@ -201,7 +201,7 @@ def build_app_home_view(
     servers_status = "not configured" if server_count == 0 else f"{server_count} server{'s' if server_count != 1 else ''} connected"
     blocks.append({
         "type": "section",
-        "text": {"type": "mrkdwn", "text": f"*Your MCP Servers*\n{servers_status}. Connect your own MCP servers (Notion, Linear, etc) — coolton loads their tools on every message."},
+        "text": {"type": "mrkdwn", "text": f"*Your MCP Servers*\n{servers_status}. Connect your own MCP servers (Notion, Linear, etc), over Streamable HTTP or SSE — coolton loads their tools on every message."},
     })
     blocks.append({
         "type": "actions",
@@ -212,7 +212,8 @@ def build_app_home_view(
     for server in mcp_servers:
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*{server['name']}*\n`{server['url']}`"},
+            "text": {"type": "mrkdwn", "text": f"*{server['name']}*\n`{server['url']}` "
+                     f"({'SSE' if server.get('transport') == 'sse' else 'Streamable HTTP'})"},
         })
         blocks.append({
             "type": "actions",

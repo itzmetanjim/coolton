@@ -95,6 +95,36 @@ def test_key_generated_when_no_env(tmp_store, monkeypatch, tmp_path):
 
 
 def test_probe_server_reports_failure_for_unreachable_host(tmp_store):
-    ok, detail = store.probe_server("https://this-host-should-not-resolve.invalid/mcp", "")
+    ok, detail, _ = store.probe_server("https://this-host-should-not-resolve.invalid/mcp", "")
     assert ok is False
-    assert detail
+    assert "Streamable HTTP" in detail and "SSE" in detail  # auto-detect tried both
+
+
+def test_auto_detect_keeps_whichever_transport_the_server_speaks(tmp_store, monkeypatch):
+    tried = []
+
+    async def fake_try(url, transport, token, headers):
+        tried.append(transport)
+        return transport == "sse", "ok" if transport == "sse" else "405 Method Not Allowed"
+
+    monkeypatch.setattr(store, "_try", fake_try)
+
+    assert store.probe_server("https://mcp.example.com/mcp")[0::2] == (True, "sse")
+    assert tried == ["http", "sse"]
+    tried.clear()
+    store.probe_server("https://mcp.example.com/sse")
+    assert tried == ["sse"]  # a /sse URL tries SSE first
+
+
+def test_servers_keep_their_transport_and_encrypted_headers(tmp_store):
+    """API-key headers are secrets like the token; servers saved before transports
+    existed were Streamable HTTP."""
+    headers = store.parse_headers("X-API-Key: abc123\n\nX-Org: acme")
+    server_id = store.add_server("U1", "Keyed", "https://mcp.example.com/sse", "", "sse", headers)
+
+    server = store.get_server_decrypted("U1", server_id)
+    assert server["transport"] == "sse" and server["headers"] == {"X-API-Key": "abc123", "X-Org": "acme"}
+    assert "abc123" not in open(store.MCP_SERVER_STORE_FILE).read()
+    assert store.request_headers("tok", {"Authorization": "Basic x"}) == {"Authorization": "Basic x"}
+    with pytest.raises(ValueError):
+        store.parse_headers("not a header")

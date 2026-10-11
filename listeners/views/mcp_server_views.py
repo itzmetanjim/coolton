@@ -7,6 +7,13 @@ def _pt(text: str) -> dict:
     return {"type": "plain_text", "text": text}
 
 
+_TRANSPORT_OPTIONS = [
+    {"text": _pt("Auto-detect"), "value": "auto"},
+    {"text": _pt("Streamable HTTP"), "value": "http"},
+    {"text": _pt("SSE"), "value": "sse"},
+]
+
+
 def build_add_mcp_server_modal() -> dict:
     return {
         "type": "modal",
@@ -20,8 +27,9 @@ def build_add_mcp_server_modal() -> dict:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "coolton will connect to this server's tools every time you message it. "
-                    "Must be a Streamable HTTP MCP server (SSE/stdio not supported).",
+                    "text": "coolton will connect to this server's tools every time you message it. Any "
+                    "remote MCP server works, over Streamable HTTP or SSE. A local (stdio) server has to "
+                    "be put behind an HTTP bridge first (e.g. `npx supergateway` or `mcp-proxy`).",
                 },
             },
             {"type": "divider"},
@@ -39,9 +47,29 @@ def build_add_mcp_server_modal() -> dict:
             },
             {
                 "type": "input",
+                "block_id": "server_transport",
+                "label": _pt("Transport"),
+                "element": {
+                    "type": "static_select", "action_id": "value",
+                    "initial_option": _TRANSPORT_OPTIONS[0],
+                    "options": _TRANSPORT_OPTIONS,
+                },
+                "hint": _pt("Auto-detect tries both and keeps whichever the server answers."),
+            },
+            {
+                "type": "input",
                 "block_id": "server_token",
                 "label": _pt("Bearer token (optional)"),
                 "element": {"type": "plain_text_input", "action_id": "value", "placeholder": _pt("Leave blank if the server needs no auth")},
+                "optional": True,
+            },
+            {
+                "type": "input",
+                "block_id": "server_headers",
+                "label": _pt("Extra headers (optional)"),
+                "element": {"type": "plain_text_input", "action_id": "value", "multiline": True,
+                            "placeholder": _pt("One per line, e.g. X-API-Key: abc123")},
+                "hint": _pt("For servers that take an API key in a header instead of a bearer token. Stored encrypted."),
                 "optional": True,
             },
         ],
@@ -52,14 +80,17 @@ def handle_mcp_server_add_submit(ack, body, client, context, logger):
     ack()
     user_id = context.user_id
     try:
-        from agent.mcp_server_store import add_server, probe_server
+        from agent.mcp_server_store import add_server, parse_headers, probe_server
 
         values = body["view"]["state"]["values"]
         name = values["server_name"]["value"]["value"]
         url = values["server_url"]["value"]["value"]
         token = values["server_token"]["value"].get("value") or ""
+        transport = ((values.get("server_transport", {}).get("value", {}).get("selected_option") or {})
+                     .get("value") or "auto")
+        headers = parse_headers(values.get("server_headers", {}).get("value", {}).get("value") or "")
 
-        ok, detail = probe_server(url, token)
+        ok, detail, transport = probe_server(url, token, transport, headers)
         if not ok:
             client.chat_postEphemeral(
                 channel=user_id, user=user_id,
@@ -67,7 +98,7 @@ def handle_mcp_server_add_submit(ack, body, client, context, logger):
             )
             return
 
-        add_server(user_id, name, url, token)
+        add_server(user_id, name, url, token, transport, headers)
         client.chat_postEphemeral(channel=user_id, user=user_id, text=f"Added MCP server: {name} ({detail}).")
     except Exception as e:
         logger.exception("Failed to add MCP server: %s", e)
