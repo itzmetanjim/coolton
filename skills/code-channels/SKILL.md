@@ -50,7 +50,7 @@ A code channel is a workspace for one task:
   people should look at rather than scroll past: an HTML page (a report, dashboard, demo or
   visualization), the diff of your changes (keep it current as you work; one per channel), a plan
   or document as a canvas people can comment on, Block Kit (interactive: you get a message when
-  someone presses a button or picks an option), or the PR. Same `view_key` = update in place. Up
+  someone presses a button or picks an option; load the `block-kit` skill to build it), or the PR. Same `view_key` = update in place. Up
   to 5 tabs. See what a tab holds with `code_channel_read_view_tool` (before changing one you
   didn't just write, or when someone asks about it), list them with `code_channel_list_views_tool`,
   and delete one with `code_channel_remove_view_tool` (deleting a canvas tab deletes its canvas too).
