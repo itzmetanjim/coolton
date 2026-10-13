@@ -1008,3 +1008,21 @@ def test_a_deployments_private_hooks_get_the_message_and_cant_break_it(ctx, monk
     monkeypatch.setattr(shared, "_private_hooks", None)
     _mention(ctx, ts="444.444")
     assert run.call_count == 3 and shared._private_hooks is False
+
+
+def test_a_deployments_private_hooks_listeners_come_before_the_catch_all(monkeypatch):
+    """Seen live: a button the hook registered did nothing, because listeners.actions'
+    catch-all for unhandled clicks was registered first and Bolt runs only the first match."""
+    import sys
+    import types
+
+    from listeners import register_listeners
+    from listeners.events import shared
+
+    order = []
+    monkeypatch.setitem(sys.modules, "private_hooks", types.SimpleNamespace(register=lambda app: order.append("hooks")))
+    monkeypatch.setattr(shared, "_private_hooks", None)
+    app = Mock()
+    app.action.side_effect = lambda matcher: order.append("action") or (lambda fn: fn)
+    register_listeners(app)
+    assert order[0] == "hooks"
