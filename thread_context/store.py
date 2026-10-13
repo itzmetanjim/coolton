@@ -5,6 +5,7 @@ to for `ttl_seconds` is forgotten."""
 
 import logging
 import os
+import threading
 import time
 from urllib.parse import quote
 
@@ -72,10 +73,24 @@ class ConversationStore:
     ):
         self._directory = directory
         self._ttl_seconds = ttl_seconds
+        self._legacy_file = legacy_file
         self._locks = KeyedLocks()
-        if legacy_file:
-            self._migrate(legacy_file)
-        self._forget_expired()
+        self._prepared = False
+        self._prepare_lock = threading.Lock()
+
+    def _prepare(self) -> None:
+        """Migrate the old single file and forget expired conversations, once, on first
+        use. Not on construction: thread_context makes the store at import, and merely
+        importing coolton (a test run in the live checkout, say) must not touch the
+        live conversations."""
+        if self._prepared:
+            return
+        with self._prepare_lock:
+            if not self._prepared:
+                if self._legacy_file:
+                    self._migrate(self._legacy_file)
+                self._forget_expired()
+                self._prepared = True
 
     def _path(self, channel_id: str, thread_ts: str) -> str:
         # Quoted, so whatever the ids hold it's one file in the directory (":" becomes %3A).
@@ -115,6 +130,7 @@ class ConversationStore:
 
         Returns None if no history exists or if the history has expired.
         """
+        self._prepare()
         with self._locks.hold((channel_id, thread_ts)):
             entry = self._load(channel_id, thread_ts)
         return entry["messages"] if entry else None
@@ -128,6 +144,7 @@ class ConversationStore:
         `last_seen_ts` is the Slack ts of the latest thread message this history
         covers (see get_last_seen_ts). It only ever moves forward.
         """
+        self._prepare()
         path = self._path(channel_id, thread_ts)
         try:
             with self._locks.hold((channel_id, thread_ts)):
@@ -146,6 +163,7 @@ class ConversationStore:
         """Slack ts of the latest thread message coolton's stored history for
         this thread covers — anything posted after it (while coolton wasn't
         mentioned) is something it hasn't seen. None if unknown."""
+        self._prepare()
         with self._locks.hold((channel_id, thread_ts)):
             entry = self._load(channel_id, thread_ts)
         return entry["last_seen_ts"] if entry else None

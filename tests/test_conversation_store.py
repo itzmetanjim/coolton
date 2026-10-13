@@ -87,6 +87,10 @@ def test_the_old_single_file_is_split_into_one_file_per_conversation(tmp_path):
     tmp_path.joinpath("conversations.json").write_text(json.dumps(data))
 
     store = _store(tmp_path, ttl_seconds=86400)
+    # Nothing moves until the store is used: importing coolton (thread_context makes
+    # the store at import) must not touch the live conversations.
+    assert tmp_path.joinpath("conversations.json").exists()
+    assert not tmp_path.joinpath("conversations").exists()
     assert store.get_history("C1", "1.1") == []
     assert store.get_last_seen_ts("C1", "1.1") == "5.0"
     assert store.get_history("C2", "2.2") is None
@@ -107,14 +111,14 @@ def test_corrupt_json_on_disk_no_crash(tmp_path):
     assert store.get_history("C1", "1.1") is not None
 
 
-def test_expired_conversations_are_deleted_at_startup(tmp_path):
+def test_expired_conversations_are_deleted_on_first_use(tmp_path):
     import os
 
     store = _store(tmp_path)
     store.set_history("C1", "1.1", _history("old"))
     path = tmp_path / "conversations" / "C1%3A1.1.json"
     os.utime(path, (1, 1))
-    _store(tmp_path, ttl_seconds=86400)
+    _store(tmp_path, ttl_seconds=86400).get_history("C2", "2.2")
     assert not path.exists()
 
 
