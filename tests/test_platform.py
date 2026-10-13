@@ -30,6 +30,31 @@ def test_slack_context_says_whether_the_conversation_is_private():
     assert "This conversation is a private channel (#lilytest)" in SlackPlatform(client).build_context_prompt(deps)
 
 
+def test_slack_context_says_which_mentioned_channels_can_be_read():
+    """Seen live: asked to analyze a bare <#C0188CY57PZ>, coolton said it was private
+    without trying to read it. It was #meta, a public channel."""
+    from slack_sdk.errors import SlackApiError
+
+    channels = {"CPUBLIC01": {"name": "meta"}, "CSECRET01": {"name": "secret-plans", "is_private": True}}
+
+    def info(channel):
+        if channel not in channels:
+            raise SlackApiError("not found", {"ok": False, "error": "channel_not_found"})
+        return {"channel": channels[channel]}
+
+    client = Mock()
+    client.conversations_info.side_effect = info
+    deps = SimpleNamespace(user_id="U123", channel_id="CHERE0001", thread_ts="1.2", message_ts="1.3", user_token=None,
+                           request_text="compare <#CPUBLIC01> and <#CSECRET01|> with <#CGONE0001|gone> and <#CHERE0001>")
+    channels["CHERE0001"] = {"name": "here"}
+
+    context = SlackPlatform(client).build_context_prompt(deps)
+    assert ("Channels mentioned in the message: <#CPUBLIC01> is a public channel (#meta), so you can read it; "
+            "<#CSECRET01> is private, so you can't read it; "
+            "<#CGONE0001> is private (or doesn't exist), so you can't read it\n") in context
+    assert "secret-plans" not in context
+
+
 def test_build_turn_context_contains_volatile_fields():
     deps = SimpleNamespace(user_id="U123", channel_id="C123", thread_ts="1.2", message_ts="1.3")
     context = SlackPlatform().build_turn_context(deps, "anthropic:claude-sonnet-4-6", True)

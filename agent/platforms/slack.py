@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 # channel_id -> (looked up at, description); a channel's name and privacy rarely change.
 _CHANNEL_DESCRIPTIONS: dict[str, tuple[float, str]] = {}
+_MENTIONED_CHANNELS: dict[str, tuple[float, str]] = {}
 _CHANNEL_DESCRIPTION_TTL = 600
+_CHANNEL_MENTION = re.compile(r"<#([CG][A-Z0-9]{6,})(?:\|[^>]*)?>")
 
 
 def describe_conversation(channel: dict) -> str:
@@ -148,6 +151,40 @@ class SlackPlatform(PlatformAdapter):
         _CHANNEL_DESCRIPTIONS[channel_id] = (time.time(), description)
         return description
 
+    def _mentioned_channel(self, channel_id: str) -> str:
+        """Whether coolton can read a channel the message mentions, by the same rule the
+        Slack read tools apply (agent.tools.slack_search.assert_readable_channel). Seen
+        live: given a bare <#C...> with no name, she said a public channel was private
+        without trying to read it. "" when Slack can't say right now."""
+        cached = _MENTIONED_CHANNELS.get(channel_id)
+        if cached and time.time() - cached[0] < _CHANNEL_DESCRIPTION_TTL:
+            return cached[1]
+        from slack_sdk.errors import SlackApiError
+
+        try:
+            channel = self.client.conversations_info(channel=channel_id)["channel"]
+        except SlackApiError as e:
+            if e.response.get("error") != "channel_not_found":
+                return ""
+            description = "private (or doesn't exist), so you can't read it"
+        except Exception:
+            return ""
+        else:
+            if any(channel.get(k) for k in ("is_private", "is_im", "is_mpim", "is_org_shared")):
+                # No name: the person asking may not be in it.
+                description = "private, so you can't read it"
+            else:
+                name = f" (#{channel['name']})" if channel.get("name") else ""
+                description = f"a public channel{name}, so you can read it"
+        _MENTIONED_CHANNELS[channel_id] = (time.time(), description)
+        return description
+
+    def _mentioned_channels_note(self, deps: Any) -> str:
+        mentioned = dict.fromkeys(_CHANNEL_MENTION.findall(getattr(deps, "request_text", "") or ""))
+        mentioned.pop(deps.channel_id, None)
+        described = [f"<#{c}> is {d}" for c in list(mentioned)[:5] if (d := self._mentioned_channel(c))]
+        return f"\n- Channels mentioned in the message: {'; '.join(described)}" if described else ""
+
     def build_context_prompt(self, deps: Any) -> str:
         # Varies by thread and sender, so run_agent puts it in the user prompt,
         # never the system prompt (which must be identical for every request
@@ -171,6 +208,8 @@ class SlackPlatform(PlatformAdapter):
                 )
         description = self._conversation_description(deps.channel_id) if self.client else ""
         kind = f"\n- This conversation is {description}" if description else ""
+        if self.client:
+            kind += self._mentioned_channels_note(deps)
         return f"""\n## CURRENT CONTEXT
 - You are in channel_id: `{deps.channel_id}` (thread_ts: `{deps.thread_ts}` if in thread, else DM){kind}
 - Use this channel_id for operations in the current channel unless user specifies otherwise

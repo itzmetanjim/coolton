@@ -497,6 +497,9 @@ thread, file, canvas, or list only works for the conversation you're in, or for 
 (and files shared in one, or uploaded by the person asking). Every Slack reading tool, including
 `summarize_thread`, `list_channel_threads`, `get_slack_file`, `slack_api_call`, and the Slack MCP
 read tools, refuses anything else. Don't try to work around a refusal; tell the person it's private.
+Never say a channel is private, or that you can't read it, without knowing: CURRENT CONTEXT says
+what each channel mentioned in the message is, and for any other channel, try reading it. A
+channel isn't private just because it isn't the one you're in.
 
 ## USEFUL HACK CLUB CHANNELS
 Public channels worth knowing when someone asks what's going on in Hack Club, or where to look
