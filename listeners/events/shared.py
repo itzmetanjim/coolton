@@ -50,8 +50,9 @@ def is_ignored(context, event: dict) -> bool:
     """Messages nothing in them can make coolton answer: in the ignored channel; from a bot
     or from an app posting with a user token (an app_id but no bot_id; cooltonUser's own
     posts too); Slack's "Context from" opener in a code channel coolton made, which quotes
-    the request the handoff turn already covers (agent.code_channel_store); or from a
-    banned user.
+    the request the handoff turn already covers (agent.code_channel_store); Slack's post
+    about a mention in a canvas (a document_mention, which coolton used to answer as if
+    someone had asked her something); or from a banned user.
 
     A banned user gets nothing at all: not !stop and not a steer into someone else's
     active run, neither of which reaches run_agent_turn's own is_banned() check."""
@@ -61,6 +62,7 @@ def is_ignored(context, event: dict) -> bool:
         context.channel_id == IGNORED_CHANNEL_ID
         or bool(event.get("bot_id") or event.get("app_id"))
         or is_expected_origin_context(event.get("text", ""))
+        or event.get("subtype") == "document_mention" or "document_mention" in event
         or is_banned(context.user_id)
     )
 

@@ -365,8 +365,11 @@ def test_app_mentioned_uses_existing_history(ctx):
         assert run_turn.call_args.kwargs["history"] == ["old-history"]
 
 
-@pytest.mark.parametrize("sender", [{"bot_id": "B123"}, {"app_id": "A123"}])
-def test_app_mentioned_skips_bot_and_app_mentions(ctx, sender):
+@pytest.mark.parametrize("sender", [
+    {"bot_id": "B123"}, {"app_id": "A123"},  # a bot, or an app's user token
+    {"subtype": "document_mention"}, {"document_mention": {"file_id": "F1"}},  # Slack's post about a canvas mention
+])
+def test_app_mentioned_skips_bots_apps_and_canvas_mentions(ctx, sender):
     from unittest.mock import patch
 
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn:
