@@ -11,6 +11,7 @@ from agent.stop_store import is_stop_command
 from listeners.commands import parse_command, respond
 from listeners.events.shared import (
     handled_ban_command,
+    held_by_private_hooks,
     is_ignored,
     pass_to_private_hooks,
     report_failure,
@@ -91,6 +92,8 @@ def handle_app_mentioned(
             return
 
         if steered_into_active_run(client, logger, channel_id, thread_ts, text, user_id, event["ts"]):
+            return
+        if held_by_private_hooks(client, event, channel_id, thread_ts):
             return
 
         # Silently make sure cooltonUser is a member of this channel (not in DMs).

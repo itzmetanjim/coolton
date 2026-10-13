@@ -979,14 +979,32 @@ def test_a_deployments_private_hooks_get_the_message_and_cant_break_it(ctx, monk
         seen.set()
         raise RuntimeError("broken hook")
 
-    monkeypatch.setitem(sys.modules, "private_hooks", types.SimpleNamespace(on_message=on_message))
+    def hold_turn(client, event, channel_id, thread_ts):
+        if event["ts"] == "333.333":
+            raise RuntimeError("broken hook")
+        return event["ts"] == "222.222"
+
+    hooks = types.SimpleNamespace(on_message=on_message, hold_turn=Mock(side_effect=hold_turn))
+    monkeypatch.setitem(sys.modules, "private_hooks", hooks)
     monkeypatch.setattr(shared, "_private_hooks", None)
     monkeypatch.setattr("listeners.events.app_mentioned.run_agent_turn", run := Mock())
     _mention(ctx)
-    assert seen.wait(5) and run.called
+    assert seen.wait(5) and run.call_count == 1
 
-    # Without one (the repo has none), messages are handled the same.
+    _mention(ctx, ts="222.222")  # held: the hook answers it itself
+    assert run.call_count == 1
+    _mention(ctx, ts="333.333")  # a failing hook holds nothing
+    assert run.call_count == 2
+
+    # A steer into a running turn is never held.
+    monkeypatch.setattr("listeners.events.shared.is_run_active", lambda *a: True)
+    monkeypatch.setattr("listeners.events.shared.queue_steering_message", steer := Mock())
+    _mention(ctx, ts="555.555", thread_ts="111.111")
+    assert steer.called and hooks.hold_turn.call_count == 3
+
+    # Without the file (the repo has none), messages are handled the same.
+    monkeypatch.setattr("listeners.events.shared.is_run_active", lambda *a: False)
     monkeypatch.setitem(sys.modules, "private_hooks", None)
     monkeypatch.setattr(shared, "_private_hooks", None)
-    _mention(ctx, ts="222.222")
-    assert run.call_count == 2 and shared._private_hooks is False
+    _mention(ctx, ts="444.444")
+    assert run.call_count == 3 and shared._private_hooks is False

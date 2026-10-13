@@ -18,11 +18,9 @@ IGNORED_CHANNEL_ID = "C06QV2T1P4G"
 _private_hooks = None  # the module, False when this deployment has none, None until first use
 
 
-def pass_to_private_hooks(event: dict) -> None:
-    """Give a message coolton is about to act on to private_hooks.on_message, when this
-    deployment has a private_hooks.py next to app.py. It's gitignored, so it's never in the
-    repo, and without it this does nothing. It runs on its own thread: nothing it does or
-    raises can slow down or change how the message is handled."""
+def _load_private_hooks():
+    """A deployment's own private_hooks.py next to app.py, or None. It's gitignored, so it's
+    never in the repo, and everything that uses it does nothing without it."""
     global _private_hooks
     if _private_hooks is None:
         try:
@@ -34,16 +32,49 @@ def pass_to_private_hooks(event: dict) -> None:
         except Exception:
             logger.exception("private_hooks.py couldn't be loaded")
             _private_hooks = False
-    if not _private_hooks:
+    return _private_hooks or None
+
+
+def pass_to_private_hooks(event: dict) -> None:
+    """Give a message coolton is about to act on to private_hooks.on_message. It runs on its
+    own thread: nothing it does or raises can slow down or change how the message is handled."""
+    hooks = _load_private_hooks()
+    if not hooks or not hasattr(hooks, "on_message"):
         return
 
     def _run():
         try:
-            _private_hooks.on_message(event)
+            hooks.on_message(event)
         except Exception:
             logger.exception("private_hooks.on_message failed")
 
     threading.Thread(target=_run, daemon=True, name="private-hooks").start()
+
+
+def held_by_private_hooks(client, event: dict, channel_id: str, thread_ts: str) -> bool:
+    """Whether private_hooks.hold_turn keeps this message from starting a turn (it then
+    replies to the person itself). Asked only once a message would start a new turn, after
+    !stop, commands and steering, so it can never stop or steer a run. If it's missing or
+    fails, nothing is held: a broken hook must never stop coolton answering."""
+    hooks = _load_private_hooks()
+    if not hooks or not hasattr(hooks, "hold_turn"):
+        return False
+    try:
+        return bool(hooks.hold_turn(client, event, channel_id, thread_ts))
+    except Exception:
+        logger.exception("private_hooks.hold_turn failed; answering as usual")
+        return False
+
+
+def register_private_hooks(app) -> None:
+    """Let private_hooks.register add its own Slack listeners (buttons, modals)."""
+    hooks = _load_private_hooks()
+    if not hooks or not hasattr(hooks, "register"):
+        return
+    try:
+        hooks.register(app)
+    except Exception:
+        logger.exception("private_hooks.register failed")
 
 
 def is_ignored(context, event: dict) -> bool:

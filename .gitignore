@@ -115,8 +115,8 @@ coolton_bots.json
 
 # this contains tokens
 codechannelinternal.sh
-# Deployment-only hooks (listeners/events/shared.py), never in the repo
-private_hooks.py
+# Deployment-only hooks (listeners/events/shared.py) and their state, never in the repo
+private_hooks*
 code_channels.json
 skill_proposals.json
 feedback.json
