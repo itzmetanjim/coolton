@@ -79,6 +79,15 @@ def _fresh_mention_claims():
 
 
 @pytest.fixture(autouse=True)
+def _no_private_hooks(monkeypatch):
+    """A deployment's own private_hooks.py (listeners/events/shared.py) never runs in a
+    test: handler tests would hand it their made-up messages."""
+    from listeners.events import shared
+
+    monkeypatch.setattr(shared, "_private_hooks", False)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_fallback_cache(tmp_path, monkeypatch):
     """Provider tests, the fallback chain, and image generation all write the
     fallback cache as a side effect — never let a test touch the real

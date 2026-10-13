@@ -1,13 +1,49 @@
 """What coolton's message and app_mention handlers both do before a turn."""
 
+import importlib
+import logging
+import threading
+
 from agent.active_runs import is_run_active
 from agent.ban_store import apply_ban_command, is_authorized, parse_ban_command
 from agent.code_channel_store import is_expected_origin_context
 from agent.steering_store import queue_steering_message
 from agent.stop_store import request_stop
 
+logger = logging.getLogger(__name__)
+
 # Hardcoded: never respond in this channel, no matter what. The agent doesn't even start.
 IGNORED_CHANNEL_ID = "C06QV2T1P4G"
+
+_private_hooks = None  # the module, False when this deployment has none, None until first use
+
+
+def pass_to_private_hooks(event: dict) -> None:
+    """Give a message coolton is about to act on to private_hooks.on_message, when this
+    deployment has a private_hooks.py next to app.py. It's gitignored, so it's never in the
+    repo, and without it this does nothing. It runs on its own thread: nothing it does or
+    raises can slow down or change how the message is handled."""
+    global _private_hooks
+    if _private_hooks is None:
+        try:
+            _private_hooks = importlib.import_module("private_hooks")
+        except ModuleNotFoundError as e:
+            if e.name != "private_hooks":
+                logger.exception("private_hooks.py couldn't be loaded")
+            _private_hooks = False
+        except Exception:
+            logger.exception("private_hooks.py couldn't be loaded")
+            _private_hooks = False
+    if not _private_hooks:
+        return
+
+    def _run():
+        try:
+            _private_hooks.on_message(event)
+        except Exception:
+            logger.exception("private_hooks.on_message failed")
+
+    threading.Thread(target=_run, daemon=True, name="private-hooks").start()
 
 
 def is_ignored(context, event: dict) -> bool:

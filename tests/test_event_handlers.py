@@ -961,3 +961,29 @@ def test_help_mentioned_mid_sentence_is_a_normal_prompt(ctx):
         _mention(ctx, text="<@BOT1> what does !help do?")
     run_turn.assert_called_once()
     ctx.client.chat_postEphemeral.assert_not_called()
+
+
+def test_a_deployments_private_hooks_get_the_message_and_cant_break_it(ctx, monkeypatch):
+    import sys
+    import threading
+    import types
+
+    from listeners.events import shared
+
+    seen = threading.Event()
+
+    def on_message(event):
+        seen.set()
+        raise RuntimeError("broken hook")
+
+    monkeypatch.setitem(sys.modules, "private_hooks", types.SimpleNamespace(on_message=on_message))
+    monkeypatch.setattr(shared, "_private_hooks", None)
+    monkeypatch.setattr("listeners.events.app_mentioned.run_agent_turn", run := Mock())
+    _mention(ctx)
+    assert seen.wait(5) and run.called
+
+    # Without one (the repo has none), messages are handled the same.
+    monkeypatch.setitem(sys.modules, "private_hooks", None)
+    monkeypatch.setattr(shared, "_private_hooks", None)
+    _mention(ctx, ts="222.222")
+    assert run.call_count == 2 and shared._private_hooks is False

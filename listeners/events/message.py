@@ -11,7 +11,14 @@ from agent.code_channel_store import CODE_CHANNEL_THREAD_TS, is_code_channel
 from agent.leave_thread_store import is_thread_engaged
 from agent.stop_store import is_stop_command
 from listeners.commands import parse_command, respond
-from listeners.events.shared import handled_ban_command, is_ignored, report_failure, steered_into_active_run, stop_thread
+from listeners.events.shared import (
+    handled_ban_command,
+    is_ignored,
+    pass_to_private_hooks,
+    report_failure,
+    steered_into_active_run,
+    stop_thread,
+)
 from listeners.events.turn import run_agent_turn
 from thread_context import conversation_store
 
@@ -150,6 +157,8 @@ def handle_message(
     if not at_channel_level and not is_thread_engaged(channel_id, thread_ts, is_dm):
         logger.info(f"Ignoring message in unjoined thread {thread_ts} ({channel_id})")
         return
+
+    pass_to_private_hooks(event)
 
     # The opt-in prompt only fires for messages the bot is actually meant to
     # answer (DMs and engaged threads), so coolton never barges into a channel

@@ -9,7 +9,14 @@ from agent.ensure_coolton_user import ensure_coolton_user_in_channel
 from agent.leave_thread_store import join_thread
 from agent.stop_store import is_stop_command
 from listeners.commands import parse_command, respond
-from listeners.events.shared import handled_ban_command, is_ignored, report_failure, steered_into_active_run, stop_thread
+from listeners.events.shared import (
+    handled_ban_command,
+    is_ignored,
+    pass_to_private_hooks,
+    report_failure,
+    steered_into_active_run,
+    stop_thread,
+)
 from listeners.events.turn import run_agent_turn
 from thread_context import conversation_store
 
@@ -39,6 +46,7 @@ def handle_app_mentioned(
         if text.strip().startswith("##"):
             logger.info(f"Ignoring message starting with '##': {text}")
             return
+        pass_to_private_hooks(event)
 
         # A mention at a code channel's channel level (not inside a thread)
         # is part of that channel's single whole-channel conversation — see
