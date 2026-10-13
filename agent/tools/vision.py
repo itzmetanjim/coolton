@@ -1,6 +1,8 @@
 import base64
 import requests
 
+from agent.tools.slack_file_download import is_slack_host
+
 IMAGE_MIME_PREFIX = "image/"
 _UNSUPPORTED_IMAGE_MIMES = {"image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"}
 
@@ -29,7 +31,7 @@ def download_attached_images(client, files, max_images: int = 4, max_bytes: int 
         if not mimetype.startswith(IMAGE_MIME_PREFIX) or mimetype in _UNSUPPORTED_IMAGE_MIMES:
             continue
         url = f.get("url_private_download") or f.get("url_private")
-        if not url:
+        if not url or not is_slack_host(url):  # the request carries the bot token
             continue
         try:
             resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)

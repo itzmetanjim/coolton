@@ -200,6 +200,10 @@ def _download(client, file_id: str) -> str:
 
     info = client.files_info(file=file_id)["file"]
     url = info.get("url_private_download") or info.get("url_private")
+    from agent.tools.slack_file_download import is_slack_host
+
+    if not is_slack_host(url):  # the request carries the bot token
+        raise ValueError("the file isn't stored on Slack")
     response = requests.get(url, headers={"Authorization": f"Bearer {client.token}"}, timeout=30)
     response.raise_for_status()
     return response.text

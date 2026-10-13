@@ -8,16 +8,18 @@ if TYPE_CHECKING:
 
 
 def is_slack_host(raw_url: str) -> bool:
-    """True only if the URL is Slack-hosted (defends against a spoofed
-    files.info response pointing the bot token at another host)."""
+    """True only for an https URL on Slack's own hosts. Every download of a Slack file
+    sends coolton's token with it, so check this first: a file's URL isn't always
+    Slack's (an external file shared into a thread can point anywhere), and plain
+    http would send the token unencrypted."""
     from urllib.parse import urlparse
 
     try:
-        host = urlparse(raw_url).hostname or ""
+        parsed = urlparse(raw_url or "")
+        host = (parsed.hostname or "").lower()
     except ValueError:
         return False
-    host = host.lower()
-    return (
+    return parsed.scheme == "https" and (
         host == "slack.com"
         or host.endswith(".slack.com")
         or host == "slack-files.com"

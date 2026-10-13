@@ -20,6 +20,32 @@ def test_non_slack_hosts_rejected():
     assert is_slack_host("https://slack.com.evil.com/x") is False
     assert is_slack_host("https://notslack-files.com/x") is False
     assert is_slack_host("not a url") is False
+    assert is_slack_host("http://files.slack.com/files-pri/T123-F123/download") is False  # token in the clear
+    assert is_slack_host(None) is False
+
+
+def test_file_downloads_never_send_the_token_off_slack(monkeypatch):
+    """A file's url_private isn't always Slack's (an external file shared into a thread
+    can point anywhere), and every download sends coolton's token with it."""
+    import requests
+
+    from agent.agent import download_slack_attachments
+    from agent.tools.vision import download_attached_images
+
+    evil = {"name": "x.png", "mimetype": "image/png", "url_private": "https://evil.example/steal"}
+    sent_to = []
+
+    def fake_get(url, headers=None, **kwargs):
+        sent_to.append(url)
+        if "conversations.replies" in url:
+            return Mock(json=lambda: {"ok": True, "messages": [{"files": [evil]}]})
+        return Mock(status_code=200, content=b"x")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    assert download_attached_images(Mock(token="xoxb-secret"), [evil]) == []
+    result = download_slack_attachments("C1", "1.1", Mock(), user_token="xoxp-secret")
+    assert "not stored on Slack" in result
+    assert not any("evil.example" in url for url in sent_to)
 
 
 # ---------------------------------------------------------------------------

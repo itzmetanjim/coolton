@@ -23,6 +23,7 @@ from agent.surface import get_surface as _surface
 from agent.platforms.slack import SlackPlatform
 from agent.stop_store import HaltRun
 from agent.tools import add_emoji_reaction
+from agent.tools.slack_file_download import is_slack_host
 from agent.tools.computer_use import computer_use as _computer_use_dispatch
 from agent.tools.computer_use import computer_stream as _computer_stream_start
 from agent.tools.agent_browser_stream import agent_browser_stream as _agent_browser_stream_start
@@ -628,6 +629,9 @@ def download_slack_attachments(
         for f in files[:limit]:
             file_url = f.get("url_private_download") or f.get("url_private")
             if not file_url:
+                continue
+            if not is_slack_host(file_url):  # the request carries the token
+                results.append(f"✗ {f.get('name')}: not stored on Slack, skipped")
                 continue
             file_resp = requests.get(file_url, headers={"Authorization": f"Bearer {token}"}, timeout=60)
             if file_resp.status_code != 200:
