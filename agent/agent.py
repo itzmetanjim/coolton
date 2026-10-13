@@ -2406,16 +2406,13 @@ def chat_postMessage(ctx: RunContext[AgentDeps], channel: str, text: str, thread
 
 
 async def text_only_response(ctx: RunContext[AgentDeps], emoji_name: str, response: str) -> str:
-    """React to the user's message AND send your final reply in one call, ending your turn.
+    """React to the user's message AND send your reply in one call, ending your turn.
 
-    Use this instead of add_emoji_reaction + a final text reply whenever the reply needs no
-    other tools at all (chat, a quick answer from what you already know, a clarifying question)
-    — it saves a whole round trip. Call it as your ONLY tool call. If you need any other tool,
-    don't use this: react with add_emoji_reaction and answer normally at the end.
+    Only for a greeting or small talk ("hi", "hello", "thanks", "lol"), as your ONLY tool
+    call. Anything else, any question, request or task, even one you could answer from
+    memory: react with add_emoji_reaction, do the work it needs, and answer at the end.
 
-    It ends your turn immediately, so `response` must be your complete final answer. Never use
-    it to say you're about to look something up or do something ("let me check..."): nothing
-    runs after it, and the user gets a promise with no answer.
+    It ends your turn immediately, so `response` must be your complete reply.
 
     Args:
         emoji_name: Slack emoji name without colons to react with (same rules as add_emoji_reaction).
