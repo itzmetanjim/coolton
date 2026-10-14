@@ -96,4 +96,6 @@ async def serve_file(name: str):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(app, host="0.0.0.0", port=2389)
+    # Localhost only: Caddy serves it over TLS (2390.proxy.tanjim.org). Listening on every
+    # interface also put it on the internet over plain HTTP, upload token and all.
+    uvicorn.run(app, host="127.0.0.1", port=2389)

@@ -67,6 +67,11 @@ def _proxy_cache_get(sandbox_id: str) -> dict | None:
 
 def _new_proxy_info(sandbox_id: str) -> dict:
     info = {"proxy_host": PUBLIC_PROXY_HOST, "token": issue_sandbox_token(sandbox_id), "issued_at": time.time()}
+    # Anyone with it can use coolton's GitHub account through the proxy until it expires,
+    # and code in the sandbox can print it.
+    from agent.redact import add_runtime_secret
+
+    add_runtime_secret("SANDBOX_PROXY_TOKEN", info["token"])
     _proxy_cache_set(sandbox_id, info)
     return info
 

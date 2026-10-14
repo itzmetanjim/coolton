@@ -1,6 +1,9 @@
+import hmac
+import html
 import json
 import logging
 import os
+import secrets
 import shlex
 import subprocess
 from datetime import datetime, timezone
@@ -34,12 +37,16 @@ def _redirect_uri() -> str:
     )
 
 
+STATE_COOKIE = "coolton_install_state"
+
+
 def _without_secrets(value):
-    """`value` with every token- or secret-named key dropped, recursively: Slack's
-    oauth.v2.access response carries the new bot and user tokens."""
+    """`value` with every token-, secret- or webhook-named key dropped, recursively:
+    Slack's oauth.v2.access response carries the new bot and user tokens, and an
+    incoming webhook's URL is a credential too."""
     if isinstance(value, dict):
         return {k: _without_secrets(v) for k, v in value.items()
-                if not any(hint in k.lower() for hint in ("token", "secret"))}
+                if not any(hint in k.lower() for hint in ("token", "secret", "webhook"))}
     if isinstance(value, list):
         return [_without_secrets(v) for v in value]
     return value
@@ -48,7 +55,7 @@ def _without_secrets(value):
 def _log_error(payload: dict) -> None:
     entry = _without_secrets({"ts": datetime.now(timezone.utc).isoformat(), **payload})
     try:
-        with open(ERROR_LOG_PATH, "a") as f:
+        with os.fdopen(os.open(ERROR_LOG_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a") as f:
             f.write(json.dumps(entry) + "\n")
     except Exception:
         logger.exception("Failed to write %s", ERROR_LOG_PATH)
@@ -113,7 +120,7 @@ def _restart_coolton(bot_user_id: str = "") -> None:
     logger.info("Scheduled membership sync + coolton.service restart")
 
 
-def _authorize_url() -> str:
+def _authorize_url(state: str) -> str:
     manifest = json.loads((BASE_DIR / "manifest.json").read_text())
     scopes = manifest["oauth_config"]["scopes"]
     params = {
@@ -121,13 +128,20 @@ def _authorize_url() -> str:
         "scope": " ".join(scopes["bot"]),
         "user_scope": " ".join(scopes["user"]),
         "redirect_uri": _redirect_uri(),
+        "state": state,
     }
     return "https://slack.com/oauth/v2/authorize?" + urlencode(params)
 
 
 @app.get("/")
 def index():
-    return RedirectResponse(_authorize_url(), status_code=302)
+    # The state ties the callback to an install started here, in this browser: without
+    # it, anyone could send cooltonUser a crafted install link (with fewer scopes, say)
+    # that rotates coolton's tokens and restarts it.
+    state = secrets.token_urlsafe(24)
+    response = RedirectResponse(_authorize_url(state), status_code=302)
+    response.set_cookie(STATE_COOKIE, state, max_age=600, httponly=True, secure=True, samesite="lax")
+    return response
 
 
 @app.get("/health")
@@ -149,6 +163,11 @@ async def slack_events(request: Request):
 
 @app.get("/slack/oauth_redirect")
 def oauth_redirect(request: Request, code: str = Query(""), state: str = Query("")):
+    expected_state = request.cookies.get(STATE_COOKIE, "")
+    if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+        _log_error({"event": "bad_state"})
+        return HTMLResponse("<h3>This install link didn't start here. Start again from this site's "
+                            "home page.</h3>", status_code=400)
     if not code:
         _log_error({"event": "missing_code", "state": state})
         return HTMLResponse("<h3>Missing code param</h3>", status_code=400)
@@ -159,14 +178,13 @@ def oauth_redirect(request: Request, code: str = Query(""), state: str = Query("
         _log_error(
             {
                 "event": "oauth_failed",
-                "code_preview": code[:20],
                 "state": state,
                 "response": result,
             }
         )
         logger.error("oauth.v2.access failed: %s", result.get("error"))
         return HTMLResponse(
-            f"<h3>OAuth failed: {result.get('error')}</h3>", status_code=400
+            f"<h3>OAuth failed: {html.escape(str(result.get('error')))}</h3>", status_code=400
         )
 
     authed_user_id = (result.get("authed_user") or {}).get("id")
@@ -188,7 +206,7 @@ def oauth_redirect(request: Request, code: str = Query(""), state: str = Query("
             expected,
         )
         return HTMLResponse(
-            f"<h3>Unauthorized installer ({authed_user_id}). Tokens NOT updated.</h3>",
+            f"<h3>Unauthorized installer ({html.escape(str(authed_user_id))}). Tokens NOT updated.</h3>",
             status_code=403,
         )
 
@@ -201,7 +219,7 @@ def oauth_redirect(request: Request, code: str = Query(""), state: str = Query("
     except Exception as e:
         _log_error({"event": "env_update_failed", "error": str(e), "response": result})
         logger.exception("Failed to update .env")
-        return HTMLResponse(f"<h3>Failed to update .env: {e}</h3>", status_code=500)
+        return HTMLResponse(f"<h3>Failed to update .env: {html.escape(str(e))}</h3>", status_code=500)
 
     if changed == 0:
         # _update_env only rewrites lines that already start with

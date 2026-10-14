@@ -3,6 +3,7 @@ _update_env's "0 lines changed" case actually being treated as a failure
 instead of a silent no-op reported as success."""
 
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +19,11 @@ def _isolated_error_log(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client():
-    return TestClient(oauth_server.app)
+    """A browser that started the install here, so the callback's state matches."""
+    browser = TestClient(oauth_server.app, base_url="https://testserver", follow_redirects=False)
+    start = browser.get("/")
+    browser.state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+    return browser
 
 
 def _ok_exchange_result(user_id="UOWNER"):
@@ -87,7 +92,7 @@ def test_oauth_redirect_fails_closed_when_update_env_changes_nothing(client, mon
     monkeypatch.setattr(oauth_server, "_restart_coolton", lambda *a, **k: restarted.append(a))
 
     with patch("oauth_server._exchange", return_value=_ok_exchange_result("UOWNER")):
-        resp = client.get("/slack/oauth_redirect", params={"code": "abc"})
+        resp = client.get("/slack/oauth_redirect", params={"code": "abc", "state": client.state})
 
     assert resp.status_code == 500
     assert "no SLACK_BOT_TOKEN" in resp.text
@@ -105,7 +110,7 @@ def test_oauth_redirect_restarts_when_update_env_changes_lines(client, monkeypat
     monkeypatch.setattr(oauth_server, "_restart_coolton", lambda *a, **k: restarted.append(a))
 
     with patch("oauth_server._exchange", return_value=_ok_exchange_result("UOWNER")):
-        resp = client.get("/slack/oauth_redirect", params={"code": "abc"})
+        resp = client.get("/slack/oauth_redirect", params={"code": "abc", "state": client.state})
 
     assert resp.status_code == 200
     assert restarted == [("UBOT1",)]
@@ -119,7 +124,7 @@ def test_a_failed_install_never_logs_the_tokens_slack_sent(client, monkeypatch, 
 
     monkeypatch.setenv("COOLTON_USER_ID", "UOWNER")
     with patch.object(oauth_server, "_exchange", return_value=_ok_exchange_result(user_id="USOMEONE_ELSE")):
-        resp = client.get("/slack/oauth_redirect?code=abc")
+        resp = client.get("/slack/oauth_redirect", params={"code": "abc", "state": client.state})
     assert resp.status_code == 403
     logged = oauth_server.ERROR_LOG_PATH.read_text()
     assert "xoxb-new" not in logged and "xoxp-new" not in logged
@@ -134,3 +139,15 @@ def test_rewriting_env_keeps_it_private(monkeypatch, tmp_path):
 
     assert oauth_server._update_env("xoxb-new", "xoxp-new") == 2
     assert oct(env.stat().st_mode & 0o777) == "0o600"
+
+
+def test_the_callback_only_accepts_an_install_started_here(client, monkeypatch):
+    """Without the state check, anyone could send cooltonUser a crafted install link (with
+    fewer scopes, say) that rotates coolton's tokens and restarts it."""
+    exchange = Mock(return_value=_ok_exchange_result("UOWNER"))
+    monkeypatch.setattr(oauth_server, "_exchange", exchange)
+    stranger = TestClient(oauth_server.app, base_url="https://testserver", follow_redirects=False)
+    for browser, state in ((stranger, client.state), (client, "forged"), (client, "")):
+        resp = browser.get("/slack/oauth_redirect", params={"code": "abc", "state": state})
+        assert resp.status_code == 400
+    assert not exchange.called

@@ -49,7 +49,11 @@ def _enc(fernet: Fernet, value: str) -> str:
 
 
 def _dec(fernet: Fernet, encrypted: str) -> str:
-    return fernet.decrypt(encrypted.encode()).decode()
+    from agent.redact import add_runtime_secret
+
+    value = fernet.decrypt(encrypted.encode()).decode()
+    add_runtime_secret("MCP_SERVER_SECRET", value)
+    return value
 
 
 def _new_id() -> str:
@@ -142,6 +146,10 @@ def get_server_decrypted(user_id: str, server_id: str) -> dict | None:
             token = _dec(_get_fernet(), s["token_encrypted"])
         if s.get("headers_encrypted"):
             headers = json.loads(_dec(_get_fernet(), s["headers_encrypted"]))
+            from agent.redact import add_runtime_secret
+
+            for value in headers.values():
+                add_runtime_secret("MCP_SERVER_HEADER", str(value))
     except Exception:
         logger.exception("Failed to decrypt MCP server secrets for %s/%s", user_id, server_id)
         return None

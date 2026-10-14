@@ -79,7 +79,11 @@ def _enc(fernet: Fernet, value: str) -> str:
 
 
 def _dec(fernet: Fernet, encrypted: str) -> str:
-    return fernet.decrypt(encrypted.encode()).decode()
+    from agent.redact import add_runtime_secret
+
+    value = fernet.decrypt(encrypted.encode()).decode()
+    add_runtime_secret("BYOK_SECRET", value)
+    return value
 
 
 def _new_id() -> str:

@@ -62,3 +62,22 @@ def test_whitespace_around_key_and_value_is_stripped(tmp_path):
 def test_non_secret_key_is_left_alone(tmp_path):
     _write_env(tmp_path, "SOME_OTHER_VAR=not-a-secret\n")
     assert redact.redact("mentions not-a-secret here") == "mentions not-a-secret here"
+
+
+def test_secrets_coolton_makes_or_decrypts_while_running_are_redacted(tmp_path, monkeypatch):
+    """Neither in the environment nor .env: a sandbox's GitHub proxy token (anyone with it
+    can use coolton's GitHub account until it expires, and code in the sandbox can print
+    it) and someone's own API key once it's decrypted."""
+    from agent import byok_store, sandbox_helpers
+
+    monkeypatch.setattr(sandbox_helpers, "issue_sandbox_token", lambda sandbox_id: "sbx-proxy-token-0123456789abcdef")
+    token = sandbox_helpers._new_proxy_info("sandbox-1")["token"]
+
+    monkeypatch.setattr(byok_store, "BYOK_STORE_FILE", str(tmp_path / "byok_store.json"))
+    monkeypatch.setattr(byok_store, "BYOK_KEY_FILE", str(tmp_path / "byok_key.bin"))
+    monkeypatch.delenv(byok_store.BYOK_ENV_KEY, raising=False)
+    ep_id = byok_store.add_endpoint("U1", "mine", "https://api.example.com/v1", "sk-users-own-key-9876543210", "m")
+    key = byok_store.get_endpoint_decrypted("U1", ep_id)["api_key"]
+
+    out = redact.redact(f"env: COOLTON_GIT_TOKEN={token} OPENAI_API_KEY={key}")
+    assert token not in out and key not in out and out.count("***") == 2

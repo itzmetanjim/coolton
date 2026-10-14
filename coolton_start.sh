@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -e
+# Everything coolton writes (conversations, traces, tokens, users' settings) is for its own
+# user only: without this, new files came out world-readable on the server.
+umask 077
 
 REPO="/home/tanjim/coolton-private"
 VENV="$REPO/.venv/bin/python"

@@ -21,6 +21,10 @@ _XOXE_TOKENS_PATH = Path(__file__).resolve().parent.parent / "xoxe_tokens.json"
 _notifier = None
 _secret_values_cache = None
 _secret_values_lock = threading.Lock()
+# Secrets that exist only while coolton runs (see add_runtime_secret): value -> key, oldest
+# first. Capped, since every redact() call scans for each one.
+_runtime_secrets: dict[str, str] = {}
+_MAX_RUNTIME_SECRETS = 500
 
 
 def set_notifier(fn) -> None:
@@ -97,10 +101,25 @@ def secret_values() -> list[tuple[str, str]]:
     return _secret_values_cache
 
 
+def add_runtime_secret(key: str, value: str) -> None:
+    """Redact `value` too: a secret that's in neither the environment nor .env because
+    coolton makes or decrypts it while running (a sandbox's GitHub proxy token, someone's
+    own API key or MCP token, a bot token for a bot coolton deploys)."""
+    if not isinstance(value, str) or len(value) < 12:
+        return
+    with _secret_values_lock:
+        _runtime_secrets.pop(value, None)
+        _runtime_secrets[value] = key
+        while len(_runtime_secrets) > _MAX_RUNTIME_SECRETS:
+            _runtime_secrets.pop(next(iter(_runtime_secrets)))
+
+
 def redact(msg: str, context: str = "") -> str:
     """Replace every known secret value found in msg with *** and notify."""
     hits = []
-    for key, secret in secret_values():
+    with _secret_values_lock:
+        runtime = [(key, value) for value, key in _runtime_secrets.items()]
+    for key, secret in [*secret_values(), *runtime]:
         if secret and secret in msg:
             msg = msg.replace(secret, "***")
             hits.append(key)
