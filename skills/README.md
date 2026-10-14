@@ -1,7 +1,7 @@
 # Skill catalog
 
 Curated, version-controlled skills live in `skills/`. CLI-installed skills live in
-`.agents/skills/` (gitignored, but still scanned by the agent). Both directories are loaded
+`.agents/skills/` (tracked too, except the merged-away ones listed at the end). Both directories are loaded
 automatically via `SkillsCapability(directories=["skills", ".agents/skills"], auto_reload=True)`.
 
 kevinton writes new skills into `skills/` after real conversation turns.
@@ -17,6 +17,11 @@ kevinton writes new skills into `skills/` after real conversation turns.
 | `computer-use` | The XFCE desktop and live agent-browser sessions. The system prompt keeps only when to use which. |
 | `huddlefm-dj` | DJing a HuddleFM session. Moved out of the system prompt. |
 | `block-kit` | Building Block Kit for code channel tabs and messages, with condensed references for every block, element and composition object (`references/`, from Slack's docs) and recipes checked with `blocks.validate`. |
+| `about-coolton` | Facts about coolton itself (identities, kevinton, models, sandbox, user controls, the rules, the "i'm not a robot" check), for when someone asks what coolton is or how it works. |
+| `macondo-review` | Reviewing a Hack Club Macondo YSWS project from its macondo.hackclub.com link (auto-captured by kevinton). |
+| `ysws-project-review` | An evidence-backed YSWS submission review with an override-hours justification (auto-captured by kevinton). |
+| `static-malware-audit` | A static, never-execute malware and supply-chain audit of an untrusted repo (auto-captured by kevinton). |
+| `simple-ping-bot` | A minimal Slack bot with a `/ping` command, deployed to Cloudflare (auto-captured by kevinton). |
 
 ## Merged overlaps (history)
 
