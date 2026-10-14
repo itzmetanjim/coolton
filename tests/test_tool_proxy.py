@@ -302,3 +302,18 @@ def test_tool_exception_returns_200_with_ok_false():
     body = resp.json()
     assert body["ok"] is False
     assert "boom" in body["error"]
+
+
+def test_a_request_reported_as_abuse_refuses_tools_called_from_the_sandbox():
+    """code_mode's tool calls skip the agent's own tool hooks, so the proxy has to apply
+    the lock itself: after a report, nothing but declining may run."""
+    from types import SimpleNamespace
+
+    token, sandbox_id = uuid.uuid4().hex, uuid.uuid4().hex
+    called = []
+    tool_proxy.register_sandbox(sandbox_id, token, SimpleNamespace(abuse_stop="spam"),
+                                lambda name: (lambda ctx, *a, **k: called.append(a)), ["post_message_tool"])
+    resp = requests.post(f"{BASE}/{sandbox_id}/post_message_tool", json={"args": ["hi"]},
+                         headers={"Authorization": f"Bearer {token}"})
+    assert resp.json()["ok"] is False and "Refused" in resp.json()["error"]
+    assert called == []

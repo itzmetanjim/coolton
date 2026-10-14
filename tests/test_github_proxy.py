@@ -535,3 +535,21 @@ def test_the_admin_token_is_its_own_secret_never_the_github_token(tmp_path, monk
     from agent import github_proxy_client
     monkeypatch.setattr(github_proxy_client, "ADMIN_TOKEN_FILE", tmp_path / "admin")
     assert github_proxy_client._admin_token() == token  # coolton reads the same one
+
+
+def test_forbidden_calls_cant_be_disguised():
+    """The rules match the path and query as GitHub reads them, so a different case, an
+    encoded slash or a JSON-escaped GraphQL mutation name doesn't get past them."""
+    import json
+
+    api = "https://api.github.com"
+    for method, path in (("DELETE", "/REPOS/o/r"), ("PUT", "/repos/o/r%2Fcollaborators/x"),
+                         ("PUT", "//repos/o/r/collaborators/x"), ("delete", "/repos/o/r")):
+        assert gp._forbidden_reason(method, api + path, None), path
+    escaped = '{"query": "mutation{\\u0061rchiveRepository(input:{repositoryId:\\"x\\"}){clientMutationId}}"}'
+    assert "archiveRepository" not in escaped
+    assert gp._forbidden_reason("POST", api + "/graphql", escaped.encode())
+    batched = json.dumps([{"query": "mutation{archiveRepository(input:{}){x}}"}]).encode()
+    assert gp._forbidden_reason("POST", api + "/graphql", batched)
+    assert gp._forbidden_reason("POST", api + "/graphql", b'{"query": "query{viewer{login}}"}') is None
+    assert gp._forbidden_reason("POST", api + "/repos/o/r/issues", b"{}") is None

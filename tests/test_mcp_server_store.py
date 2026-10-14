@@ -148,3 +148,29 @@ def test_probe_never_connects_to_a_local_or_private_address(tmp_store, monkeypat
         ok, detail, _ = store.probe_server(url)
         assert not ok and detail
     assert tried == []
+
+
+def test_every_request_to_a_users_mcp_server_is_rechecked_including_redirects():
+    """The URL is checked when it's saved, but the MCP client follows redirects by itself:
+    a public server could otherwise send coolton to a service on its own host."""
+    import asyncio
+
+    import httpx
+
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(307, headers={"location": next_hop})
+
+    async def call():
+        client = store._public_only_client()
+        client._transport = httpx.MockTransport(handler)
+        async with client:
+            await client.post("https://mcp.example.com/mcp", json={})
+
+    for next_hop in ("http://127.0.0.1:29057/agent_tools/x/y", "https://10.0.0.5/admin", "https://169.254.169.254/"):
+        seen.clear()
+        with pytest.raises(ValueError):
+            asyncio.run(call())
+        assert seen == ["https://mcp.example.com/mcp"]

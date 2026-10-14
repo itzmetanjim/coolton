@@ -145,10 +145,7 @@ def channel_read_error(channel_id: str, current_channel_id: str) -> str | None:
         return None
     if _USER_ID_RE.match(channel_id):
         return "Reading DMs, private channels, or external conversations is not allowed."
-    # assert_readable_channel treats a missing current channel as "no
-    # restriction"; there is always a current conversation here, so pass a
-    # placeholder that can never equal a real channel id.
-    return assert_readable_channel(channel_id, current_channel_id or "-")
+    return assert_readable_channel(channel_id, current_channel_id)
 
 
 def check_api_call(method: str, params: dict, current_channel_id: str, requester_id: str = "") -> str | None:

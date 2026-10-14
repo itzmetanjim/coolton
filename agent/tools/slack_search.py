@@ -123,9 +123,11 @@ def assert_readable_channel(channel_id: str, current_channel_id: str = "") -> st
     errors, times out, or itself returns ok:false — e.g. a private channel the bot
     can't even see), this denies rather than silently falling through to allow.
     """
-    if not channel_id or not current_channel_id:
+    if not channel_id:
         return None
-    if channel_id == current_channel_id:
+    # No current conversation (nothing to compare with) means only public channels:
+    # treating it as "allow" would let any channel through.
+    if current_channel_id and channel_id == current_channel_id:
         return None
     try:
         response = requests.get(

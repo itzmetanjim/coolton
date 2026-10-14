@@ -34,7 +34,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 import requests
 from urllib3.util import parse_url
@@ -292,21 +292,38 @@ def _forbidden_reason(method: str, upstream: str, body: bytes | None) -> str | N
     parsed = urlparse(upstream)
     if parsed.netloc.split(":")[0].lower() != "api.github.com":
         return None
-    path = parsed.path
+    # Match the path the way GitHub routes it: percent-decoded (%2F is a slash), repeated
+    # slashes collapsed, any case. Otherwise /REPOS/o/r or /repos/o/r%2Fcollaborators
+    # slips past the rules.
+    path = re.sub(r"/{2,}", "/", unquote(parsed.path))
+    method = method.upper()
     for methods, pattern, reason in _FORBIDDEN_API_RULES:
-        if (methods is None or method in methods) and re.match(pattern, path):
+        if (methods is None or method in methods) and re.match(pattern, path, re.IGNORECASE):
             return reason
-    if method == "PATCH" and re.match(rf"^{_REPO}/?$", path) and body:
+    if method == "PATCH" and re.match(rf"^{_REPO}/?$", path, re.IGNORECASE) and body:
         try:
             fields = json.loads(body)
         except ValueError:
             return "changing repository settings with an unparseable body"
         if isinstance(fields, dict) and any(k in fields for k in _FORBIDDEN_REPO_FIELDS):
             return "changing a repository's visibility or archiving it"
-    if method == "POST" and path.rstrip("/") == "/graphql" and body:
-        match = _FORBIDDEN_GRAPHQL_RE.search(body.decode("utf-8", errors="replace"))
-        if match:
-            return f"the {match.group(1)} GraphQL mutation"
+    if method == "POST" and path.rstrip("/").lower() == "/graphql" and body:
+        # The query as GitHub reads it, after JSON decoding: in the raw body a mutation's
+        # name can be hidden with escapes ("\u0061rchiveRepository").
+        raw = body.decode("utf-8", errors="replace")
+        texts = [raw]
+        try:
+            decoded = json.loads(raw)
+        except ValueError:
+            decoded = None
+        for item in decoded if isinstance(decoded, list) else [decoded]:
+            if isinstance(item, dict):
+                texts.append(json.dumps(item, ensure_ascii=False))
+                texts.extend(v for v in item.values() if isinstance(v, str))
+        for text in texts:
+            match = _FORBIDDEN_GRAPHQL_RE.search(text)
+            if match:
+                return f"the {match.group(1)} GraphQL mutation"
     return None
 
 

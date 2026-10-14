@@ -88,11 +88,37 @@ def request_headers(token: str | None, headers: dict | None) -> dict[str, str]:
     return merged
 
 
+async def _refuse_non_public(request) -> None:
+    """Checked before every request to someone's own MCP server, redirects included. The
+    URL was checked when it was saved, but the MCP client follows redirects by itself, and
+    the name can resolve somewhere else later: either could point coolton at a service on
+    its own host or network."""
+    import asyncio
+    import ipaddress
+
+    from agent.byok_store import _resolve_host
+
+    host = (request.url.host or "").rstrip(".").lower()
+    if request.url.scheme != "https" or not host:
+        raise ValueError(f"Refusing a non-HTTPS MCP request to {request.url.scheme}://{host}")
+    addresses = await asyncio.get_running_loop().run_in_executor(None, _resolve_host, host)
+    if not addresses or any(not ipaddress.ip_address(a).is_global for a in addresses):
+        raise ValueError(f"Refusing an MCP request to {host}: it isn't a public address")
+
+
+def _public_only_client(headers=None, timeout=None, auth=None, follow_redirects=True, **kwargs):
+    import httpx
+
+    return httpx.AsyncClient(headers=headers, timeout=timeout if timeout is not None else httpx.Timeout(30.0),
+                             auth=auth, follow_redirects=follow_redirects,
+                             event_hooks={"request": [_refuse_non_public]})
+
+
 def build_transport(url: str, transport: str, token: str | None = None, headers: dict | None = None):
     from pydantic_ai.mcp import SSETransport, StreamableHttpTransport
 
     cls = SSETransport if transport == "sse" else StreamableHttpTransport
-    return cls(url, headers=request_headers(token, headers))
+    return cls(url, headers=request_headers(token, headers), httpx_client_factory=_public_only_client)
 
 
 def get_user_servers(user_id: str) -> list[dict]:

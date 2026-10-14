@@ -332,3 +332,16 @@ def test_search_still_returns_count_results_after_filtering(monkeypatch):
     ])
     result = slack_search.search_slack_messages("hit", count=3, current_channel_id="C9")
     assert result.count("hit ") == 3
+
+
+def test_with_no_current_conversation_only_public_channels_can_be_read(monkeypatch):
+    """A missing current channel used to mean "no restriction": any channel, DMs too."""
+    from agent.tools import slack_search
+
+    def info(url, params=None, **kwargs):
+        private = params["channel"] == "CPRIVATE1"
+        return Mock(json=lambda: {"ok": True, "channel": {"id": params["channel"], "is_private": private}})
+
+    monkeypatch.setattr(slack_search.requests, "get", info)
+    assert slack_search.assert_readable_channel("CPRIVATE1", "")
+    assert slack_search.assert_readable_channel("CPUBLIC01", "") is None

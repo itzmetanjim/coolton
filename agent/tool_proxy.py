@@ -128,8 +128,17 @@ class _Handler(BaseHTTPRequestHandler):
         kwargs = body.get("kwargs", {}) or {}
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             return self._send_json(400, {"ok": False, "error": "args must be a list, kwargs a dict"})
+        # The same gates every other tool call goes through (agent.agent._enforce_slack_budget):
+        # nothing but declining after a request was reported as abuse, no secrets in arguments.
+        from agent.abuse_report import stopped_tool_call
+        from agent.agent import _redact_args
         from agent.slack_budget import spend
 
+        stopped = stopped_tool_call(reg["deps"], tool_name)
+        if stopped:
+            return self._send_json(200, {"ok": False, "error": stopped})
+        args = _redact_args(args, f"code_mode tool input {tool_name}")
+        kwargs = _redact_args(kwargs, f"code_mode tool input {tool_name}")
         over = spend(reg["deps"], tool_name)
         if over:
             return self._send_json(200, {"ok": False, "error": over})
