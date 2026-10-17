@@ -72,7 +72,10 @@ def test_provider(provider_name: str, config: dict) -> tuple[bool, str, float, s
         else:
             model = provider_config.build_model(config["model"], config["api_key"])
 
+        # Not traced to Langfuse (agent.langfuse_tracing): a health check of every model on
+        # each start isn't a conversation, and would bury the real ones.
         a = Agent(model)
+        a.instrument = False
         result = a.run_sync("Hello! Respond with the single word 'ok' if you receive this.")
         elapsed = time.time() - start
         return True, display, elapsed, result.output
