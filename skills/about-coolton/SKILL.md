@@ -86,6 +86,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 - A context bar of up to 5 pinned items (repo, branch, PR, CI status), up to 10 slash commands of its own (like `/run-tests`), renaming, and archiving with a summary when the work is done (only when asked).
 
 ### Other
+- Joins a Slack huddle when asked *(deferred)*: listens, talks back, reads and answers the huddle's thread, hands real work to subagents while it keeps talking, and shows its desktop as its video while it uses one. Leaves when asked or when everyone else has gone.
 - DJs a HuddleFM listening session in a huddle (playback, queue, volume) once the session's host approves *(deferred)*.
 - Uses MCP servers people connect in App Home (e.g. Notion, Linear), up to 5 each, for that person's own turns.
 - Passes feedback about coolton on to Lily *(deferred)*.

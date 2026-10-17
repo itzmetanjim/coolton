@@ -150,6 +150,12 @@ def handle_message(
     if not is_dm and not at_channel_level and not event.get("thread_ts"):
         return
 
+    # The thread of a huddle coolton is in is the huddle's chat: its voice agent reads
+    # and answers it (agent.huddle), engaged or not.
+    from agent import huddle
+    if not is_dm and huddle.route_chat(channel_id, thread_ts, user_id, text):
+        return
+
     # Channel thread replies are handled only while the bot is joined (engaged)
     # in the thread. A mid-thread mention answers once but does not join, so a
     # non-mentioned reply here means we aren't joined and should be ignored.

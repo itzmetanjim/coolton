@@ -862,6 +862,9 @@ def _maybe_post_screenshot(ctx: RunContext[AgentDeps], png: bytes) -> None:
     now = time.time()
     if now - ctx.deps.last_screenshot_post_ts < _SCREENSHOT_POST_MIN_INTERVAL_SECONDS:
         return
+    from agent import huddle
+    if huddle.sharing_desktop(ctx.deps.channel_id, ctx.deps.thread_ts):
+        return  # people are already watching it live, as coolton's video in the huddle
     try:
         from agent.web64_client import upload_bytes
         url = upload_bytes(png, "screenshot.png", mime="image/png")
@@ -952,6 +955,8 @@ def computer_use(
         )
     except Exception as e:
         return ToolReturn(f"Error: {e}")
+    from agent import huddle
+    huddle.desktop_active(ctx.deps.channel_id, ctx.deps.thread_ts)
     if ctx.deps.sandbox_keepalive_seconds > 0:
         # Any action is "activity" — reset the auto-pause countdown so a stream stays
         # live through a whole click/screenshot sequence, not just the first command.
@@ -968,15 +973,32 @@ def computer_use(
     return ToolReturn(result)
 
 
+_HUDDLE_SHARE_RESULT = (
+    "Your desktop is now coolton's video in this thread's huddle, so people watch it there "
+    "(no link posted). It stays on while you keep using it."
+)
+
+
+def _shared_in_huddle(ctx: RunContext[AgentDeps]) -> bool:
+    """Show the desktop as coolton's video when coolton is in this thread's huddle."""
+    from agent import huddle
+
+    return huddle.desktop_active(ctx.deps.channel_id, ctx.deps.thread_ts)
+
+
 @agent.tool
 def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     """Start (or re-share) a live, view-only stream of your desktop and post it to the thread.
 
     Call this once when you begin a computer-use session so the user can watch what
     you're doing. Safe to call again later in the same session to re-post the link.
+    When coolton is in this thread's huddle, the desktop is shown as its video there
+    instead of posting a link.
     """
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured."
+    if _shared_in_huddle(ctx):
+        return _HUDDLE_SHARE_RESULT
     try:
         url = _computer_stream_start(ctx.deps.channel_id, ctx.deps.thread_ts)
     except Exception as e:
@@ -1000,10 +1022,13 @@ def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     session so the user can watch a real browser window happen live, not just a final
     report. Then run agent-browser with `DISPLAY=:0 agent-browser open --headed <url>`
     (both flags required, without --headed it stays invisible even with the stream up).
-    Safe to call again later to re-post the link.
+    Safe to call again later to re-post the link. When coolton is in this thread's huddle,
+    the desktop is shown as its video there instead of posting a link.
     """
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured."
+    if _shared_in_huddle(ctx):
+        return _HUDDLE_SHARE_RESULT
     try:
         url = _agent_browser_stream_start(ctx.deps.channel_id, ctx.deps.thread_ts)
     except Exception as e:
@@ -2814,6 +2839,24 @@ def huddlefm_command_tool(
 
 
 @agent.tool
+def join_huddle_tool(ctx: RunContext[AgentDeps]) -> str:
+    """Join a live Slack huddle (a voice call) as a participant: coolton then listens, talks
+    back, answers the huddle's thread, and shows its desktop as its video while using it.
+
+    Joins this conversation's huddle: the one this thread belongs to, or else the
+    channel's ongoing one. Use it when someone asks you to join, hop on, or come to the
+    huddle or call. Once joined, a separate voice agent handles the huddle and its
+    thread, so just confirm briefly.
+    """
+    from agent import huddle
+
+    return huddle.join(
+        ctx.deps.client, channel_id=ctx.deps.channel_id, thread_ts=ctx.deps.thread_ts,
+        requester_id=ctx.deps.user_id, request_text=ctx.deps.request_text,
+    )
+
+
+@agent.tool
 def delegate_to_subagent(
     ctx: RunContext[AgentDeps],
     target: str,
@@ -3480,7 +3523,7 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
 DEFERRED_TOOLS = frozenset({
     "agentmail_create_inbox", "agentmail_list_inboxes", "agentmail_list_messages",
     "agentmail_read_message", "agentmail_send_email",
-    "huddlefm_request_control_tool", "huddlefm_command_tool",
+    "huddlefm_request_control_tool", "huddlefm_command_tool", "join_huddle_tool",
     "create_slack_bot_tool", "check_bot_install_status_tool", "register_bot_tokens_tool",
     "update_slack_bot_manifest_tool", "wrangler_bot_deploy_tool",
     "create_scheduled_task_tool", "list_scheduled_tasks_tool", "pause_scheduled_task_tool",
@@ -3539,6 +3582,23 @@ def _claude_through_gateway(prov_config: dict, http_client):
     ))
     profile = {**(provider.model_profile(prov_config["model"]) or {}), "openai_chat_send_back_thinking_parts": False}
     return OpenRouterModel(prov_config["model"], provider=provider, profile=profile)
+
+
+def chain_model(prov_config: dict, http_client=None):
+    """The pydantic-ai model for one entry of the provider order: endpoints with a base_url
+    (BYOK, HCAI) through the OpenAI-compatible API (Claude behind HCAI's gateway through
+    _claude_through_gateway), everything else through its own SDK."""
+    model_name = prov_config["model"]
+    if not prov_config.get("base_url"):
+        return provider_config.build_model(model_name, prov_config.get("api_key"))
+    if model_name.lower().startswith("anthropic/"):
+        return _claude_through_gateway(prov_config, http_client)
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    return OpenAIChatModel(model_name, provider=OpenAIProvider(
+        base_url=prov_config["base_url"], api_key=prov_config["api_key"], http_client=http_client,
+    ))
 
 
 def _without_written_out_calls(messages):
@@ -3845,12 +3905,9 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
             if run_label is None:
                 _fit_history_to_model(run_kwargs, deps, prov_config)
             try:
-                # Create model object if custom base_url (BYOK, HCAI)
-                model_obj = None
+                http_client = None
                 if prov_config.get("base_url"):
                     import httpx
-                    from pydantic_ai.models.openai import OpenAIChatModel
-                    from pydantic_ai.providers.openai import OpenAIProvider
                     from agent.provider_probe import _capture_raw_response
                     # Same raw-body capture as provider_probe.test_provider — a
                     # pydantic ValidationError on the response (e.g. "3 validation
@@ -3861,23 +3918,12 @@ def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | N
                         event_hooks={"response": [lambda r: _capture_raw_response(raw_response, r)]},
                         limits=httpx.Limits(max_keepalive_connections=0),
                     )
-                    if model_name.lower().startswith("anthropic/"):
-                        model_obj = _claude_through_gateway(prov_config, http_client)
-                    else:
-                        model_obj = OpenAIChatModel(
-                            prov_config["model"],
-                            provider=OpenAIProvider(
-                                base_url=prov_config["base_url"],
-                                api_key=prov_config["api_key"],
-                                http_client=http_client,
-                            ),
-                        )
 
                 # Rate limit for Cerebras
                 if "cerebras" in model_name.lower():
                     enforce_rate_limit()
 
-                run_kwargs["model"] = model_obj or provider_config.build_model(model_name, prov_config.get("api_key"))
+                run_kwargs["model"] = chain_model(prov_config, http_client)
                 # MiniMax models served through OpenAI-compatible gateways (kilocode,
                 # OpenRouter) have been observed live leaking a broken multi-tool-call
                 # attempt as raw XML-ish text (see
