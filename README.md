@@ -152,6 +152,11 @@ reached through a browser instead of chat. a few things underpin that:
 - **image generation**: generate and post images directly to the thread.
 - **mermaid diagrams**, **whiteboard embeds** (tldraw), and **HTML embeds**: rendered and hosted
   via `coolton_web_helper.py`, a small file host.
+- **Slack huddles**: ask coolton to join a huddle and it does, as the cooltonUser helper account
+  (bots can't be in a huddle). It listens (Deepgram Flux speech-to-text, which also detects the
+  end of each turn), talks back with its default chat model and Deepgram's streaming
+  text-to-speech, reads and answers the huddle's thread, hands real work to subagents in the
+  background, and shows its desktop as its video while a subagent uses it (`agent/huddle/`).
 
 ### scheduling & automation
 
@@ -191,6 +196,7 @@ account or OAuth needed on the user's end. See the `slack-bot-deploy` and `cf-wr
 | `agent/sandbox_helpers.py`, `agent/sandbox_keepalive.py`, `agent/sandbox_store.py` | E2B sandbox lifecycle (create/reuse/recycle) per thread. |
 | `agent/tool_proxy.py` | lets sandboxed code (`code_mode`) call coolton's own tools over HTTP, scoped to that thread's credentials. |
 | `agent/desktop_helpers.py` | drives the XFCE desktop inside the sandbox for `computer_use`. |
+| `agent/huddle/` | Slack huddles: joining as cooltonUser (`slack_api.py`), the Chime media connection (`chime.py`, Chime's vendored signaling proto), Deepgram speech (`speech.py`), the voice agent (`voice_agent.py`) and the session tying them together (`session.py`). |
 | `agent/scheduler.py` | reminders + recurring cron scheduled tasks. |
 | `agent/token_rotation.py` | rotates Slack CLI (xoxe) tokens automatically. |
 | `agent/byok_store.py`, `agent/mcp_server_store.py` | encrypted per-user BYOK endpoints / custom MCP servers. |
@@ -253,6 +259,8 @@ everything else in `.env.sample` is optional and additive.
 | `SLACK_CONFIG_TOKEN` | creating/deploying other Slack bots (`create_slack_bot_tool`). |
 | `BYOK_ENCRYPTION_KEY` | encrypts per-user BYOK endpoints (auto-generated to `byok_key.bin` if unset). |
 | `COOLTON_USER_ID` / `SLACK_USER_TOKEN` | the "cooltonUser" helper account, used for user-token Slack API calls. |
+| `COOLTON_USER_XOXC` / `COOLTON_USER_XOXD` | cooltonUser's Slack browser session (the web client's `xoxc-` token and its `d` cookie, URL-encoded as the browser stores it), which huddles are joined with. Both needed for huddles. |
+| `DEEPGRAM_API_KEY` | speech-to-text and text-to-speech in huddles. |
 | `SLACK_CODE_CHANNEL_BOT_TOKEN` | bot token of the separate app that creates code channels (manifest in `manifests/code_channel_app.json`). Without it, code channels are off. |
 | `SLACK_CODE_CHANNEL_APP_TOKEN` | that app's app-level token (`connections:write`), for Socket Mode: it hears mentions of its bot (the first message of a code channel started from Slack's UI) and hands them to coolton. |
 | `COOLTON_BOT_ID` | coolton's own bot user id, so it recognizes self-mentions. |

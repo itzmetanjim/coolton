@@ -140,6 +140,13 @@ def screenshot(sandbox, proxy_info) -> bytes:
     return data
 
 
+def capture_jpeg(sandbox, proxy_info, quality: int = 60) -> str:
+    """The screen (with the pointer) as a base64 JPEG, for a live view: one short command,
+    so nothing keeps running or listening in the sandbox. Expects the desktop to be up."""
+    path = "/tmp/coolton-live-frame.jpg"
+    return _run(sandbox, proxy_info, f"scrot -p -o -z -q {quality} {path} && base64 -w0 {path}").stdout
+
+
 def move_mouse(sandbox, proxy_info, x: int, y: int) -> None:
     ensure_desktop(sandbox, proxy_info)
     _run(sandbox, proxy_info, f"xdotool mousemove --sync {x} {y}")

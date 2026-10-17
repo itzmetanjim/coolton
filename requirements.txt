@@ -13,6 +13,12 @@ e2b>=2.15
 cryptography
 apscheduler
 croniter
+# Slack huddles (agent.huddle): WebRTC to Chime, Chime's signaling protocol, Deepgram speech
+aiortc
+av
+websockets
+protobuf>=6.31.1
+deepgram-sdk>=7
 
 pytest
 ruff==0.15.17
