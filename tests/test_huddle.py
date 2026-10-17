@@ -489,3 +489,19 @@ def test_with_no_huddle_going_coolton_starts_one_and_can_leave_it(monkeypatch):
     monkeypatch.setattr(huddle.asyncio, "run_coroutine_threadsafe", lambda result, loop: None)
     assert huddle.leave("C123", "7.7", "U1") == "Left the huddle."
     assert stops == ["<@U1> asked it to leave"]
+
+
+def test_offer_and_answer_are_rewritten_the_way_chime_needs():
+    from agent.huddle.chime import _browser_like_offer, _candidates_in_every_section
+
+    offer = ("v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+             "a=fingerprint:sha-256 AA\r\na=fingerprint:sha-384 BB\r\na=fingerprint:sha-512 CC\r\n")
+    assert _browser_like_offer(offer) == ("v=0\r\no=mozilla-chrome 1 1 IN IP4 0.0.0.0\r\n"
+                                          "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=fingerprint:sha-256 AA\r\n")
+
+    # Chime lists its candidates under the first section only; aiortc reads the bundle's
+    # candidates from the last one.
+    answer = ("v=0\r\na=group:BUNDLE 0 1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\n"
+              "a=candidate:H 1 udp 1 10.3.107.247 17298 typ host\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=mid:1\r\n")
+    sections = _candidates_in_every_section(answer).split("m=")[1:]
+    assert all("a=candidate:H 1 udp 1 10.3.107.247 17298 typ host" in s for s in sections) and len(sections) == 2

@@ -27,6 +27,7 @@ from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCRtpSend
 from aiortc.contrib.media import MediaBlackhole
 from aiortc.mediastreams import MediaStreamError, MediaStreamTrack
 from aiortc.rtcconfiguration import RTCBundlePolicy
+from aiortc.rtcdtlstransport import RTCCertificate
 
 from agent.huddle import signaling_pb2 as pb
 
@@ -219,6 +220,55 @@ class _Link:
         await self.socket.close()
 
 
+# Chime's DTLS certificate is RSA, but aiortc only offers ECDSA cipher suites, so Chime ends
+# the handshake (handshake_failure, or no answer at all). Offer the ECDHE-RSA suites browsers
+# also offer. aiortc has no setting for it, and coolton uses aiortc only for huddles.
+_DTLS_CIPHERS = (
+    b"ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:"
+    b"ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:"
+    b"ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA"
+)
+_aiortc_ssl_context = RTCCertificate._create_ssl_context
+
+
+def _ssl_context_with_rsa_ciphers(self, srtp_profiles):
+    context = _aiortc_ssl_context(self, srtp_profiles)
+    context.set_cipher_list(_DTLS_CIPHERS)
+    return context
+
+
+RTCCertificate._create_ssl_context = _ssl_context_with_rsa_ciphers
+
+
+def _browser_like_offer(offer: str) -> str:
+    """The offer as the Chime JS SDK's unified-plan offers look: its origin marked the way
+    SDP.withUnifiedPlanFormat() marks it, and only the sha-256 certificate fingerprint.
+    aiortc also lists sha-384 and sha-512 ones, and Chime then rejects coolton's DTLS
+    certificate (a fatal unknown_ca alert), so the media never connects."""
+    offer = re.sub(r"^o=\S+", "o=mozilla-chrome", offer, count=1, flags=re.M)
+    return "".join(line for line in offer.splitlines(keepends=True)
+                   if not (line.startswith("a=fingerprint:") and not line.startswith("a=fingerprint:sha-256 ")))
+
+
+def _candidates_in_every_section(sdp: str) -> str:
+    """Chime lists its ICE candidates only under the answer's first media section. All the
+    sections share one BUNDLE transport, but aiortc takes that transport's remote candidates
+    from whichever section it reads last (the video one), so it would get none: no
+    connectivity checks, and ICE stuck in "checking". Repeat them under every section."""
+    lines = [line for line in sdp.split("\r\n") if line]
+    ice = [line for line in lines if line.startswith(("a=candidate:", "a=end-of-candidates"))]
+    sections: list[list[str]] = [[]]
+    for line in lines:
+        if line.startswith("m="):
+            sections.append([])
+        if not line.startswith(("a=candidate:", "a=end-of-candidates")):
+            sections[-1].append(line)
+    out = sections[0]
+    for section in sections[1:]:
+        out += section + ice
+    return "\r\n".join(out) + "\r\n"
+
+
 def _ice_pairs(pc: RTCPeerConnection) -> list[str]:
     """What ICE tried, for the log when the media doesn't connect."""
     try:
@@ -409,7 +459,7 @@ class ChimeConnection:
             send_streams=streams,
             receive_stream_ids=[0],
             # What the Chime JS SDK's unified-plan offers carry.
-            sdp_offer=re.sub(r"^o=\S+", "o=mozilla-chrome", offer, count=1, flags=re.M),
+            sdp_offer=_browser_like_offer(offer),
             audio_host=self._audio_host,
             audio_checkin=False,
             audio_muted=False,
@@ -419,7 +469,8 @@ class ChimeConnection:
             raise RuntimeError(f"Chime refused SUBSCRIBE: {ack.error.status} {ack.error.description}")
         if video_track and ack.suback.duplex == pb.RX:
             logger.warning("Chime refused coolton's video (status %s); audio carries on", ack.error.status)
-        answer = "\r\n".join(line for line in ack.suback.sdp_answer.split("\r\n") if "typ srflx" not in line)
+        answer = _candidates_in_every_section(
+            "\r\n".join(line for line in ack.suback.sdp_answer.split("\r\n") if "typ srflx" not in line))
         await pc.setRemoteDescription(RTCSessionDescription(sdp=answer, type="answer"))
         try:
             await asyncio.wait_for(connected.wait(), 15)
