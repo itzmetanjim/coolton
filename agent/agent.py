@@ -2789,8 +2789,9 @@ def agentmail_send_email(
 def huddlefm_request_control_tool(
     ctx: RunContext[AgentDeps], channel: str, permissions: str, events: str = "",
 ) -> str:
-    """Request DJ control of a HuddleFM listening session, by DMing HuddleFM
-    (coolton is allowlisted for this). Call this ONCE per session before using
+    """Request DJ control of a HuddleFM listening session (music), by DMing HuddleFM
+    (coolton is allowlisted for this). This doesn't join the huddle: to join one yourself
+    and talk, use join_huddle_tool. Call this ONCE per session before using
     huddlefm_command_tool, see the system prompt's HUDDLEFM DJ section for the
     permission ids and full command reference.
 
@@ -2845,7 +2846,8 @@ def join_huddle_tool(ctx: RunContext[AgentDeps]) -> str:
 
     Joins this conversation's huddle: the one this thread belongs to, or else the
     channel's ongoing one. Use it when someone asks you to join, hop on, or come to the
-    huddle or call. It first asks the huddle (in its thread) to approve; coolton joins once
+    huddle or call to talk. Not for music: playing songs is HuddleFM (huddlefm_* tools),
+    which this has nothing to do with. It first asks the huddle (in its thread) to approve; coolton joins once
     someone there does, and a separate voice agent then handles the huddle and its thread,
     so just tell the user briefly.
     """

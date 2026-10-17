@@ -1,6 +1,6 @@
 ---
 name: huddlefm-dj
-description: 'DJ a HuddleFM listening session in a Slack huddle (playback, queue, volume) with huddlefm_request_control_tool and huddlefm_command_tool. Load before using either tool.'
+description: 'DJ a HuddleFM listening session in a Slack huddle (playback, queue, volume) with huddlefm_request_control_tool and huddlefm_command_tool. Load before using either tool. Only for music: to join a huddle yourself and talk, use join_huddle_tool instead.'
 ---
 
 # HuddleFM DJ

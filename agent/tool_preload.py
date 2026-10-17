@@ -48,9 +48,9 @@ TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
     "email": ("Could this involve email in any way: reading, checking, searching, sending or replying to emails, an email address or inbox, or coolton's own inbox?", frozenset({
         "agentmail_create_inbox", "agentmail_list_inboxes", "agentmail_list_messages",
         "agentmail_read_message", "agentmail_send_email"})),
-    "huddlefm": ("Is this about HuddleFM, music or a Slack huddle in any way: playing, queueing, skipping or DJing songs, the volume, or what's playing?", frozenset({
+    "huddlefm": ("Is this about HuddleFM or music in a huddle: playing, queueing, skipping or DJing songs, the volume, or what's playing? (Not just joining or leaving a huddle to talk.)", frozenset({
         "huddlefm_request_control_tool", "huddlefm_command_tool"})),
-    "huddles": ("Does this ask coolton to join, hop on or come to a Slack huddle or voice call?", frozenset({"join_huddle_tool"})),
+    "huddles": ("Does this ask coolton itself to join, hop on or come to a Slack huddle or voice call, to talk and listen? (Not playing music through HuddleFM.)", frozenset({"join_huddle_tool"})),
     "slack_bot_building": ("Does this involve making or changing a Slack bot or Slack app: creating, configuring, installing or deploying one, or its manifest, tokens or scopes?", frozenset({
         "create_slack_bot_tool", "check_bot_install_status_tool", "register_bot_tokens_tool",
         "update_slack_bot_manifest_tool", "wrangler_bot_deploy_tool"})),

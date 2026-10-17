@@ -86,8 +86,14 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 - A context bar of up to 5 pinned items (repo, branch, PR, CI status), up to 10 slash commands of its own (like `/run-tests`), renaming, and archiving with a summary when the work is done (only when asked).
 
 ### Other
-- Joins a Slack huddle when asked *(deferred)*, once someone in the huddle approves it in the huddle's thread (that opts the whole huddle in to the policy): listens, talks back, reads and answers the huddle's thread, hands real work to subagents while it keeps talking, and shows its desktop as its video while it uses one. Leaves when asked or when everyone else has gone.
-- DJs a HuddleFM listening session in a huddle (playback, queue, volume) once the session's host approves *(deferred)*.
+- Joins a Slack huddle when asked *(deferred)*, as cooltonUser (bots can't be in huddles). It first posts a request in the huddle's thread, and joins once anyone there clicks "Let coolton join"; that one approval opts the whole huddle in to the policy, so nobody in it gets the opt-in prompt. In the call it:
+  - listens (Deepgram transcribes the call) and answers out loud (Deepgram's text-to-speech) when someone says its name or talks to it, and keeps quiet when people are talking to each other;
+  - reads every message in the huddle's thread and answers typed ones there, for people who don't talk;
+  - only talks itself: real work (searching, code, Slack, the computer) goes to subagents in the background, so it keeps talking while they run, then tells people the result and posts links and details in the thread;
+  - shows its desktop as its video in the huddle while a subagent uses the computer or a browser, instead of posting a stream link;
+  - leaves when asked, when someone types `!kick-coolton` in the huddle's thread, or when everyone else has gone. Coming back needs a new approval.
+  - Its transcript of the call (what was said and typed, with times) is saved in the huddle thread's memory, so later turns in that thread remember the call. Audio and video aren't recorded.
+- DJs a HuddleFM listening session in a huddle (playback, queue, volume) once the session's host approves *(deferred)*. This is a different thing from joining a huddle: HuddleFM is a separate music bot, and DJing it never puts coolton in the call, while joining a huddle never plays music. "Join the huddle" or "hop on the call" means joining; "play/queue/skip a song" means HuddleFM.
 - Uses MCP servers people connect in App Home (e.g. Notion, Linear), up to 5 each, for that person's own turns.
 - Passes feedback about coolton on to Lily *(deferred)*.
 - Answers with Slack Markdown, including tables and code blocks; a reply too long for one message is split across several.
@@ -158,6 +164,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 ## What's stored
 - Each thread's conversation memory, in its own file on coolton's server, forgotten after 90 days without a new message. Long threads keep short notes instead of every old message.
 - A full trace of each thread (messages, replies, the model's visible thinking, tool calls and results), used for debugging, safety review and improving coolton. Lily can read them.
+- Huddle transcripts (what was said and typed while coolton was in the huddle), in the huddle thread's memory and traces. No audio or video.
 - Web UI sessions, until you delete them.
 - Settings (custom instructions, opt-ins, feedback, reminders, scheduled tasks) and encrypted model endpoints and MCP servers.
 
