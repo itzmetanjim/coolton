@@ -337,10 +337,13 @@ class HuddleSession:
                 self._speculative.consumed = max(0, self._speculative.consumed - dropped)
 
     async def _may_answer(self, user_id: str | None) -> bool:
-        """Only people who opted in to coolton's policy get answers; the first time someone
-        who hasn't asks, the opt-in prompt goes to the thread (agent.policy_consent)."""
+        """Only people who opted in to coolton's policy (and aren't banned) get answers; the
+        first time someone who hasn't asks, the opt-in prompt goes to the thread (agent.policy_consent)."""
+        from agent.ban_store import is_banned
         from agent.policy_consent import has_consent
 
+        if user_id and is_banned(user_id):
+            return False
         if not user_id or user_id in self._consented:
             return True
         if user_id in self._prompted:
