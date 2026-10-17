@@ -165,6 +165,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 - Each thread's conversation memory, in its own file on coolton's server, forgotten after 90 days without a new message. Long threads keep short notes instead of every old message.
 - A full trace of each thread (messages, replies, the model's visible thinking, tool calls and results), used for debugging, safety review and improving coolton. Lily can read them.
 - Huddle transcripts (what was said and typed while coolton was in the huddle), in the huddle thread's memory and traces. No audio or video.
+- A trace of every model call (turns, subagents, huddle replies, kevinton) in coolton's Langfuse project: prompts, replies, tool calls and results, model, tokens and timing, tagged with the Slack user and the conversation, with known secrets masked before it's sent. No images.
 - Web UI sessions, until you delete them.
 - Settings (custom instructions, opt-ins, feedback, reminders, scheduled tasks) and encrypted model endpoints and MCP servers.
 
