@@ -153,7 +153,10 @@ def handle_message(
     # The thread of a huddle coolton is in is the huddle's chat: its voice agent reads
     # and answers it (agent.huddle), engaged or not.
     from agent import huddle
-    if not is_dm and huddle.route_chat(channel_id, thread_ts, user_id, text):
+    if not is_dm and huddle.session_for(channel_id, thread_ts) is not None:
+        pass_to_private_hooks(event)
+        if not held_by_private_hooks(client, event, channel_id, thread_ts):
+            huddle.route_chat(channel_id, thread_ts, user_id, text)
         return
 
     # Channel thread replies are handled only while the bot is joined (engaged)

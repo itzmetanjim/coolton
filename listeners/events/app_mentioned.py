@@ -93,7 +93,9 @@ def handle_app_mentioned(
 
         # A mention in the thread of a huddle coolton is in goes to the huddle's voice agent.
         from agent import huddle
-        if huddle.route_chat(channel_id, thread_ts, user_id, text):
+        if huddle.session_for(channel_id, thread_ts) is not None:
+            if not held_by_private_hooks(client, event, channel_id, thread_ts):
+                huddle.route_chat(channel_id, thread_ts, user_id, text)
             return
 
         if steered_into_active_run(client, logger, channel_id, thread_ts, text, user_id, event["ts"]):
