@@ -127,7 +127,10 @@ class _Reply:
 
 
 class HuddleSession:
-    def __init__(self, joined: JoinedHuddle, *, client, requester_id: str, request_text: str, on_closed=None):
+    def __init__(self, joined: JoinedHuddle, *, client, requester_id: str, request_text: str, on_closed=None,
+                 started: bool = False):
+        # coolton started this huddle (nobody was in a call to approve it) rather than joining one.
+        self.started = started
         self.joined = joined
         self.channel_id = joined.channel_id
         self.thread_ts = joined.thread_ts
@@ -189,11 +192,14 @@ class HuddleSession:
         for user_id in [self.requester_id, *self.joined.participant_ids]:
             self._learn_name(user_id)
         requester = await self._name(self.requester_id)
-        self._intro = (f"[huddle] You just joined this huddle because {requester} asked you to "
+        self._intro = (f"[huddle] You just {'started' if self.started else 'joined'} this huddle because {requester} asked you to "
                        f"(their message: {self.request_text!r}).")
+        from agent.policy_consent import POLICY_URL
+
         await self._post(
-            "joined the huddle :wave: while I'm here, what's said in the call is transcribed "
-            "(by Deepgram) so I can answer. Say \"coolton\" to talk to me, or type in this thread. "
+            f"{'started' if self.started else 'joined'} the huddle :wave: while I'm here, what's said in the "
+            "call is transcribed (by Deepgram) so I can answer, and everyone in it is covered by the "
+            f"<{POLICY_URL}|coolton policy>. Say \"coolton\" to talk to me, or type in this thread. "
             "Type `!kick-coolton` here to make me leave."
         )
         self._joined_at = time.time()

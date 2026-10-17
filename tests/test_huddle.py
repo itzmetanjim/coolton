@@ -467,3 +467,25 @@ def test_kick_coolton_in_the_huddle_thread_leaves_without_a_mention(monkeypatch,
     handle_message(event={"type": "message", "text": "!kick-coolton", "ts": "51.1", "thread_ts": "50.5"},
                    client=Mock(), context=context, logger=Mock(), say=Mock(), say_stream=Mock(), set_status=None)
     assert stops == ["<@U1> kicked it"] and in_huddle.chat == []
+
+
+def test_with_no_huddle_going_coolton_starts_one_and_can_leave_it(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setattr(slack_api, "workspace_url", lambda: "https://x.slack.com")
+    monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: None)
+    started = []
+    monkeypatch.setattr(huddle, "_join", lambda client, pending, approver, start=False: started.append((pending["channel_id"], start)))
+    client = Mock()
+
+    assert "started one" in huddle.request_join(client, channel_id="C123", thread_ts="1.1", requester_id="U1", request_text="start a huddle")
+    assert started == [("C123", True)] and not client.chat_postMessage.called  # no approval prompt
+    assert "DM" in huddle.request_join(client, channel_id="D123", thread_ts="1.1", requester_id="U1", request_text="call me")
+
+    session = _FakeSession()
+    session.channel_id, session.thread_ts = "C123", "50.5"
+    stops = []
+    session.stop = lambda reason: stops.append(reason)
+    monkeypatch.setitem(huddle._sessions, ("C123", "50.5"), session)
+    monkeypatch.setattr(huddle.asyncio, "run_coroutine_threadsafe", lambda result, loop: None)
+    assert huddle.leave("C123", "7.7", "U1") == "Left the huddle."
+    assert stops == ["<@U1> asked it to leave"]

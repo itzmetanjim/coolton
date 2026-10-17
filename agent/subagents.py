@@ -119,7 +119,7 @@ SUBAGENT_EXCLUDED_TOOLS = frozenset({
     "delegate_to_subagent", "delegate_to_subagents",
     "add_emoji_reaction", "send_message",
     "skip", "wait_tool", "leave_thread_tool", "join_thread_tool",
-    "report_abuse_tool", "join_huddle_tool",
+    "report_abuse_tool", "join_huddle_tool", "leave_huddle_tool",
 })
 
 _READ_TOOLS = (

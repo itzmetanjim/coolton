@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_JOIN_TIMEOUT = 60
+_JOIN_TIMEOUT = 120
 _sessions: dict[tuple[str, str], HuddleSession] = {}
 _lock = threading.Lock()
 _loop: asyncio.AbstractEventLoop | None = None
@@ -69,8 +69,7 @@ def request_join(client, *, channel_id: str, thread_ts: str | None, requester_id
         slack_api.workspace_url()
         huddle_ts = slack_api.find_live_huddle(channel_id, thread_ts)
         if not huddle_ts:
-            return ("Error: there's no huddle going on in this channel right now. Ask the user to start "
-                    "one (or to ask you from the huddle's own thread).")
+            return _start(client, channel_id=channel_id, requester_id=requester_id, request_text=request_text)
         if session_for(channel_id, huddle_ts):
             return "You're already in that huddle."
         _expire_pending()
@@ -102,6 +101,39 @@ def request_join(client, *, channel_id: str, thread_ts: str | None, requester_id
         }
     return ("Asked the huddle (in its thread) to approve you joining; you join as soon as someone there "
             "approves. Tell the user that briefly.")
+
+
+def _start(client, *, channel_id: str, requester_id: str, request_text: str) -> str:
+    """No huddle is going in the channel: start one and join it. Nobody is in a call yet to
+    approve coolton, so it starts right away; its first message in the huddle's thread tells
+    whoever joins that the policy covers the huddle and how to kick it."""
+    if channel_id.startswith("D"):
+        return ("Error: you can't start a huddle in a DM (cooltonUser isn't in it). Ask the user to ask "
+                "you in a channel, or to start the huddle themselves.")
+    error = _join(client, {"channel_id": channel_id, "huddle_ts": None, "requester_id": requester_id,
+                           "request_text": request_text}, requester_id, start=True)
+    if error:
+        return f"Error: {error}"
+    return ("There was no huddle going in this channel, so you started one and joined it. From now on the "
+            "huddle's voice agent talks in the call and answers the huddle's thread; tell the user briefly.")
+
+
+def leave(channel_id: str, thread_ts: str | None, user_id: str) -> str:
+    """Leave this conversation's huddle (agent.agent's leave_huddle_tool): the one this
+    thread is, or else the one coolton is in in this channel. Also drops join requests
+    still waiting in the channel."""
+    with _lock:
+        sessions = [s for (channel, _), s in _sessions.items() if channel == channel_id]
+        dropped = [i for i, p in _pending.items() if p["channel_id"] == channel_id]
+        for pending_id in dropped:
+            del _pending[pending_id]
+    session = next((s for s in sessions if s.thread_ts == thread_ts), None) or (sessions[0] if sessions else None)
+    if session is None:
+        if dropped:
+            return "You weren't in a huddle here yet; cancelled your request to join."
+        return "You're not in a huddle in this channel."
+    asyncio.run_coroutine_threadsafe(session.stop(f"<@{user_id}> asked it to leave"), session.loop)
+    return "Left the huddle."
 
 
 def _expire_pending() -> None:
@@ -148,17 +180,21 @@ def decline(client, pending_id: str, user_id: str) -> None:
         _settle(client, pending, f"<@{user_id}> didn't let coolton join this huddle.")
 
 
-def _join(client, pending: dict, approver_id: str) -> str | None:
-    """Join an approved huddle. Returns what went wrong, if anything."""
+def _join(client, pending: dict, approver_id: str, *, start: bool = False) -> str | None:
+    """Join an approved huddle, or (`start`) start one in a channel that has none. Returns
+    what went wrong, if anything."""
     from agent.ensure_coolton_user import ensure_coolton_user_in_channel
     from agent.huddle import slack_api
     from agent.huddle.session import HuddleSession
 
     channel_id = pending["channel_id"]
     try:
-        if slack_api.find_live_huddle(channel_id, pending["huddle_ts"]) != pending["huddle_ts"]:
+        live = slack_api.find_live_huddle(channel_id, pending["huddle_ts"])
+        if start and live:
+            return "someone started a huddle here just now; ask again to join it."
+        if not start and live != pending["huddle_ts"]:
             return "That huddle has ended, so coolton didn't join."
-        if session_for(channel_id, pending["huddle_ts"]):
+        if not start and session_for(channel_id, pending["huddle_ts"]):
             return None
         ensure_coolton_user_in_channel(client, channel_id)
         joined = slack_api.join(channel_id)
@@ -169,7 +205,7 @@ def _join(client, pending: dict, approver_id: str) -> str | None:
         return f"coolton couldn't join the huddle: {e}"
 
     session = HuddleSession(joined, client=client, requester_id=pending["requester_id"],
-                            request_text=pending["request_text"], on_closed=_forget)
+                            request_text=pending["request_text"], on_closed=_forget, started=start)
     loop = session.loop = _event_loop()
     with _lock:
         _sessions[(session.channel_id, session.thread_ts)] = session

@@ -48,6 +48,9 @@ _VIDEO_FPS = 10
 _VIDEO_MAX_KBPS = 1500
 
 
+# One try per kind of TURN relay Chime offers (UDP, TCP, TLS).
+_START_ATTEMPTS = 3
+
 class ChimeEnded(Exception):
     """The meeting is over for coolton (ended, or it was removed); don't reconnect."""
 
@@ -216,6 +219,16 @@ class _Link:
         await self.socket.close()
 
 
+def _ice_pairs(pc: RTCPeerConnection) -> list[str]:
+    """What ICE tried, for the log when the media doesn't connect."""
+    try:
+        ice = pc.getTransceivers()[0].sender.transport.transport.iceGatherer._connection
+        return [f"{pair.local_candidate.type} {pair.local_addr} -> {pair.remote_candidate.type} "
+                f"{pair.remote_addr}: {pair.state.name}" for pair in ice._check_list]
+    except Exception as e:
+        return [f"unavailable ({e})"]
+
+
 def _gather_relay_only(pc: RTCPeerConnection) -> None:
     """Offer only TURN relay candidates, like a browser's iceTransportPolicy "relay". Chime's
     media servers only work through its relay: with host candidates in the offer, ICE can
@@ -267,7 +280,15 @@ class ChimeConnection:
         return self._video is not None and self._link is not None
 
     async def start(self) -> None:
-        self._link = await self._connect()
+        """Connect, trying each kind of TURN relay Chime offers (UDP, TCP, TLS) in turn."""
+        for attempt in range(_START_ATTEMPTS):
+            try:
+                self._link = await self._connect()
+                return
+            except Exception as e:
+                if attempt == _START_ATTEMPTS - 1:
+                    raise
+                logger.warning("Chime media attempt %d failed, trying the next relay: %s", attempt + 1, e)
 
     async def set_video(self, track: MediaStreamTrack | None) -> None:
         """Start (a track) or stop (None) coolton's video, by rebuilding the connection."""
@@ -329,6 +350,7 @@ class ChimeConnection:
             if uris:
                 uri = uris[self._turn_attempt % len(uris)]
                 servers = [RTCIceServer(urls=uri, username=turn.username, credential=turn.password)]
+                logger.info("Chime media: relaying through %s (%d TURN servers offered)", uri, len(uris))
             self._turn_attempt += 1
             await self._subscribe(link, servers)
             self._turn_attempt -= 1  # this one works, keep it for reconnects
@@ -402,6 +424,9 @@ class ChimeConnection:
         try:
             await asyncio.wait_for(connected.wait(), 15)
         except asyncio.TimeoutError:
+            logger.warning("Chime media didn't connect. Answer candidates: %s. ICE pairs: %s",
+                           [line for line in answer.split("\r\n") if line.startswith("a=candidate")],
+                           _ice_pairs(pc))
             raise RuntimeError(
                 f"Chime's media didn't connect within 15 s (ICE {pc.iceConnectionState}, "
                 f"connection {pc.connectionState})"

@@ -2841,15 +2841,18 @@ def huddlefm_command_tool(
 
 @agent.tool
 def join_huddle_tool(ctx: RunContext[AgentDeps]) -> str:
-    """Join a live Slack huddle (a voice call) as a participant: coolton then listens, talks
-    back, answers the huddle's thread, and shows its desktop as its video while using it.
+    """Join a Slack huddle (a voice call) as a participant, or start one: coolton then
+    listens, talks back, answers the huddle's thread, and shows its desktop as its video
+    while using it.
 
     Joins this conversation's huddle: the one this thread belongs to, or else the
-    channel's ongoing one. Use it when someone asks you to join, hop on, or come to the
-    huddle or call to talk. Not for music: playing songs is HuddleFM (huddlefm_* tools),
-    which this has nothing to do with. It first asks the huddle (in its thread) to approve; coolton joins once
-    someone there does, and a separate voice agent then handles the huddle and its thread,
-    so just tell the user briefly.
+    channel's ongoing one. If no huddle is going in the channel, it starts one and joins
+    it (not in DMs). Use it when someone asks you to join, hop on, come to, start or open
+    a huddle or call to talk. Not for music: playing songs is HuddleFM (huddlefm_* tools),
+    which this has nothing to do with. Joining a huddle that's already going first asks the
+    huddle (in its thread) to approve; coolton joins once someone there does. Either way a
+    separate voice agent then handles the huddle and its thread, so just tell the user
+    briefly.
     """
     from agent import huddle
 
@@ -2857,6 +2860,17 @@ def join_huddle_tool(ctx: RunContext[AgentDeps]) -> str:
         ctx.deps.client, channel_id=ctx.deps.channel_id, thread_ts=ctx.deps.thread_ts,
         requester_id=ctx.deps.user_id, request_text=ctx.deps.request_text,
     )
+
+
+@agent.tool
+def leave_huddle_tool(ctx: RunContext[AgentDeps]) -> str:
+    """Leave the Slack huddle coolton is in in this channel (this thread's, or else the
+    channel's), or cancel a request to join one that's still waiting. Use it when someone
+    asks you to leave, hang up or get off the huddle or call. Nothing to do with HuddleFM.
+    """
+    from agent import huddle
+
+    return huddle.leave(ctx.deps.channel_id, ctx.deps.thread_ts, ctx.deps.user_id)
 
 
 @agent.tool
@@ -3526,7 +3540,7 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
 DEFERRED_TOOLS = frozenset({
     "agentmail_create_inbox", "agentmail_list_inboxes", "agentmail_list_messages",
     "agentmail_read_message", "agentmail_send_email",
-    "huddlefm_request_control_tool", "huddlefm_command_tool", "join_huddle_tool",
+    "huddlefm_request_control_tool", "huddlefm_command_tool", "join_huddle_tool", "leave_huddle_tool",
     "create_slack_bot_tool", "check_bot_install_status_tool", "register_bot_tokens_tool",
     "update_slack_bot_manifest_tool", "wrangler_bot_deploy_tool",
     "create_scheduled_task_tool", "list_scheduled_tasks_tool", "pause_scheduled_task_tool",

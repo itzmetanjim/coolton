@@ -86,7 +86,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 - A context bar of up to 5 pinned items (repo, branch, PR, CI status), up to 10 slash commands of its own (like `/run-tests`), renaming, and archiving with a summary when the work is done (only when asked).
 
 ### Other
-- Joins a Slack huddle when asked *(deferred)*, as cooltonUser (bots can't be in huddles). It first posts a request in the huddle's thread, and joins once anyone there clicks "Let coolton join"; that one approval opts the whole huddle in to the policy, so nobody in it gets the opt-in prompt. In the call it:
+- Joins a Slack huddle when asked *(deferred)*, as cooltonUser (bots can't be in huddles). For a huddle that's already going, it first posts a request in the huddle's thread, and joins once anyone there clicks "Let coolton join"; that one approval opts the whole huddle in to the policy, so nobody in it gets the opt-in prompt. If no huddle is going in the channel, it starts one and joins it right away (not in DMs), and its first message in the huddle's thread says the policy covers everyone who joins. It leaves when asked (from anywhere in the channel, or by voice). In the call it:
   - listens (Deepgram transcribes the call) and answers out loud (Deepgram's text-to-speech) when someone says its name or talks to it, and keeps quiet when people are talking to each other;
   - reads every message in the huddle's thread and answers typed ones there, for people who don't talk;
   - only talks itself: real work (searching, code, Slack, the computer) goes to subagents in the background, so it keeps talking while they run, then tells people the result and posts links and details in the thread;
