@@ -72,6 +72,10 @@ _TASK_NOTE = (
     "agent_browser_stream_tool first: in a huddle that shows your screen as coolton's video.)"
 )
 _GREETING = "Hi, coolton here."
+# Longer than Voice.flush can wait for Deepgram's flush limit.
+_TTS_STALL_SECONDS = 75.0
+# A huddle coolton started that nobody joins: leave after this long.
+NOBODY_CAME_SECONDS = 180.0
 
 
 def _words(text: str) -> int:
@@ -163,6 +167,7 @@ class HuddleSession:
         self._alone_since: float | None = None
         self._seen_others = False
         self._names: dict[str, str] = {}
+        self._looking_up: set[str] = set()
         self._stopping = False
         self._transcript: list[str] = []
         self._transcript_saved = 0
@@ -402,8 +407,8 @@ class HuddleSession:
             else:
                 new_messages = await self._generate(reply)
             await reply.confirmed.wait()
-            while reply.unflushed or self.speaker.busy:
-                await asyncio.sleep(0.05)
+            await self.voice.flush()
+            await self._played(reply)
             if reply.sentences:
                 self._last_spoke = time.monotonic()
                 self._log("coolton said: " + " ".join(text for text, _ in reply.sentences))
@@ -431,6 +436,23 @@ class HuddleSession:
         finally:
             if self._reply is reply:
                 self._reply = None
+
+    async def _played(self, reply: _Reply) -> None:
+        """Wait until everything the reply said has been played. If its audio stops coming
+        for too long (a socket that died without saying so), give up on the rest rather
+        than block every later reply."""
+        progress = (reply.audio_index, self.speaker.enqueued, self.speaker.played)
+        since = time.monotonic()
+        while reply.unflushed or self.speaker.busy:
+            await asyncio.sleep(0.05)
+            now = (reply.audio_index, self.speaker.enqueued, self.speaker.played)
+            if now != progress or self.speaker.paused:  # paused on purpose: someone's talking
+                progress, since = now, time.monotonic()
+            elif time.monotonic() - since > _TTS_STALL_SECONDS:
+                logger.warning("Huddle speech stalled; dropping the rest of the reply's audio")
+                reply.audio_index = len(reply.sentences)
+                self.speaker.clear()
+                return
 
     async def _generate(self, reply: _Reply):
         """Stream the model's reply into actions, trying the next model if one fails before
@@ -491,10 +513,10 @@ class HuddleSession:
             sentence[1] = self.speaker.enqueued
         self.speaker.play(pcm)
 
-    def _on_tts_flushed(self) -> None:
+    def _on_tts_flushed(self, sentences: int) -> None:
         reply = self._reply
         if reply is not None and reply.unflushed:
-            reply.audio_index += 1
+            reply.audio_index = min(len(reply.sentences), reply.audio_index + sentences)
 
     def _add_history(self, messages: list) -> None:
         # A new list, not extended in place: a speculative reply may be reading the old one.
@@ -584,7 +606,11 @@ class HuddleSession:
                 self._seen_others = True
                 self._alone_since = None
             elif not self._seen_others:
-                pass  # Chime hasn't said who's here (yet): never take that for being alone
+                # Chime hasn't said who's here (yet): never take that for being alone, except
+                # in a huddle coolton started itself that nobody has come to.
+                if self.started and self._joined_at and time.time() - self._joined_at > NOBODY_CAME_SECONDS:
+                    asyncio.ensure_future(self.stop("nobody joined"))
+                    return
             elif self._alone_since is None:
                 self._alone_since = now
             elif now - self._alone_since > ALONE_SECONDS:
@@ -653,12 +679,13 @@ class HuddleSession:
             self._learn_name(self.attendees.user_id(attendee))
 
     def _learn_name(self, user_id: str | None) -> None:
-        if user_id and user_id not in self._names:
-            self._names[user_id] = user_id
-            asyncio.ensure_future(self._name(user_id, refresh=True))
+        """Look a name up in the background (a turn said meanwhile is "someone")."""
+        if user_id and user_id not in self._names and user_id not in self._looking_up:
+            self._looking_up.add(user_id)
+            asyncio.ensure_future(self._name(user_id))
 
-    async def _name(self, user_id: str, refresh: bool = False) -> str:
-        if user_id in self._names and not refresh:
+    async def _name(self, user_id: str) -> str:
+        if user_id in self._names:
             return self._names[user_id]
 
         def lookup() -> str:
@@ -670,6 +697,7 @@ class HuddleSession:
                 return user_id
 
         self._names[user_id] = await self.loop.run_in_executor(None, lookup)
+        self._looking_up.discard(user_id)
         return self._names[user_id]
 
     async def _post(self, text: str) -> None:

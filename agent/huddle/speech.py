@@ -7,11 +7,15 @@
   EndOfTurn (done: answer).
 - Voice: one streaming text-to-speech socket for the whole huddle, so each reply skips the
   connection setup. Text goes in sentence by sentence (Speak + Flush), audio comes back as
-  it's made, and Clear drops whatever's left when someone interrupts.
+  it's made, and Clear drops whatever's left when someone interrupts. Deepgram takes at
+  most 20 Flushes a minute (more are refused, and their audio never comes), so a reply's
+  first sentence is flushed right away, and the ones written while its audio is being
+  made share the next Flush: usually two or three per reply, with no gap in the speech.
 """
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import logging
 import time
@@ -33,6 +37,11 @@ _EOT_TIMEOUT_MS = "4000"
 _CHUNK_BYTES = MIC_RATE * 2 * 80 // 1000  # 80 ms, what Flux works best with
 _MAX_BACKLOG = 50  # chunks (4 s) kept while (re)connecting; older audio is dropped
 TTS_MODEL = "aura-2-thalia-en"
+# Words Flux should expect, so they aren't heard as something else ("HEC club").
+KEYTERMS = ["coolton", "Hack Club", "Slack", "huddle", "HuddleFM", "kevinton"]
+# Deepgram's limit is 20 Flushes per 60 s per socket; keep a little headroom.
+_FLUSHES_PER_WINDOW = 18
+_FLUSH_WINDOW = 60.0
 
 
 class Listener:
@@ -65,7 +74,7 @@ class Listener:
                 async with self._client.listen.v2.connect(
                     model=STT_MODEL, encoding="linear16", sample_rate=str(MIC_RATE),
                     eager_eot_threshold=_EAGER_EOT_THRESHOLD, eot_threshold=_EOT_THRESHOLD,
-                    eot_timeout_ms=_EOT_TIMEOUT_MS, keyterm="coolton",
+                    eot_timeout_ms=_EOT_TIMEOUT_MS, keyterm=KEYTERMS,
                 ) as connection:
                     self.epoch = None
                     sender = asyncio.create_task(self._send(connection))
@@ -96,9 +105,12 @@ class Listener:
 
 class Voice:
     """Text-to-speech for coolton's replies: say() a sentence and its audio (48 kHz mono
-    16-bit PCM) comes back through `on_audio`, then `on_flushed` once it's all there."""
+    16-bit PCM) comes back through `on_audio`, then `on_flushed(n)` once the audio of the
+    next n sentences is all there (more than one when sentences shared a Flush, or when
+    the socket dropped with sentences that will never get audio). flush() at the end of a
+    reply makes sure every sentence said gets its audio."""
 
-    def __init__(self, api_key: str, on_audio: Callable[[bytes], None], on_flushed: Callable[[], None]):
+    def __init__(self, api_key: str, on_audio: Callable[[bytes], None], on_flushed: Callable[[int], None]):
         self._client = AsyncDeepgramClient(api_key=api_key)
         self._on_audio = on_audio
         self._on_flushed = on_flushed
@@ -108,6 +120,9 @@ class Voice:
         self._lock = asyncio.Lock()
         # After a Clear, audio still in flight is dropped until Deepgram confirms it.
         self._clearing = False
+        self._flush_times: collections.deque[float] = collections.deque()
+        self._unflushed = 0  # sentences sent since the last Flush
+        self._groups: collections.deque[int] = collections.deque()  # sentences per Flush awaiting Flushed
 
     async def _connected(self):
         if self._connection is not None and self._reader is not None and not self._reader.done():
@@ -132,19 +147,26 @@ class Voice:
                 if kind == "Cleared":
                     self._clearing = False
                 elif kind == "Flushed" and not self._clearing:
-                    self._on_flushed()
+                    self._on_flushed(self._groups.popleft() if self._groups else 1)
+                    if self._unflushed and not self._groups:
+                        asyncio.ensure_future(self._flush_waiting())
                 elif kind == "Warning":
                     logger.warning("Deepgram TTS warning: %s", getattr(message, "description", message))
         except Exception as e:
             logger.info("Deepgram TTS socket closed: %s", e)
 
     async def say(self, text: str) -> None:
+        """Send a sentence, and Flush it right away when the limit allows."""
         async with self._lock:
             for attempt in range(2):
                 try:
                     connection = await self._connected()
                     await connection.send_text(SpeakV1Text(text=text))
-                    await connection.send_flush()
+                    self._unflushed += 1
+                    # Flush now unless audio from an earlier Flush is still coming: then
+                    # this sentence joins the next one, made once that audio is in.
+                    if not self._groups and self._flush_wait() == 0:
+                        await self._flush(connection)
                     return
                 except Exception as e:
                     # An idle socket Deepgram closed: open a new one and try once more.
@@ -153,8 +175,51 @@ class Voice:
                     if attempt:
                         raise
 
+    async def flush(self) -> None:
+        """Flush whatever was said and not flushed yet, waiting for the limit if needed."""
+        while True:
+            async with self._lock:
+                if not self._unflushed or self._connection is None:
+                    return
+                wait = self._flush_wait()
+                if wait == 0:
+                    try:
+                        await self._flush(self._connection)
+                    except Exception as e:
+                        logger.info("Deepgram TTS flush failed (%s)", e)
+                        await self._disconnect()
+                    return
+            logger.info("Deepgram TTS flush limit reached, waiting %.0f s", wait)
+            await asyncio.sleep(wait)
+
+    async def _flush_waiting(self) -> None:
+        """Flush the sentences that waited for the last Flush's audio, if the limit allows
+        (else the reply's closing flush() waits for room)."""
+        async with self._lock:
+            if self._unflushed and not self._groups and self._connection is not None and self._flush_wait() == 0:
+                try:
+                    await self._flush(self._connection)
+                except Exception as e:
+                    logger.info("Deepgram TTS flush failed (%s)", e)
+
+    def _flush_wait(self) -> float:
+        now = time.monotonic()
+        while self._flush_times and now - self._flush_times[0] >= _FLUSH_WINDOW:
+            self._flush_times.popleft()
+        if len(self._flush_times) < _FLUSHES_PER_WINDOW:
+            return 0.0
+        return _FLUSH_WINDOW - (now - self._flush_times[0]) + 0.05
+
+    async def _flush(self, connection) -> None:
+        await connection.send_flush()
+        self._flush_times.append(time.monotonic())
+        self._groups.append(self._unflushed)
+        self._unflushed = 0
+
     async def clear(self) -> None:
         async with self._lock:
+            self._groups.clear()
+            self._unflushed = 0
             if self._connection is None:
                 return
             self._clearing = True
@@ -170,6 +235,12 @@ class Voice:
             with contextlib.suppress(Exception):
                 await self._stack.aclose()
         self._connection = self._stack = self._reader = None
+        # Sentences sent on the old socket will never get their audio: don't wait for it.
+        lost = sum(self._groups) + self._unflushed
+        self._groups.clear()
+        self._unflushed = 0
+        if lost:
+            self._on_flushed(lost)
 
     async def close(self) -> None:
         async with self._lock:

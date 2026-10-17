@@ -55,6 +55,10 @@ class SpeakerTrack(MediaStreamTrack):
         self._paused = False
 
     @property
+    def paused(self) -> bool:
+        return self._paused
+
+    @property
     def busy(self) -> bool:
         return bool(self._buffer)
 

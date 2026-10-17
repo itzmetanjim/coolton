@@ -96,7 +96,10 @@ class _FakeVoice:
     async def say(self, text):
         self.said.append(text)
         self.session._on_tts_audio(b"\x01\x00" * 960 * self.frames)
-        self.session._on_tts_flushed()
+        self.session._on_tts_flushed(1)
+
+    async def flush(self):
+        pass
 
     async def clear(self):
         self.cleared += 1
@@ -505,3 +508,56 @@ def test_offer_and_answer_are_rewritten_the_way_chime_needs():
               "a=candidate:H 1 udp 1 10.3.107.247 17298 typ host\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=mid:1\r\n")
     sections = _candidates_in_every_section(answer).split("m=")[1:]
     assert all("a=candidate:H 1 udp 1 10.3.107.247 17298 typ host" in s for s in sections) and len(sections) == 2
+
+
+def test_tts_batches_sentences_and_keeps_under_deepgrams_flush_limit(monkeypatch):
+    from agent.huddle import speech
+
+    monkeypatch.setattr(speech, "_FLUSHES_PER_WINDOW", 2)
+    monkeypatch.setattr(speech, "_FLUSH_WINDOW", 0.3)
+    voice = speech.Voice("dg-test", on_audio=lambda pcm: None, on_flushed=lambda n: None)
+    flushes = []
+
+    async def sent(*args):
+        return None
+
+    async def flush():
+        flushes.append(voice._unflushed)
+
+    connection = SimpleNamespace(send_text=sent, send_flush=flush)
+
+    async def connected():
+        voice._connection = connection
+        return connection
+
+    voice._connected = connected
+
+    async def deepgram_flushed():  # what Voice._read does when Deepgram says "Flushed"
+        voice._groups.popleft()
+        await voice._flush_waiting()
+
+    async def main():
+        for i in range(3):
+            await voice.say(f"sentence {i}.")
+        assert flushes == [1]  # the first right away; the rest wait for its audio
+        await deepgram_flushed()
+        assert flushes == [1, 2]  # both together: Deepgram's limit (2 here) is now used up
+        await voice.say("one more.")
+        await deepgram_flushed()
+        assert flushes == [1, 2]  # over the limit: it waits
+        await voice.flush()  # the end of the reply waits for room under the limit
+        assert flushes == [1, 2, 1]
+
+    asyncio.run(main())
+
+
+def test_a_restart_leaves_huddles_properly_then_ends_as_sigterm_always_did(monkeypatch):
+    import signal
+
+    handlers, kills, left = {}, [], []
+    monkeypatch.setattr(signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    monkeypatch.setattr(huddle.os, "kill", lambda pid, sig: kills.append(sig))
+    monkeypatch.setattr(huddle, "_leave_all", lambda: left.append(True))
+    huddle.leave_huddles_on_sigterm()
+    handlers[signal.SIGTERM](signal.SIGTERM, None)
+    assert left == [True] and kills == [signal.SIGTERM] and handlers[signal.SIGTERM] == signal.SIG_DFL

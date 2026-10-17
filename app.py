@@ -96,4 +96,7 @@ _resume_orphaned_runs()
 _start_web_ui()
 
 if __name__ == "__main__":
+    from agent.huddle import leave_huddles_on_sigterm
+
+    leave_huddles_on_sigterm()
     SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN")).start()
