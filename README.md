@@ -264,6 +264,7 @@ everything else in `.env.sample` is optional and additive.
 | `COOLTON_USER_ID` / `SLACK_USER_TOKEN` | the "cooltonUser" helper account, used for user-token Slack API calls. |
 | `COOLTON_USER_XOXC` / `COOLTON_USER_XOXD` | cooltonUser's Slack browser session (the web client's `xoxc-` token and its `d` cookie, URL-encoded as the browser stores it), which huddles are joined with. Both needed for huddles. |
 | `DEEPGRAM_API_KEY` | speech-to-text and text-to-speech in huddles. |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` | optional: trace every model run to Langfuse (`agent/langfuse_tracing.py`), tagged by user and thread (the session), with known secrets masked. Off unless both keys are set. |
 | `SLACK_CODE_CHANNEL_BOT_TOKEN` | bot token of the separate app that creates code channels (manifest in `manifests/code_channel_app.json`). Without it, code channels are off. |
 | `SLACK_CODE_CHANNEL_APP_TOKEN` | that app's app-level token (`connections:write`), for Socket Mode: it hears mentions of its bot (the first message of a code channel started from Slack's UI) and hands them to coolton. |
 | `COOLTON_BOT_ID` | coolton's own bot user id, so it recognizes self-mentions. |

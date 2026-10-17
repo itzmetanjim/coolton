@@ -554,13 +554,18 @@ def test_tts_batches_sentences_and_keeps_under_deepgrams_flush_limit(monkeypatch
 def test_a_restart_leaves_huddles_properly_then_ends_as_sigterm_always_did(monkeypatch):
     import signal
 
-    handlers, kills, left = {}, [], []
+    from agent import shutdown
+
+    handlers, kills = {}, []
     monkeypatch.setattr(signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
-    monkeypatch.setattr(huddle.os, "kill", lambda pid, sig: kills.append(sig))
-    monkeypatch.setattr(huddle, "_leave_all", lambda: left.append(True))
-    huddle.leave_huddles_on_sigterm()
+    monkeypatch.setattr(shutdown.os, "kill", lambda pid, sig: kills.append(sig))
+    assert huddle._leave_all in shutdown._cleanups
+    left = []
+    monkeypatch.setattr(shutdown, "_cleanups", [lambda: left.append(True), lambda: 1 / 0, lambda: left.append(2)])
+    shutdown.install()
     handlers[signal.SIGTERM](signal.SIGTERM, None)
-    assert left == [True] and kills == [signal.SIGTERM] and handlers[signal.SIGTERM] == signal.SIG_DFL
+    # Every cleanup runs, even after one fails, then SIGTERM ends the process as before.
+    assert left == [True, 2] and kills == [signal.SIGTERM] and handlers[signal.SIGTERM] == signal.SIG_DFL
 
 
 def test_the_reply_to_an_interruption_knows_what_it_interrupted():

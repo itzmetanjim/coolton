@@ -3796,6 +3796,19 @@ def _fit_history_to_model(run_kwargs: dict, deps, prov_config: dict) -> None:
 
 
 def _run_with_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | None = None):
+    """_run_provider_chain, traced in Langfuse (when it's on, agent.langfuse_tracing) as
+    the turn or subagent it is, for this user and thread."""
+    from agent import langfuse_tracing
+
+    with langfuse_tracing.run(
+        name=run_label or "coolton turn", user_id=getattr(deps, "user_id", None),
+        channel_id=getattr(deps, "channel_id", ""), thread_ts=getattr(deps, "thread_ts", ""),
+        tags=["subagent" if run_label else "turn"],
+    ):
+        return _run_provider_chain(agent_dynamic, run_kwargs, deps, run_label)
+
+
+def _run_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | None = None):
     """Run an agent against the provider fallback chain, returning (result, provider_name).
 
     Shared by run_agent (main orchestrator) and subagents (research/explore/summarizer).

@@ -200,12 +200,16 @@ def run_kevinton(
         # finished turn's deps object itself isn't changed.
         deps = copy.copy(deps)
         deps.skill_review_required = True
-        result = agent.run_sync(
-            user_prompt=prompt,
-            deps=deps,
-            model=model,
-            capabilities=capabilities,
-        )
+        from agent import langfuse_tracing
+
+        with langfuse_tracing.run(name="kevinton", user_id=deps.user_id, channel_id=channel_id,
+                                  thread_ts=thread_ts, tags=["kevinton"]):
+            result = agent.run_sync(
+                user_prompt=prompt,
+                deps=deps,
+                model=model,
+                capabilities=capabilities,
+            )
         status = result.output
         logger.info(f"kevinton: {status}")
         return status

@@ -263,25 +263,10 @@ def sharing_desktop(channel_id: str, thread_ts: str) -> bool:
     return bool(session is not None and session.video_on)
 
 
-def leave_huddles_on_sigterm() -> None:
-    """`systemctl restart` sends SIGTERM, which by default ends Python without running
-    atexit, so coolton would vanish from its huddles without a word (and lose the last
-    half minute of their transcripts). Leave them properly first, then end as SIGTERM
-    always did (agent.inflight_runs relies on that). Call from the main thread (app.py)."""
-    import signal
-
-    def on_sigterm(signum, frame):
-        try:
-            _leave_all()
-        finally:
-            signal.signal(signal.SIGTERM, signal.SIG_DFL)
-            os.kill(os.getpid(), signal.SIGTERM)
-
-    signal.signal(signal.SIGTERM, on_sigterm)
-
-
 @atexit.register
 def _leave_all() -> None:
+    """Leave every huddle properly (posting why, saving the transcript): at exit, and
+    before a restart's SIGTERM ends coolton (agent.shutdown)."""
     with _lock:
         sessions = list(_sessions.values())
     if _loop is None:
@@ -291,3 +276,8 @@ def _leave_all() -> None:
             asyncio.run_coroutine_threadsafe(session.stop("coolton is restarting"), _loop).result(timeout=10)
         except Exception:
             pass
+
+
+from agent import shutdown  # noqa: E402
+
+shutdown.on_sigterm(_leave_all)

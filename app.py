@@ -92,11 +92,14 @@ def _resume_orphaned_runs() -> None:
     log.set_resuming_conversation_ids(resumed_web_ids)
 
 
+from agent import langfuse_tracing  # noqa: E402
+
+langfuse_tracing.setup()  # before any agent runs, resumed ones included
 _resume_orphaned_runs()
 _start_web_ui()
 
 if __name__ == "__main__":
-    from agent.huddle import leave_huddles_on_sigterm
+    from agent import huddle, shutdown  # noqa: F401  (huddle registers its own shutdown cleanup)
 
-    leave_huddles_on_sigterm()
+    shutdown.install()
     SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN")).start()

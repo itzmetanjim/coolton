@@ -114,8 +114,9 @@ def add_runtime_secret(key: str, value: str) -> None:
             _runtime_secrets.pop(next(iter(_runtime_secrets)))
 
 
-def redact(msg: str, context: str = "") -> str:
-    """Replace every known secret value found in msg with *** and notify."""
+def redact(msg: str, context: str = "", notify: bool = True) -> str:
+    """Replace every known secret value found in msg with *** and (unless `notify` is
+    False) notify."""
     hits = []
     with _secret_values_lock:
         runtime = [(key, value) for value, key in _runtime_secrets.items()]
@@ -123,7 +124,7 @@ def redact(msg: str, context: str = "") -> str:
         if secret and secret in msg:
             msg = msg.replace(secret, "***")
             hits.append(key)
-    if hits and _notifier is not None:
+    if hits and notify and _notifier is not None:
         try:
             _notifier(hits, context)
         except Exception:

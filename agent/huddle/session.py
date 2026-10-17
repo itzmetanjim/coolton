@@ -476,7 +476,14 @@ class HuddleSession:
     async def _generate(self, reply: _Reply):
         """Stream the model's reply into actions, trying the next model if one fails before
         the reply did anything. Returns the run's new messages."""
+        from agent import langfuse_tracing
+
         deps = VoiceDeps(session=self, confirmed=reply.confirmed, user_id=reply.user_id)
+        with langfuse_tracing.run(name="huddle reply", user_id=reply.user_id or self.requester_id,
+                                  channel_id=self.channel_id, thread_ts=self.thread_ts, tags=["huddle"]):
+            return await self._generate_with(deps, reply)
+
+    async def _generate_with(self, deps: VoiceDeps, reply: _Reply):
         error: Exception | None = None
         for name, model in self.models:
             parser = ReplyParser()

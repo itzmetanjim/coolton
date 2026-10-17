@@ -19,6 +19,8 @@ av
 websockets
 protobuf>=6.31.1
 deepgram-sdk>=7
+# Tracing to Langfuse when it's configured (agent.langfuse_tracing)
+langfuse>=5
 
 pytest
 ruff==0.15.17
