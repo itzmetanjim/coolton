@@ -22,6 +22,7 @@ import time
 from collections.abc import Callable
 
 import websockets
+from aioice import TransportPolicy
 from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCRtpSender, RTCSessionDescription
 from aiortc.contrib.media import MediaBlackhole
 from aiortc.mediastreams import MediaStreamError, MediaStreamTrack
@@ -215,6 +216,17 @@ class _Link:
         await self.socket.close()
 
 
+def _gather_relay_only(pc: RTCPeerConnection) -> None:
+    """Offer only TURN relay candidates, like a browser's iceTransportPolicy "relay". Chime's
+    media servers only work through its relay: with host candidates in the offer, ICE can
+    pair directly with Chime and pass its checks, but DTLS never completes over that path.
+    aiortc has no setting for this, so it's set on aioice's connection (one per BUNDLE
+    transport) before gathering starts."""
+    for transceiver in pc.getTransceivers():
+        ice = transceiver.sender.transport.transport.iceGatherer._connection
+        ice._transport_policy = TransportPolicy.RELAY
+
+
 class ChimeConnection:
     """Keeps coolton connected to a huddle's Chime meeting as one attendee: audio both
     ways, its desktop as video when there is one, and reconnecting for up to two minutes
@@ -352,6 +364,8 @@ class ChimeConnection:
         video_track = self._video
         video = pc.addTransceiver(video_track or "video", direction="sendrecv" if video_track else "inactive")
         video.setCodecPreferences(_codecs("video", "video/h264", **{"packetization-mode": "1", "profile-level-id": "42e01f"}))
+        if self._relay_only:
+            _gather_relay_only(pc)
         await pc.setLocalDescription(await pc.createOffer())
         offer = pc.localDescription.sdp
         if self._relay_only and "typ relay" not in offer:
@@ -385,7 +399,13 @@ class ChimeConnection:
             logger.warning("Chime refused coolton's video (status %s); audio carries on", ack.error.status)
         answer = "\r\n".join(line for line in ack.suback.sdp_answer.split("\r\n") if "typ srflx" not in line)
         await pc.setRemoteDescription(RTCSessionDescription(sdp=answer, type="answer"))
-        await asyncio.wait_for(connected.wait(), 15)
+        try:
+            await asyncio.wait_for(connected.wait(), 15)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"Chime's media didn't connect within 15 s (ICE {pc.iceConnectionState}, "
+                f"connection {pc.connectionState})"
+            ) from None
 
     # -- running -----------------------------------------------------------------------
 

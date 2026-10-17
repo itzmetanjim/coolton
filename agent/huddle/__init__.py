@@ -178,10 +178,11 @@ def _join(client, pending: dict, approver_id: str) -> str | None:
         started.result(timeout=_JOIN_TIMEOUT)
     except Exception as e:
         started.cancel()
-        asyncio.run_coroutine_threadsafe(session.stop(f"couldn't connect its audio ({e})"), loop)
+        reason = str(e) or type(e).__name__
+        asyncio.run_coroutine_threadsafe(session.stop(f"couldn't connect its audio ({reason})"), loop)
         _forget(session)
         logger.exception("Couldn't connect to the huddle in %s", channel_id)
-        return f"coolton joined the huddle but couldn't connect its audio: {e}"
+        return f"coolton joined the huddle but couldn't connect its audio: {reason}"
     return None
 
 
