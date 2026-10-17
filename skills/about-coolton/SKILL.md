@@ -86,7 +86,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 - A context bar of up to 5 pinned items (repo, branch, PR, CI status), up to 10 slash commands of its own (like `/run-tests`), renaming, and archiving with a summary when the work is done (only when asked).
 
 ### Other
-- Joins a Slack huddle when asked *(deferred)*: listens, talks back, reads and answers the huddle's thread, hands real work to subagents while it keeps talking, and shows its desktop as its video while it uses one. Leaves when asked or when everyone else has gone.
+- Joins a Slack huddle when asked *(deferred)*, once someone in the huddle approves it in the huddle's thread (that opts the whole huddle in to the policy): listens, talks back, reads and answers the huddle's thread, hands real work to subagents while it keeps talking, and shows its desktop as its video while it uses one. Leaves when asked or when everyone else has gone.
 - DJs a HuddleFM listening session in a huddle (playback, queue, volume) once the session's host approves *(deferred)*.
 - Uses MCP servers people connect in App Home (e.g. Notion, Linear), up to 5 each, for that person's own turns.
 - Passes feedback about coolton on to Lily *(deferred)*.
@@ -119,6 +119,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 ## Things users can do
 - `##` at the start of a message: coolton never processes it, not even a command.
 - `<>` at the start of a message in a DM or a thread coolton has joined: coolton skips it unless it's mentioned.
+- `!kick-coolton` in a huddle's thread (no mention needed) makes coolton leave that huddle right away; it has to ask for approval again to come back.
 - `!stop` in a thread halts coolton's work there immediately, keeping what was already done. It works in a DM, in a code channel, or after a mention. Slack's own stop button on the "working" indicator does the same, and `!stop` stops subagents too.
 - `!help` lists the commands; `!connections` shows your own MCP servers and model endpoints with their status. Both answer privately.
 - `[!WITH:tag]` at the start of a message forces a specific model class for that turn, e.g. `[!WITH:luna]` or `[!WITH:vision]`. An unknown tag replies with the list of valid tags.

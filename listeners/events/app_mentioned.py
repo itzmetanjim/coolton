@@ -84,6 +84,16 @@ def handle_app_mentioned(
         if handled_ban_command(client, logger, command_text, bot_id, user_id, channel_id, event["ts"]):
             return
 
+        # A mention in the thread of a huddle coolton is in goes to the huddle's voice agent
+        # (no opt-in prompt: the huddle opted in when someone approved coolton joining).
+        from agent import huddle
+        if huddle.kick(client, channel_id, thread_ts, user_id, text):
+            return
+        if huddle.session_for(channel_id, thread_ts) is not None:
+            if not held_by_private_hooks(client, event, channel_id, thread_ts):
+                huddle.route_chat(channel_id, thread_ts, user_id, text)
+            return
+
         from agent.policy_consent import ensure_consent
         if not ensure_consent(
             client, say, user_id=user_id, channel_id=channel_id, thread_ts=thread_ts,
@@ -91,12 +101,6 @@ def handle_app_mentioned(
         ):
             return
 
-        # A mention in the thread of a huddle coolton is in goes to the huddle's voice agent.
-        from agent import huddle
-        if huddle.session_for(channel_id, thread_ts) is not None:
-            if not held_by_private_hooks(client, event, channel_id, thread_ts):
-                huddle.route_chat(channel_id, thread_ts, user_id, text)
-            return
 
         if steered_into_active_run(client, logger, channel_id, thread_ts, text, user_id, event["ts"]):
             return

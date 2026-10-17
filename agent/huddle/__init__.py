@@ -13,7 +13,10 @@ import asyncio
 import atexit
 import logging
 import os
+import re
 import threading
+import time
+import uuid
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -47,33 +50,126 @@ def _forget(session) -> None:
             del _sessions[(session.channel_id, session.thread_ts)]
 
 
-def join(client, *, channel_id: str, thread_ts: str | None, requester_id: str, request_text: str) -> str:
-    """Join the live huddle of the conversation coolton was asked in (agent.agent's
-    join_huddle_tool). Returns a status line for the model."""
-    from agent.ensure_coolton_user import ensure_coolton_user_in_channel
+_APPROVAL_TTL = 15 * 60
+# Join requests waiting for someone in the huddle to approve them, by id (the buttons' value).
+_pending: dict[str, dict] = {}
+KICK_RE = re.compile(r"^\s*(?:<@[A-Z0-9]+>\s*)?!kick-coolton\s*$", re.IGNORECASE)
+
+
+def request_join(client, *, channel_id: str, thread_ts: str | None, requester_id: str, request_text: str) -> str:
+    """Ask the live huddle of the conversation coolton was asked in whether it may join
+    (agent.agent's join_huddle_tool): the huddle opts in to coolton's policy as a whole, so
+    coolton joins only once someone there approves. Returns a status line for the model."""
     from agent.huddle import slack_api
-    from agent.huddle.session import HuddleSession
+    from agent.policy_consent import POLICY_URL
 
     if not os.environ.get("DEEPGRAM_API_KEY"):
         return "Error: huddles aren't set up: DEEPGRAM_API_KEY is missing from the server's .env."
     try:
         slack_api.workspace_url()
-        ensure_coolton_user_in_channel(client, channel_id)
         huddle_ts = slack_api.find_live_huddle(channel_id, thread_ts)
         if not huddle_ts:
             return ("Error: there's no huddle going on in this channel right now. Ask the user to start "
                     "one (or to ask you from the huddle's own thread).")
         if session_for(channel_id, huddle_ts):
             return "You're already in that huddle."
-        joined = slack_api.join(channel_id)
+        _expire_pending()
+        if any(p["channel_id"] == channel_id and p["huddle_ts"] == huddle_ts for p in _pending.values()):
+            return "You already asked that huddle; you join once someone there approves."
+        pending_id = uuid.uuid4().hex
+        text = (f"<@{requester_id}> asked coolton to join this huddle. Everything said, typed or shown in it "
+                f"while coolton is there is processed under the <{POLICY_URL}|coolton policy>. Anyone can type "
+                "`!kick-coolton` in this thread to make coolton leave right away, and it has to ask again "
+                "before coming back. Let coolton join?")
+        posted = client.chat_postMessage(channel=channel_id, thread_ts=huddle_ts, text=text, blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {"type": "actions", "elements": [
+                {"type": "button", "action_id": "huddle_join_approve", "value": pending_id, "style": "primary",
+                 "text": {"type": "plain_text", "text": "Let coolton join"}},
+                {"type": "button", "action_id": "huddle_join_decline", "value": pending_id,
+                 "text": {"type": "plain_text", "text": "Not now"}},
+            ]},
+        ])
     except slack_api.HuddleUnavailable as e:
         return f"Error: {e}."
     except Exception as e:
-        logger.exception("Couldn't join the huddle in %s", channel_id)
-        return f"Error: couldn't join the huddle: {e}"
+        logger.exception("Couldn't ask to join the huddle in %s", channel_id)
+        return f"Error: couldn't ask to join the huddle: {e}"
+    with _lock:
+        _pending[pending_id] = {
+            "channel_id": channel_id, "huddle_ts": huddle_ts, "requester_id": requester_id,
+            "request_text": request_text, "message_ts": posted.get("ts"), "asked_at": time.time(),
+        }
+    return ("Asked the huddle (in its thread) to approve you joining; you join as soon as someone there "
+            "approves. Tell the user that briefly.")
 
-    session = HuddleSession(joined, client=client, requester_id=requester_id, request_text=request_text,
-                            on_closed=_forget)
+
+def _expire_pending() -> None:
+    with _lock:
+        for pending_id in [i for i, p in _pending.items() if time.time() - p["asked_at"] > _APPROVAL_TTL]:
+            del _pending[pending_id]
+
+
+def _take_pending(pending_id: str) -> dict | None:
+    _expire_pending()
+    with _lock:
+        return _pending.pop(pending_id, None)
+
+
+def _settle(client, pending: dict, text: str) -> None:
+    """Replace the approval prompt (and its buttons) with how it ended."""
+    try:
+        client.chat_update(channel=pending["channel_id"], ts=pending["message_ts"], text=text, blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        ])
+    except Exception as e:
+        logger.warning("Couldn't update the huddle approval prompt: %s", e)
+
+
+def approve(client, pending_id: str, approver_id: str) -> None:
+    """Someone pressed "Let coolton join" (listeners.actions.huddle_actions)."""
+    from agent.ban_store import is_banned
+
+    if is_banned(approver_id):
+        return
+    pending = _take_pending(pending_id)
+    if pending is None:
+        return
+    _settle(client, pending, f"<@{approver_id}> let coolton join this huddle. Type `!kick-coolton` here "
+                             "to make it leave.")
+    error = _join(client, pending, approver_id)
+    if error:
+        client.chat_postMessage(channel=pending["channel_id"], thread_ts=pending["huddle_ts"], text=error)
+
+
+def decline(client, pending_id: str, user_id: str) -> None:
+    pending = _take_pending(pending_id)
+    if pending is not None:
+        _settle(client, pending, f"<@{user_id}> didn't let coolton join this huddle.")
+
+
+def _join(client, pending: dict, approver_id: str) -> str | None:
+    """Join an approved huddle. Returns what went wrong, if anything."""
+    from agent.ensure_coolton_user import ensure_coolton_user_in_channel
+    from agent.huddle import slack_api
+    from agent.huddle.session import HuddleSession
+
+    channel_id = pending["channel_id"]
+    try:
+        if slack_api.find_live_huddle(channel_id, pending["huddle_ts"]) != pending["huddle_ts"]:
+            return "That huddle has ended, so coolton didn't join."
+        if session_for(channel_id, pending["huddle_ts"]):
+            return None
+        ensure_coolton_user_in_channel(client, channel_id)
+        joined = slack_api.join(channel_id)
+    except slack_api.HuddleUnavailable as e:
+        return f"coolton couldn't join: {e}."
+    except Exception as e:
+        logger.exception("Couldn't join the huddle in %s", channel_id)
+        return f"coolton couldn't join the huddle: {e}"
+
+    session = HuddleSession(joined, client=client, requester_id=pending["requester_id"],
+                            request_text=pending["request_text"], on_closed=_forget)
     loop = session.loop = _event_loop()
     with _lock:
         _sessions[(session.channel_id, session.thread_ts)] = session
@@ -85,10 +181,24 @@ def join(client, *, channel_id: str, thread_ts: str | None, requester_id: str, r
         asyncio.run_coroutine_threadsafe(session.stop(f"couldn't connect its audio ({e})"), loop)
         _forget(session)
         logger.exception("Couldn't connect to the huddle in %s", channel_id)
-        return f"Error: joined the huddle but couldn't connect its audio: {e}"
-    return (f"Joined the huddle (its thread: channel {session.channel_id}, thread_ts {session.thread_ts}). "
-            "From now on the huddle's voice agent talks in the call and answers that thread; "
-            "just confirm briefly.")
+        return f"coolton joined the huddle but couldn't connect its audio: {e}"
+    return None
+
+
+def kick(client, channel_id: str, thread_ts: str, user_id: str, text: str) -> bool:
+    """`!kick-coolton` in a huddle's thread: leave that huddle right away, or drop a join
+    request still waiting there. Returns whether the message was one that did either."""
+    if not KICK_RE.match(text or ""):
+        return False
+    with _lock:
+        dropped = [_pending.pop(i) for i, p in list(_pending.items())
+                   if p["channel_id"] == channel_id and p["huddle_ts"] == thread_ts]
+    for pending in dropped:
+        _settle(client, pending, f"<@{user_id}> kicked coolton, so it won't join this huddle.")
+    session = session_for(channel_id, thread_ts)
+    if session is not None:
+        asyncio.run_coroutine_threadsafe(session.stop(f"<@{user_id}> kicked it"), session.loop)
+    return bool(dropped) or session is not None
 
 
 def route_chat(channel_id: str, thread_ts: str, user_id: str, text: str) -> bool:

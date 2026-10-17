@@ -435,3 +435,35 @@ def test_stream_tools_share_the_desktop_as_huddle_video_instead_of_a_link(monkey
     monkeypatch.setattr(agent_mod, "_surface", lambda deps: SimpleNamespace(post_image=lambda *a: posted.append(a)))
     agent_mod._maybe_post_screenshot(ctx, b"png")
     assert posted == []  # people are watching it live already
+
+
+def test_coolton_joins_only_once_someone_in_the_huddle_approves(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setattr(slack_api, "workspace_url", lambda: "https://x.slack.com")
+    monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: "50.5")
+    joins = []
+    monkeypatch.setattr(huddle, "_join", lambda client, pending, approver: joins.append((pending["huddle_ts"], approver)))
+    client = Mock()
+    client.chat_postMessage.return_value = {"ts": "60.6"}
+
+    status = huddle.request_join(client, channel_id="C123", thread_ts="1.1", requester_id="U1", request_text="join")
+    assert "approve" in status and joins == []
+    posted = client.chat_postMessage.call_args.kwargs
+    assert posted["thread_ts"] == "50.5" and "!kick-coolton" in posted["text"]
+    pending_id = posted["blocks"][1]["elements"][0]["value"]
+
+    huddle.approve(client, pending_id, "U2")
+    huddle.approve(client, pending_id, "U3")  # a second click does nothing
+    assert joins == [("50.5", "U2")]
+
+
+def test_kick_coolton_in_the_huddle_thread_leaves_without_a_mention(monkeypatch, in_huddle):
+    from listeners.events.message import handle_message
+
+    stops = []
+    in_huddle.stop = lambda reason: stops.append(reason)
+    monkeypatch.setattr(huddle.asyncio, "run_coroutine_threadsafe", lambda result, loop: None)
+    context = SimpleNamespace(channel_id="C123", user_id="U1", user_token=None)
+    handle_message(event={"type": "message", "text": "!kick-coolton", "ts": "51.1", "thread_ts": "50.5"},
+                   client=Mock(), context=context, logger=Mock(), say=Mock(), say_stream=Mock(), set_status=None)
+    assert stops == ["<@U1> kicked it"] and in_huddle.chat == []
