@@ -152,11 +152,13 @@ reached through a browser instead of chat. a few things underpin that:
 - **image generation**: generate and post images directly to the thread.
 - **mermaid diagrams**, **whiteboard embeds** (tldraw), and **HTML embeds**: rendered and hosted
   via `coolton_web_helper.py`, a small file host.
-- **Slack huddles**: ask coolton to join a huddle and it does, as the cooltonUser helper account
+- **Slack huddles**: ask coolton to join a huddle and, once someone in the huddle approves it in
+  the huddle's thread, it joins as the cooltonUser helper account
   (bots can't be in a huddle). It listens (Deepgram Flux speech-to-text, which also detects the
   end of each turn), talks back with its default chat model and Deepgram's streaming
   text-to-speech, reads and answers the huddle's thread, hands real work to subagents in the
   background, and shows its desktop as its video while a subagent uses it (`agent/huddle/`).
+  Anyone can type `!kick-coolton` in the huddle's thread to make it leave.
 
 ### scheduling & automation
 

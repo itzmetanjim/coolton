@@ -2845,12 +2845,13 @@ def join_huddle_tool(ctx: RunContext[AgentDeps]) -> str:
 
     Joins this conversation's huddle: the one this thread belongs to, or else the
     channel's ongoing one. Use it when someone asks you to join, hop on, or come to the
-    huddle or call. Once joined, a separate voice agent handles the huddle and its
-    thread, so just confirm briefly.
+    huddle or call. It first asks the huddle (in its thread) to approve; coolton joins once
+    someone there does, and a separate voice agent then handles the huddle and its thread,
+    so just tell the user briefly.
     """
     from agent import huddle
 
-    return huddle.join(
+    return huddle.request_join(
         ctx.deps.client, channel_id=ctx.deps.channel_id, thread_ts=ctx.deps.thread_ts,
         requester_id=ctx.deps.user_id, request_text=ctx.deps.request_text,
     )

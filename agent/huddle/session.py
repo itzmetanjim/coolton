@@ -160,8 +160,6 @@ class HuddleSession:
         self._alone_since: float | None = None
         self._seen_others = False
         self._names: dict[str, str] = {}
-        self._consented: set[str] = set()
-        self._prompted: set[str] = set()
         self._stopping = False
         self._transcript: list[str] = []
         self._transcript_saved = 0
@@ -195,7 +193,8 @@ class HuddleSession:
                        f"(their message: {self.request_text!r}).")
         await self._post(
             "joined the huddle :wave: while I'm here, what's said in the call is transcribed "
-            "(by Deepgram) so I can answer. Say \"coolton\" to talk to me, or type in this thread."
+            "(by Deepgram) so I can answer. Say \"coolton\" to talk to me, or type in this thread. "
+            "Type `!kick-coolton` here to make me leave."
         )
         self._joined_at = time.time()
         self._last_save = time.monotonic()
@@ -337,36 +336,11 @@ class HuddleSession:
                 self._speculative.consumed = max(0, self._speculative.consumed - dropped)
 
     async def _may_answer(self, user_id: str | None) -> bool:
-        """Only people who opted in to coolton's policy (and aren't banned) get answers; the
-        first time someone who hasn't asks, the opt-in prompt goes to the thread (agent.policy_consent)."""
+        """Everyone in the huddle gets answers, except banned people: the huddle opted in to
+        coolton's policy as a whole when someone approved it joining (agent.huddle.request_join)."""
         from agent.ban_store import is_banned
-        from agent.policy_consent import has_consent
 
-        if user_id and is_banned(user_id):
-            return False
-        if not user_id or user_id in self._consented:
-            return True
-        if user_id in self._prompted:
-            ok = has_consent(user_id)
-        else:
-            self._prompted.add(user_id)
-            ok = await self.loop.run_in_executor(None, self._ensure_consent, user_id)
-        if ok:
-            self._consented.add(user_id)
-        return ok
-
-    def _ensure_consent(self, user_id: str) -> bool:
-        from agent.policy_consent import ensure_consent
-
-        def say(**kwargs):
-            self.client.chat_postMessage(channel=self.channel_id, **kwargs)
-
-        try:
-            return ensure_consent(self.client, say, user_id=user_id, channel_id=self.channel_id,
-                                  thread_ts=self.thread_ts, message_ts=self.thread_ts)
-        except Exception as e:
-            logger.warning("Huddle consent check failed for %s: %s", user_id, e)
-            return False
+        return not (user_id and is_banned(user_id))
 
     # -- replying ----------------------------------------------------------------------
 
