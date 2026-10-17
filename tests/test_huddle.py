@@ -561,3 +561,35 @@ def test_a_restart_leaves_huddles_properly_then_ends_as_sigterm_always_did(monke
     huddle.leave_huddles_on_sigterm()
     handlers[signal.SIGTERM](signal.SIGTERM, None)
     assert left == [True] and kills == [signal.SIGTERM] and handlers[signal.SIGTERM] == signal.SIG_DFL
+
+
+def test_the_reply_to_an_interruption_knows_what_it_interrupted():
+    asyncio.run(_the_reply_to_an_interruption_knows_what_it_interrupted())
+
+
+async def _the_reply_to_an_interruption_knows_what_it_interrupted():
+    seen = {}
+
+    async def stream(messages, info):
+        prompt = _last_prompt(messages)
+        seen[prompt] = " ".join(str(getattr(p, "content", "")) for m in messages for p in m.parts)
+        if "story" in prompt:
+            yield "Pixel was a gray cat. She lived in a bookshop. She liked the window."
+        else:
+            yield "Okay, stopping."
+
+    session = await _session(stream, frames=25)
+    await session.on_turn(_turn("EndOfTurn", "coolton tell me a story"))
+    await _until(lambda: session.speaker.busy)
+    await asyncio.sleep(0.1)
+
+    # "Coolton, stop." is too short to interrupt mid-turn, so the reply to it starts
+    # speculatively while the story is still the reply being said.
+    await session.on_turn(_turn("StartOfTurn"))
+    await session.on_turn(_turn("Update", "coolton stop"))
+    await session.on_turn(_turn("EagerEndOfTurn", "coolton stop"))
+    await session.on_turn(_turn("EndOfTurn", "Coolton, stop."))
+    await _until(lambda: session._reply is None and session.voice.said[-1:] == ["Okay, stopping."])
+
+    stop_prompt = next(p for p in seen if "stop" in p.lower())
+    assert "Pixel was a gray cat. [interrupted]" in seen[stop_prompt]

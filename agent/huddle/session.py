@@ -121,6 +121,7 @@ class _Reply:
         self.acted = False
         self.leave = False
         self.heard: str | None = None
+        self.settled = False  # an interruption was accounted for (HuddleSession._settle_interrupted)
 
     @property
     def unflushed(self) -> int:
@@ -279,7 +280,9 @@ class HuddleSession:
                     self._log(line)
                     self._remember(line)
                 return
-            await self._interrupt()
+            changed = await self._interrupt()
+        else:
+            changed = False
         speculative, self._speculative = self._speculative, None
         if not text:
             if speculative is not None:
@@ -293,8 +296,10 @@ class HuddleSession:
             self._remember(line)
             return
         if self._reply is not None:
-            await self._interrupt()
-        if speculative is not None and _same_words(speculative.source, text):
+            changed = await self._interrupt() or changed
+        # A speculative reply started before the interrupted one was accounted for (what
+        # it said, or its unanswered prompt) wouldn't know about it: start over instead.
+        if speculative is not None and not changed and _same_words(speculative.source, text):
             self._confirm(speculative)
             return
         if speculative is not None:
@@ -387,15 +392,39 @@ class HuddleSession:
         if speculative is not None:
             speculative.task.cancel()
 
-    async def _interrupt(self) -> None:
+    async def _interrupt(self) -> bool:
+        """Stop the reply being said. Returns whether that changed the history or context
+        (see _settle_interrupted)."""
         self._barge = False
         reply, self._reply = self._reply, None
+        changed = False
         if reply is not None:
             reply.heard = reply.heard_text(self.speaker.played)
+            changed = self._settle_interrupted(reply)
             reply.task.cancel()
         self.speaker.clear()
         self.speaker.resume()
         await self.voice.clear()
+        return changed
+
+    def _settle_interrupted(self, reply: _Reply) -> bool:
+        """Account for a reply cut off before it finished, right away, so the next reply
+        (often already starting) sees it: what it got to say goes in the history, or, if
+        it said nothing, what it was answering goes back to be answered next. Returns
+        whether it changed either, which a reply started earlier didn't see."""
+        if reply.settled or not reply.confirmed.is_set() or reply.fixed_text is not None:
+            return False
+        reply.settled = True
+        if not reply.acted:
+            self._heard.insert(0, reply.prompt)
+            return True
+        heard = reply.heard if reply.heard is not None else reply.heard_text(self.speaker.played)
+        self._log(f"coolton said: {heard} [interrupted]" if heard else "coolton said: [interrupted]")
+        self._add_history([
+            ModelRequest(parts=[UserPromptPart(content=reply.prompt)]),
+            ModelResponse(parts=[TextPart(content=f"{heard} [interrupted]".strip())]),
+        ])
+        return True
 
     async def _run_reply(self, reply: _Reply) -> None:
         try:
@@ -417,17 +446,7 @@ class HuddleSession:
             if reply.leave:
                 asyncio.ensure_future(self.stop("asked to leave"))
         except asyncio.CancelledError:
-            if reply.confirmed.is_set() and reply.fixed_text is None:
-                if reply.acted:
-                    heard = reply.heard if reply.heard is not None else reply.heard_text(self.speaker.played)
-                    self._log(f"coolton said: {heard} [interrupted]" if heard else "coolton said: [interrupted]")
-                    self._add_history([
-                        ModelRequest(parts=[UserPromptPart(content=reply.prompt)]),
-                        ModelResponse(parts=[TextPart(content=f"{heard} [interrupted]".strip())]),
-                    ])
-                else:
-                    # Never got to say anything: what it was answering is still unanswered.
-                    self._heard.insert(0, reply.prompt)
+            self._settle_interrupted(reply)
             raise
         except Exception:
             logger.exception("Huddle reply failed")
