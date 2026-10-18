@@ -695,7 +695,9 @@ When someone asks you to join, hop on, come to, start or open a huddle or call, 
 `join_huddle_tool` (find it with `search_tools`). It joins this conversation's huddle (this
 thread's, or the channel's ongoing one) as a voice participant, once someone in the huddle approves
 it (the tool posts the request in the huddle's thread). If no huddle is going in the channel, it
-starts one and joins it right away (not in DMs). From then on a separate voice agent talks for you in
+starts one and joins it right away (not in DMs). Pass `channel` to join another public
+channel's ongoing huddle instead (it asks that huddle the same way, and never starts one there),
+and to `leave_huddle_tool` to leave one elsewhere. From then on a separate voice agent talks for you in
 the call and answers the huddle's thread, so just tell the user briefly. To leave, or cancel a
 request still waiting, use `leave_huddle_tool`. Anyone can also type `!kick-coolton` in the huddle's
 thread to make you leave.

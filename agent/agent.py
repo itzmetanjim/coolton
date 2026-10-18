@@ -2842,37 +2842,73 @@ def huddlefm_command_tool(
 
 
 @agent.tool
-def join_huddle_tool(ctx: RunContext[AgentDeps]) -> str:
+def join_huddle_tool(ctx: RunContext[AgentDeps], channel: str = "") -> str:
     """Join a Slack huddle (a voice call) as a participant, or start one: coolton then
     listens, talks back, answers the huddle's thread, and shows its desktop as its video
     while using it.
 
-    Joins this conversation's huddle: the one this thread belongs to, or else the
-    channel's ongoing one. If no huddle is going in the channel, it starts one and joins
-    it (not in DMs). Use it when someone asks you to join, hop on, come to, start or open
-    a huddle or call to talk. Not for music: playing songs is HuddleFM (huddlefm_* tools),
-    which this has nothing to do with. Joining a huddle that's already going first asks the
-    huddle (in its thread) to approve; coolton joins once someone there does. Either way a
-    separate voice agent then handles the huddle and its thread, so just tell the user
-    briefly.
+    Without `channel`, joins this conversation's huddle: the one this thread belongs to, or
+    else the channel's ongoing one; if no huddle is going here, it starts one and joins it
+    (not in DMs). With `channel`, joins the ongoing huddle of that other channel (a public
+    one; it never starts one there). Use it when someone asks you to join, hop on, come to,
+    start or open a huddle or call to talk. Not for music: playing songs is HuddleFM
+    (huddlefm_* tools), which this has nothing to do with. Joining a huddle that's already
+    going first asks the huddle (in its thread) to approve; coolton joins once someone there
+    does. Either way a separate voice agent then handles the huddle and its thread, so just
+    tell the user briefly.
+
+    Args:
+        channel: Another channel whose huddle to join: its id, <#C...> mention or #name.
+            Leave empty for this conversation's huddle.
     """
     from agent import huddle
 
+    target = _other_huddle_channel(ctx, channel)
+    if target.startswith("Error"):
+        return target
+    here = target == ctx.deps.channel_id
     return huddle.request_join(
-        ctx.deps.client, channel_id=ctx.deps.channel_id, thread_ts=ctx.deps.thread_ts,
-        requester_id=ctx.deps.user_id, request_text=ctx.deps.request_text,
+        ctx.deps.client, channel_id=target, thread_ts=ctx.deps.thread_ts if here else None,
+        requester_id=ctx.deps.user_id, request_text=ctx.deps.request_text, may_start=here,
     )
 
 
+def _other_huddle_channel(ctx: RunContext[AgentDeps], channel: str) -> str:
+    """The channel a huddle tool acts on: this conversation's, or another one named. Another
+    channel's huddle must be in a public channel, which anyone in the workspace may join, so
+    nobody can use coolton to get into a private call. Returns the id or an "Error: ..." line."""
+    if not (channel or "").strip():
+        return ctx.deps.channel_id
+    from agent.tools.slack_info import _resolve_channel_id
+    from agent.tools.slack_search import assert_readable_channel
+
+    target = _resolve_channel_id(channel.strip())
+    if not re.match(r"^[CDG][A-Z0-9]+$", target):
+        return f"Error: couldn't find the channel {channel!r}."
+    refused = assert_readable_channel(target, ctx.deps.channel_id)
+    if refused:
+        return f"Error: you only join huddles in public channels (or this conversation's): {refused}"
+    return target
+
+
 @agent.tool
-def leave_huddle_tool(ctx: RunContext[AgentDeps]) -> str:
+def leave_huddle_tool(ctx: RunContext[AgentDeps], channel: str = "") -> str:
     """Leave the Slack huddle coolton is in in this channel (this thread's, or else the
-    channel's), or cancel a request to join one that's still waiting. Use it when someone
-    asks you to leave, hang up or get off the huddle or call. Nothing to do with HuddleFM.
+    channel's), or in another channel named, or cancel a request to join one that's still
+    waiting. Use it when someone asks you to leave, hang up or get off the huddle or call.
+    Nothing to do with HuddleFM.
+
+    Args:
+        channel: Another channel whose huddle to leave: its id, <#C...> mention or #name.
+            Leave empty for this conversation's.
     """
     from agent import huddle
 
-    return huddle.leave(ctx.deps.channel_id, ctx.deps.thread_ts, ctx.deps.user_id)
+    if not (channel or "").strip():
+        return huddle.leave(ctx.deps.channel_id, ctx.deps.thread_ts, ctx.deps.user_id)
+    from agent.tools.slack_info import _resolve_channel_id
+
+    return huddle.leave(_resolve_channel_id(channel.strip()), None, ctx.deps.user_id)
 
 
 @agent.tool

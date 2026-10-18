@@ -24,6 +24,8 @@ from agent.huddle.session import HuddleSession
 from agent.huddle.slack_api import JoinedHuddle
 from agent.huddle.voice_agent import ReplyParser
 
+_REAL_REQUEST_JOIN = huddle.request_join
+
 
 async def _until(condition, timeout=5.0):
     deadline = time.monotonic() + timeout
@@ -598,3 +600,31 @@ async def _the_reply_to_an_interruption_knows_what_it_interrupted():
 
     stop_prompt = next(p for p in seen if "stop" in p.lower())
     assert "Pixel was a gray cat. [interrupted]" in seen[stop_prompt]
+
+
+def test_joining_another_channels_huddle_needs_a_public_channel_and_never_starts_one(monkeypatch):
+    agent_mod = importlib.import_module("agent.agent")
+    from pydantic_ai import RunContext
+
+    monkeypatch.setattr("agent.tools.slack_info._resolve_channel_id", lambda c: {"#lounge": "CPUB", "#secret": "GPRIV"}.get(c, c))
+    monkeypatch.setattr("agent.tools.slack_search.assert_readable_channel",
+                        lambda c, current="": None if c in ("CPUB", current) else "private")
+    asked = []
+    monkeypatch.setattr(huddle, "request_join", lambda client, **kw: asked.append(kw) or "asked")
+    deps = SimpleNamespace(client=Mock(), channel_id="CHERE", thread_ts="1.1", user_id="U1", request_text="join #lounge")
+    ctx = RunContext(model=None, usage=None, prompt="", deps=deps)
+
+    assert agent_mod.join_huddle_tool(ctx, "#lounge") == "asked"
+    assert asked[-1]["channel_id"] == "CPUB" and asked[-1]["thread_ts"] is None and asked[-1]["may_start"] is False
+    assert agent_mod.join_huddle_tool(ctx, "#secret").startswith("Error: you only join huddles in public channels")
+    agent_mod.join_huddle_tool(ctx)
+    assert asked[-1]["channel_id"] == "CHERE" and asked[-1]["thread_ts"] == "1.1" and asked[-1]["may_start"] is True
+
+    # And in the huddle module: no live huddle in that other channel means an error, not a new huddle.
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setattr(slack_api, "workspace_url", lambda: "https://x.slack.com")
+    monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: None)
+    monkeypatch.setattr(huddle, "_join", Mock(side_effect=AssertionError("must not start a huddle")))
+    status = _REAL_REQUEST_JOIN(Mock(), channel_id="CPUB", thread_ts=None, requester_id="U1",
+                                request_text="join", may_start=False)
+    assert status.startswith("Error: there's no huddle going on in <#CPUB>")

@@ -56,10 +56,12 @@ _pending: dict[str, dict] = {}
 KICK_RE = re.compile(r"^\s*(?:<@[A-Z0-9]+>\s*)?!kick-coolton\s*$", re.IGNORECASE)
 
 
-def request_join(client, *, channel_id: str, thread_ts: str | None, requester_id: str, request_text: str) -> str:
-    """Ask the live huddle of the conversation coolton was asked in whether it may join
-    (agent.agent's join_huddle_tool): the huddle opts in to coolton's policy as a whole, so
-    coolton joins only once someone there approves. Returns a status line for the model."""
+def request_join(client, *, channel_id: str, thread_ts: str | None, requester_id: str, request_text: str,
+                 may_start: bool = True) -> str:
+    """Ask a channel's live huddle whether coolton may join (agent.agent's join_huddle_tool):
+    the huddle opts in to coolton's policy as a whole, so coolton joins only once someone
+    there approves. With no huddle going, start one, unless `may_start` is False (a channel
+    other than the one coolton was asked in). Returns a status line for the model."""
     from agent.huddle import slack_api
     from agent.policy_consent import POLICY_URL
 
@@ -69,6 +71,9 @@ def request_join(client, *, channel_id: str, thread_ts: str | None, requester_id
         slack_api.workspace_url()
         huddle_ts = slack_api.find_live_huddle(channel_id, thread_ts)
         if not huddle_ts:
+            if not may_start:
+                return (f"Error: there's no huddle going on in <#{channel_id}> right now. You only start huddles "
+                        "in the conversation you were asked in, so tell the user.")
             return _start(client, channel_id=channel_id, requester_id=requester_id, request_text=request_text)
         if session_for(channel_id, huddle_ts):
             return "You're already in that huddle."
