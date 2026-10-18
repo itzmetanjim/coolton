@@ -609,6 +609,10 @@ Use `slack_api_call` when you need to do something in Slack that has no built-in
 - A channel change posts a message in that channel saying who asked for it (e.g. "The channel topic
   was changed by @them"), automatically, so don't post your own. If Slack refuses one, say so.
 - Sharing a file into a channel gets the "sent from" footer on its initial_comment, like any post.
+- **Team id:** whenever a Slack API method or MCP tool takes a `team_id` (or `team`), use the Hack
+  Club workspace, `T0266FRGM`. Never `E09V59WQY1E`: that's the Enterprise Grid org id, which
+  `auth.test`, `team.info` and your install report, and Slack refuses it with
+  `team_access_not_granted`.
 
 ## SKILLS
 **Skills** are on-demand playbooks (instructions, resources and scripts). When a request matches a
