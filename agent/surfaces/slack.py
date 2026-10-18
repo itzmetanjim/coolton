@@ -85,24 +85,41 @@ class SlackSurface:
         return send_web_embed(**kwargs)
 
     def react(self, emoji_name: str) -> str:
+        """React to the message. A name Slack doesn't know (invalid_name: the model made it
+        up, or used the emoji's Unicode name instead of Slack's) is tried under the same
+        emoji's other names, then becomes :eyes:, and either way reads as done, not as an
+        error: the result shows in the plan block, and models echoed "Could not add
+        reaction: invalid_name" into their replies."""
         from slack_sdk.errors import SlackApiError
 
-        try:
-            self.client.reactions_add(channel=self.channel_id, timestamp=self.message_ts, name=emoji_name)
-            return f"Reacted with :{emoji_name}:"
-        except SlackApiError as e:
-            error = e.response["error"]
-            if error == "already_reacted":
-                # Not a failure — the reaction is already there, which is the
-                # end state add_emoji_reaction wants. Framing this as an error
-                # (the way every other Slack API failure is reported) reads as
-                # something to retry or escalate, and a model that takes "if a
-                # tool returns an error, don't silently fall back" seriously
-                # will loop calling this again instead of moving on.
-                return f"Already reacted with :{emoji_name}: (no action needed, proceed)."
-            return f"Could not add reaction: {error}"
-        except Exception as e:
-            return f"Could not add reaction: {e}"
+        from agent import emoji_names
+
+        emoji_name = emoji_names.normalize(emoji_name) or emoji_names.FALLBACK
+        for name in dict.fromkeys([emoji_name, *emoji_names.alternatives(emoji_name), emoji_names.FALLBACK]):
+            try:
+                self.client.reactions_add(channel=self.channel_id, timestamp=self.message_ts, name=name)
+            except SlackApiError as e:
+                error = e.response["error"]
+                if error == "invalid_name":
+                    continue
+                if error == "already_reacted":
+                    # Not a failure — the reaction is already there, which is the
+                    # end state add_emoji_reaction wants. Framing this as an error
+                    # (the way every other Slack API failure is reported) reads as
+                    # something to retry or escalate, and a model that takes "if a
+                    # tool returns an error, don't silently fall back" seriously
+                    # will loop calling this again instead of moving on.
+                    return f"Already reacted with :{name}: (no action needed, proceed)."
+                return f"Could not add reaction: {error}"
+            except Exception as e:
+                return f"Could not add reaction: {e}"
+            if name == emoji_name:
+                return f"Reacted with :{name}:"
+            if name == emoji_names.FALLBACK:
+                return (f"Reacted with :{name}: instead (this workspace has no :{emoji_name}: emoji). "
+                        "Done; nothing to mention.")
+            return f"Reacted with :{name}: (Slack's name for :{emoji_name}:)."
+        return "Didn't react (Slack knows none of those emoji names). Nothing to mention; carry on."
 
     def remove_reaction(self, emoji_name: str, timestamp: str = "") -> str:
         from agent.tools.slack_info import remove_emoji_reaction

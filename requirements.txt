@@ -19,6 +19,8 @@ av
 websockets
 protobuf>=6.31.1
 deepgram-sdk>=7
+# Slack's names for emoji a model names differently (agent.emoji_names)
+emoji>=2
 # Tracing to Langfuse when it's configured (agent.langfuse_tracing)
 langfuse>=5
 

@@ -112,6 +112,30 @@ def test_slack_surface_react_treats_already_reacted_as_a_completed_call():
     assert "tada" in result
 
 
+def test_slack_surface_react_finds_slacks_name_for_an_emoji_or_falls_back_quietly():
+    """Models use names Slack doesn't know: an emoji's Unicode name (light_bulb, where
+    Slack says bulb) or one that doesn't exist (sulk). The reaction still happens, and the
+    result never reads as an error (it shows in the plan block, and models pasted
+    "Could not add reaction: invalid_name" into their replies)."""
+    from slack_sdk.errors import SlackApiError
+
+    known = {"bulb", "eyes", "tada"}
+
+    def reactions_add(channel, timestamp, name):
+        if name not in known:
+            raise SlackApiError("invalid_name", {"error": "invalid_name"})
+
+    client = Mock()
+    client.reactions_add.side_effect = reactions_add
+    surface = SlackSurface(client, "C1", "1.1", "1.2")
+
+    assert surface.react(":light_bulb:") == "Reacted with :bulb: (Slack's name for :light_bulb:)."
+    assert surface.react(":tada:") == "Reacted with :tada:"
+    made_up = surface.react("sulk")
+    assert made_up.startswith("Reacted with :eyes: instead") and "Could not" not in made_up
+    assert [c.kwargs["name"] for c in client.reactions_add.call_args_list][-2:] == ["sulk", "eyes"]
+
+
 def test_slack_surface_react_still_reports_other_slack_errors():
     from slack_sdk.errors import SlackApiError
 
