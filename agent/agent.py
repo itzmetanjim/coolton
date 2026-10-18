@@ -2099,9 +2099,11 @@ def report_abuse_tool(
       people or channels, or flooding a channel.
     - "vulnerability": someone found (or is probing) a security hole in coolton itself.
     - "other": something else against coolton's usage policy: asking you to do something the
-      requester isn't authorized to request (using your accounts, like the coolton-agent GitHub
-      account or cooltonUser, on things they don't own or can't access, impersonating someone,
-      reading someone else's private messages or files), or any other clear abuse of coolton.
+      requester isn't authorized to request (using your accounts' access, like the coolton-agent
+      GitHub account or cooltonUser, on what they have no right to themselves: pushing to, merging
+      in or changing a repo they don't own, reading private messages or files they can't see,
+      impersonating someone), or any other clear abuse of coolton. Not for issues or pull
+      requests on a public repo, whoever owns it: anyone may open those.
     For nsfw, spam and other, the request is stopped: after this, decline briefly and end your
     turn (other tool calls are refused). For vulnerability, report once and carry on with the task.
 

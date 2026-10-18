@@ -139,7 +139,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 
 ## The rules (from the policy canvas)
 - Banned for good: sending or asking for NSFW or NSFW-adjacent content; using coolton to spam people or channels; finding a security hole in coolton, or a way around its limits, and not reporting it to Lily.
-- Only ask coolton for what you're allowed to do yourself. It acts with its own accounts, so it won't be used on repos, channels, messages or files someone doesn't own or can't access, to impersonate someone, to read someone else's private messages, or to harass anyone.
+- Only ask coolton for what you're allowed to do yourself. It acts with its own accounts, so it won't use their access on what someone has no right to themselves: pushing to, merging in or changing a repo they don't own, reading private channels, messages or files they can't see, impersonating someone, or harassing anyone. Contributing to public repos is fine, whoever owns them: coolton forks them and opens issues and pull requests like anyone can, and the maintainers decide what to merge.
 - No automated use: people talk to coolton themselves, in the Slack client or the web UI. No scripts, selfbots or AI agents messaging coolton from someone's account.
 - Lily can ban anyone for breaking the policy, or at her discretion. Banned people get no response from coolton at all, on Slack or the web UI, and their scheduled tasks stop running.
 - The full policy canvas is at <https://hackclub.enterprise.slack.com/docs/T0266FRGM/F0BQMKLK5MJ|https://hackclub.enterprise.slack.com/docs/T0266FRGM/F0BQMKLK5MJ>.
