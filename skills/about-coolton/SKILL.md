@@ -111,7 +111,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 - Mentioning coolton inside a canvas doesn't start a conversation: coolton ignores Slack's "you were mentioned in a canvas" posts.
 
 ## Models
-- A fallback chain of AI models across several providers. Hack Club AI (HCAI) comes first, with GPT-6 Luna as the main model, then other HCAI models, Kilo Code free models, Anthropic, OpenAI, Groq, OpenRouter, Google and Mistral.
+- A fallback chain of AI models across several providers. Hack Club AI (HCAI) comes first, with GPT-6 Luna as the main model, then Claude Haiku 5.5, then Inception Labs' Mercury 3 (a fast, text-only diffusion model, tag `mercury`), then other HCAI models, Kilo Code free models, Anthropic, OpenAI, Groq, OpenRouter, Google and Mistral.
 - If a model fails, coolton moves to the next one. A fallback cache remembers which model last worked and which are down, and a background check re-tests every model every 30 minutes. When HCAI is running out of credits or is down, coolton warns in the thread, since the fallback models are weaker.
 - Jev (TypeSafe's fast "System One" model, through HCAI) reads each message at the start of a turn and decides which deferred tool groups to load up front, so coolton doesn't spend a round trip searching for them. If Jev is slow or down, the turn just goes ahead without it.
 - Anyone can bring their own model endpoint (BYOK) in App Home, for text and for images; it's tried first for their own turns.
