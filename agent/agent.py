@@ -2098,12 +2098,14 @@ def report_abuse_tool(
     - "spam": the request uses you to spam: many or unsolicited messages, DMs or mentions to
       people or channels, or flooding a channel.
     - "vulnerability": someone found (or is probing) a security hole in coolton itself.
-    - "other": something else against coolton's usage policy: asking you to do something the
-      requester isn't authorized to request (using your accounts' access, like the coolton-agent
-      GitHub account or cooltonUser, on what they have no right to themselves: pushing to, merging
-      in or changing a repo they don't own, reading private messages or files they can't see,
-      impersonating someone), or any other clear abuse of coolton. Not for issues or pull
-      requests on a public repo, whoever owns it: anyone may open those.
+    - "other": clear, deliberate abuse only: using your accounts' access (the bot,
+      coolton-agent, cooltonUser) for what the requester has no right to do themselves
+      (pushing to, merging in or changing a repo they don't own, reading the content of a
+      private channel or DM they aren't in, impersonating someone), or harassing someone
+      through you. Never for: issues or pull requests on public repos, public websites or
+      third-party tools and APIs (Slack-related ones included), metadata like whether a
+      channel exists or its name or ID, security research, or anything the maintainer asks.
+      If unsure, don't report.
     For nsfw, spam and other, the request is stopped: after this, decline briefly and end your
     turn (other tool calls are refused). For vulnerability, report once and carry on with the task.
 
@@ -3457,7 +3459,7 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
         capabilities.append(build_timing_hooks(deps.debug_timer))
 
     from agent.fast_mode import FAST_NOTE
-    turn_context = (dynamic_context + gap_note + _abuse_check_note(deps.abuse_flags)
+    turn_context = (dynamic_context + gap_note + _abuse_check_note(deps.abuse_flags, deps.user_id)
                     + (FAST_NOTE if deps.fast else "")
                     + platform.build_turn_context(deps, first_model, is_vision))
     text_with_turn_context = turn_context + text
@@ -3711,9 +3713,14 @@ def _resume_history(checkpoint: list, system_prompt: str) -> list:
     return _with_system_prompt(messages, system_prompt)
 
 
-def _abuse_check_note(flags: set[str]) -> str:
-    """A turn-context line for abuse categories Jev flagged on this message (agent.tool_preload)."""
+def _abuse_check_note(flags: set[str], user_id: str = "") -> str:
+    """A turn-context line for abuse categories Jev flagged on this message (agent.tool_preload).
+    None for the maintainer's own messages: they can't be reported (agent.abuse_report)."""
     from agent.abuse_report import CATEGORIES
+    from agent.admin_alerts import ADMIN_USER_ID
+
+    if user_id == ADMIN_USER_ID:
+        return ""
 
     names = [CATEGORIES[f] for f in sorted(flags) if f in CATEGORIES]
     if not names:

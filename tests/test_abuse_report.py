@@ -91,3 +91,18 @@ def test_reports_from_one_person_dm_at_most_once_per_category_per_window(monkeyp
     abuse_report.report(_deps(), "spam", "mass DMs")
 
     assert len(posted) == 2  # one vulnerability DM, one spam DM
+
+
+def test_the_maintainer_is_never_reported_or_stopped(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent import abuse_report
+    from agent.admin_alerts import ADMIN_USER_ID
+
+    sent = []
+    monkeypatch.setattr("agent.admin_alerts.notify_admin", lambda *a, **k: sent.append(a))
+    deps = SimpleNamespace(user_id=ADMIN_USER_ID, abuse_reported=set(), abuse_stop="", request_text="look this up",
+                           channel_id="C1", thread_ts="1.1", message_ts="1.1", client=None)
+    result = abuse_report.report(deps, "other", "metadata lookup")
+    assert "Not reported" in result and sent == [] and deps.abuse_stop == ""
+    assert abuse_report.stopped_tool_call(deps, "fetch_url") is None
