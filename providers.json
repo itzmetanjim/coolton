@@ -7,11 +7,13 @@
     {"id": "openrouter_fb", "api_url": null, "api_key_env_var_name": "OPENROUTER_API_KEY_FALLBACK", "pydantic_ai_env_var": "OPENROUTER_API_KEY", "displayname": "OpenRouter Fallback", "max_retries": 5},
     {"id": "google", "api_url": null, "api_key_env_var_name": "GOOGLE_API_KEY", "displayname": "Google", "aliases": ["gemini", "gemini_gemma"]},
     {"id": "mistral", "api_url": null, "api_key_env_var_name": "MISTRAL_API_KEY", "displayname": "Mistral"},
-    {"id": "kilocode", "api_url": "https://api.kilo.ai/api/gateway", "api_key_env_var_name": "KILOCODE_API_KEY", "displayname": "Kilo Code"}
+    {"id": "kilocode", "api_url": "https://api.kilo.ai/api/gateway", "api_key_env_var_name": "KILOCODE_API_KEY", "displayname": "Kilo Code"},
+    {"id": "inception", "api_url": "https://api.inceptionlabs.ai/v1", "api_key_env_var_name": "INCEPTION_API_KEY", "displayname": "Inception Labs"}
   ],
   "models": [
     {"provider": "hcai", "model": "openai/gpt-6-luna", "display": "HCAI GPT-6 Luna", "tags": ["luna", "vision"], "context_window": 1050000},
     {"provider": "hcai", "model": "anthropic/claude-haiku-5.5", "display": "HCAI Claude Haiku 5.5", "tags": ["haiku", "vision"], "context_window": 1000000, "compact_at": 95000},
+    {"provider": "inception", "model": "mercury-3", "display": "Inception Mercury 3", "tags": ["mercury"], "context_window": 1000000},
     {"provider": "hcai", "model": "z-ai/glm-5.3-flash", "display": "HCAI GLM-5.3 Flash", "tags": ["glm5.3-flash", "vision"], "context_window": 1048576},
     {"provider": "hcai", "model": "deepseek/deepseek-v4-flash", "display": "HCAI DeepSeek V4 Flash", "tags": ["deepseek-v4-flash"], "context_window": 1310720},
     {"provider": "hcai", "model": "qwen/qwen3.8-flash", "display": "HCAI Qwen3.8 Flash", "tags": ["qwen3.8-flash", "vision"], "context_window": 1000000},
