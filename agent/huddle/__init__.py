@@ -50,6 +50,11 @@ def _forget(session) -> None:
             del _sessions[(session.channel_id, session.thread_ts)]
 
 
+# Huddles coolton is connecting to right now (joining takes seconds), by (channel, huddle
+# thread), mapped to whether it was kicked meanwhile. Without this, every request or approval
+# during that window started another coolton in the same call, each one replacing the last
+# in _sessions so kicks and restarts could only reach the newest.
+_joining: dict[tuple[str, str], bool] = {}
 _APPROVAL_TTL = 15 * 60
 # Join requests waiting for someone in the huddle to approve them, by id (the buttons' value).
 _pending: dict[str, dict] = {}
@@ -75,8 +80,10 @@ def request_join(client, *, channel_id: str, thread_ts: str | None, requester_id
                 return (f"Error: there's no huddle going on in <#{channel_id}> right now. You only start huddles "
                         "in the conversation you were asked in, so tell the user.")
             return _start(client, channel_id=channel_id, requester_id=requester_id, request_text=request_text)
-        if session_for(channel_id, huddle_ts):
-            return "You're already in that huddle."
+        with _lock:
+            busy = (channel_id, huddle_ts) in _sessions or (channel_id, huddle_ts) in _joining
+        if busy:
+            return "You're already in (or joining) that huddle."
         _expire_pending()
         if any(p["channel_id"] == channel_id and p["huddle_ts"] == huddle_ts for p in _pending.values()):
             return "You already asked that huddle; you join once someone there approves."
@@ -132,8 +139,13 @@ def leave(channel_id: str, thread_ts: str | None, user_id: str) -> str:
         dropped = [i for i, p in _pending.items() if p["channel_id"] == channel_id]
         for pending_id in dropped:
             del _pending[pending_id]
+        joining = [key for key in _joining if key[0] == channel_id]
+        for key in joining:
+            _joining[key] = True  # _connect leaves once it's connected
     session = next((s for s in sessions if s.thread_ts == thread_ts), None) or (sessions[0] if sessions else None)
     if session is None:
+        if joining:
+            return "Left the huddle (you were still connecting to it)."
         if dropped:
             return "You weren't in a huddle here yet; cancelled your request to join."
         return "You're not in a huddle in this channel."
@@ -172,6 +184,11 @@ def approve(client, pending_id: str, approver_id: str) -> None:
     pending = _take_pending(pending_id)
     if pending is None:
         return
+    with _lock:  # one approval answers every request for this huddle
+        others = [_pending.pop(i) for i, p in list(_pending.items())
+                  if p["channel_id"] == pending["channel_id"] and p["huddle_ts"] == pending["huddle_ts"]]
+    for other in others:
+        _settle(client, other, f"<@{approver_id}> already let coolton join this huddle.")
     _settle(client, pending, f"<@{approver_id}> let coolton join this huddle. Type `!kick-coolton` here "
                              "to make it leave.")
     error = _join(client, pending, approver_id)
@@ -187,7 +204,20 @@ def decline(client, pending_id: str, user_id: str) -> None:
 
 def _join(client, pending: dict, approver_id: str, *, start: bool = False) -> str | None:
     """Join an approved huddle, or (`start`) start one in a channel that has none. Returns
-    what went wrong, if anything."""
+    what went wrong, if anything. Only one join per huddle runs at a time (_joining)."""
+    key = (pending["channel_id"], pending["huddle_ts"] or "starting")
+    with _lock:
+        if key in _sessions or key in _joining:
+            return None  # already in it, or already on the way
+        _joining[key] = False
+    try:
+        return _connect(client, pending, key, start)
+    finally:
+        with _lock:
+            _joining.pop(key, None)
+
+
+def _connect(client, pending: dict, key: tuple[str, str], start: bool) -> str | None:
     from agent.ensure_coolton_user import ensure_coolton_user_in_channel
     from agent.huddle import slack_api
     from agent.huddle.session import HuddleSession
@@ -199,8 +229,6 @@ def _join(client, pending: dict, approver_id: str, *, start: bool = False) -> st
             return "someone started a huddle here just now; ask again to join it."
         if not start and live != pending["huddle_ts"]:
             return "That huddle has ended, so coolton didn't join."
-        if not start and session_for(channel_id, pending["huddle_ts"]):
-            return None
         ensure_coolton_user_in_channel(client, channel_id)
         joined = slack_api.join(channel_id)
     except slack_api.HuddleUnavailable as e:
@@ -213,6 +241,8 @@ def _join(client, pending: dict, approver_id: str, *, start: bool = False) -> st
                             request_text=pending["request_text"], on_closed=_forget, started=start)
     loop = session.loop = _event_loop()
     with _lock:
+        if (session.channel_id, session.thread_ts) in _sessions:
+            return None  # another join got there first: don't put a second coolton in the call
         _sessions[(session.channel_id, session.thread_ts)] = session
     started = asyncio.run_coroutine_threadsafe(session.start(), loop)
     try:
@@ -224,6 +254,10 @@ def _join(client, pending: dict, approver_id: str, *, start: bool = False) -> st
         _forget(session)
         logger.exception("Couldn't connect to the huddle in %s", channel_id)
         return f"coolton joined the huddle but couldn't connect its audio: {reason}"
+    with _lock:
+        kicked = _joining.get(key) or _joining.get((session.channel_id, session.thread_ts))
+    if kicked:  # someone kicked coolton while it was still connecting
+        asyncio.run_coroutine_threadsafe(session.stop("kicked while it was joining"), loop)
     return None
 
 
@@ -235,12 +269,15 @@ def kick(client, channel_id: str, thread_ts: str, user_id: str, text: str) -> bo
     with _lock:
         dropped = [_pending.pop(i) for i, p in list(_pending.items())
                    if p["channel_id"] == channel_id and p["huddle_ts"] == thread_ts]
+        joining = (channel_id, thread_ts) in _joining
+        if joining:
+            _joining[(channel_id, thread_ts)] = True  # _connect stops it once it's connected
     for pending in dropped:
         _settle(client, pending, f"<@{user_id}> kicked coolton, so it won't join this huddle.")
     session = session_for(channel_id, thread_ts)
     if session is not None:
         asyncio.run_coroutine_threadsafe(session.stop(f"<@{user_id}> kicked it"), session.loop)
-    return bool(dropped) or session is not None
+    return bool(dropped) or joining or session is not None
 
 
 def route_chat(channel_id: str, thread_ts: str, user_id: str, text: str) -> bool:

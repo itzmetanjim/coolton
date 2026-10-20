@@ -628,3 +628,40 @@ def test_joining_another_channels_huddle_needs_a_public_channel_and_never_starts
     status = _REAL_REQUEST_JOIN(Mock(), channel_id="CPUB", thread_ts=None, requester_id="U1",
                                 request_text="join", may_start=False)
     assert status.startswith("Error: there's no huddle going on in <#CPUB>")
+
+
+def test_only_one_coolton_joins_a_huddle_and_a_kick_while_joining_counts(monkeypatch):
+    """Joining takes seconds. Requests and approvals in that window used to start another
+    coolton in the same call each, and a kick then reached only the newest."""
+    import threading
+
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setattr(slack_api, "workspace_url", lambda: "https://x.slack.com")
+    monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: "50.5")
+    connecting, release = threading.Event(), threading.Event()
+    connects = []
+
+    def slow_connect(client, pending, key, start):
+        connects.append(key)
+        connecting.set()
+        release.wait(5)
+
+    monkeypatch.setattr(huddle, "_connect", slow_connect)
+    client = Mock()
+    client.chat_postMessage.return_value = {"ts": "60.6"}
+    first = huddle.request_join(client, channel_id="C9", thread_ts=None, requester_id="U1", request_text="join")
+    assert "approve" in first
+    pending_id = next(iter(huddle._pending))
+    joiner = threading.Thread(target=huddle.approve, args=(client, pending_id, "U2"))
+    joiner.start()
+    assert connecting.wait(5)
+
+    # While it connects: no second request, no second join, and a kick is remembered.
+    assert "already in (or joining)" in huddle.request_join(client, channel_id="C9", thread_ts=None,
+                                                            requester_id="U3", request_text="join")
+    assert huddle._join(client, {"channel_id": "C9", "huddle_ts": "50.5", "requester_id": "U3", "request_text": ""}, "U3") is None
+    assert huddle.kick(client, "C9", "50.5", "U4", "!kick-coolton")
+    assert huddle._joining[("C9", "50.5")] is True
+    release.set()
+    joiner.join(5)
+    assert connects == [("C9", "50.5")] and ("C9", "50.5") not in huddle._joining
