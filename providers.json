@@ -1,8 +1,6 @@
 {
   "providers": [
     {"id": "hcai", "api_url": "https://ai.hackclub.com/proxy/v1", "api_key_env_var_name": "HCAI_API_KEY", "fallback_api_key_env_var_names": ["HCAI_API_KEY_2"], "displayname": "Hack Club AI", "max_retries": 5},
-    {"id": "anthropic", "api_url": null, "api_key_env_var_name": "ANTHROPIC_API_KEY", "displayname": "Anthropic"},
-    {"id": "openai", "api_url": null, "api_key_env_var_name": "OPENAI_API_KEY", "displayname": "OpenAI"},
     {"id": "groq", "api_url": null, "api_key_env_var_name": "GROQ_API_KEY", "displayname": "Groq"},
     {"id": "openrouter_fb", "api_url": null, "api_key_env_var_name": "OPENROUTER_API_KEY_FALLBACK", "pydantic_ai_env_var": "OPENROUTER_API_KEY", "displayname": "OpenRouter Fallback", "max_retries": 5},
     {"id": "google", "api_url": null, "api_key_env_var_name": "GOOGLE_API_KEY", "displayname": "Google", "aliases": ["gemini", "gemini_gemma"]},
@@ -20,8 +18,6 @@
     {"provider": "hcai", "model": "moonshotai/kimi-k2.6", "display": "HCAI Kimi K2.6", "tags": ["kimi-k2.6", "vision"], "context_window": 262144},
     {"provider": "hcai", "model": "minimax/minimax-m2.7", "display": "HCAI MiniMax M2.7", "tags": ["minimax-m2.7"], "context_window": 204800},
     {"provider": "hcai", "model": "openrouter/free", "display": "HCAI OpenRouter Free", "tags": ["openrouter-free", "free"], "context_window": 200000},
-    {"provider": "anthropic", "model": "anthropic:claude-sonnet-4-6", "tags": ["claude-sonnet-4-6", "vision"], "context_window": 200000},
-    {"provider": "openai", "model": "openai:gpt-4.1-mini", "tags": ["gpt-4.1-mini", "vision"], "context_window": 1047576},
     {"provider": "kilocode", "model": "minimax/minimax-m3.1-flash:free", "display": "Kilo Code MiniMax M3.1 Flash (free)", "tags": ["minimax-m3.1-flash", "vision", "free"], "context_window": 1000000},
     {"provider": "google", "model": "google:gemini-3.5-flash", "display": "Gemini 3.5 Flash", "tags": ["gemini-3.5-flash", "vision"], "context_window": 1048576},
     {"provider": "kilocode", "model": "reflection/beam-free", "display": "Kilo Code Reflection Beam (free)", "tags": ["beam", "free"], "context_window": 1048576},

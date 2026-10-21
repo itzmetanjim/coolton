@@ -538,8 +538,6 @@ def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "env_key",
     [
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
         "OPENROUTER_API_KEY_FALLBACK",
         "GOOGLE_API_KEY",
         "GROQ_API_KEY",

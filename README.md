@@ -63,8 +63,8 @@ two things only: bare social replies & one-line factual lookups ("hi", "what is 
 ### reliability
 
 - **multi-provider fallback**: one ordered chain (`providers.json` + `agent/agent.py`) tries
-  HCAI, Anthropic, OpenAI, Groq, OpenRouter, Google, Mistral, OpenCode Zen, and Kilocode's free
-  tier models in sequence, so the bot keeps answering when one provider is down, rate-limited, or
+  HCAI, Inception's Mercury, Kilo Code's free models, Google, Mistral, OpenRouter and Groq in
+  sequence, so the bot keeps answering when one provider is down, rate-limited, or
   out of credits.
 - **fallback cache**: remembers which provider last worked and which ones are currently dead, so
   a busy thread doesn't re-discover the same outage on every turn.
@@ -242,10 +242,10 @@ wins, falling through on failure.
 | variable | provider |
 | --- | --- |
 | `HCAI_API_KEY` | HCAI gateway |
-| `ANTHROPIC_API_KEY` | Anthropic |
-| `OPENAI_API_KEY` | OpenAI |
+| `INCEPTION_API_KEY` | Inception Labs (Mercury) |
+| `KILOCODE_API_KEY` | Kilo Code (free models) |
 | `GROQ_API_KEY` | Groq |
-| `OPENROUTER_API_KEY` / `OPENROUTER_API_KEY_FALLBACK` | OpenRouter |
+| `OPENROUTER_API_KEY_FALLBACK` | OpenRouter (free fallbacks) |
 | `GOOGLE_API_KEY` | Gemini |
 | `MISTRAL_API_KEY` | Mistral |
 | `OPENCODE_ZEN_API_KEY` | OpenCode Zen |

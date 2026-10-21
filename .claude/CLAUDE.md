@@ -6,7 +6,7 @@ See the root `../.claude/CLAUDE.md` for monorepo-wide architecture, commands, an
 
 ## Pydantic AI Specifics
 
-**Agent (`agent/agent.py`)** is a Pydantic AI `Agent` with `deps_type=AgentDeps`. The model is **not** set on the agent (to avoid import-time client creation); instead `get_model()` selects the provider at runtime based on available API keys (`ANTHROPIC_API_KEY` preferred over `OPENAI_API_KEY`) and is passed at each `run_sync()` call site. Tools are passed via the `tools=[]` constructor parameter (not decorators) so each tool lives in its own file under `agent/tools/`.
+**Agent (`agent/agent.py`)** is a Pydantic AI `Agent` with `deps_type=AgentDeps`. The model is **not** set on the agent (to avoid import-time client creation); instead the provider chain in `providers.json` picks it at runtime (the first model whose provider has a key, falling through on failure) and it is passed at each `run_sync()` call site. Tools are passed via the `tools=[]` constructor parameter (not decorators) so each tool lives in its own file under `agent/tools/`.
 
 **Conversation history** stores `list[ModelMessage]` from Pydantic AI and is passed directly as `message_history=` to `run_sync()`.
 
