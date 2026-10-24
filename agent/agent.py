@@ -1023,9 +1023,10 @@ def ask_human_for_challenge_tool(ctx: RunContext[AgentDeps], reason: str = "", f
     reCAPTCHA/hCaptcha/Cloudflare Turnstile challenge, or a similar human check. Never try
     to solve or get around one yourself. Make sure the page with the check is open (in a
     browser on the desktop: agent-browser with --headed, or computer_use) before calling.
-    Then wait for them: wait_tool about 20-30 seconds at a time, and a screenshot to see
-    whether the page has moved past the check; give up after about 5 minutes. Either way,
-    call this again with finished=true afterwards, which turns the control link off.
+    Then wait for them: wait_tool about 20-30 seconds at a time (the link keeps working
+    while you wait), and a screenshot to see whether the page has moved past the check;
+    give up after about 5 minutes. Either way, call this again with finished=true
+    afterwards, which turns the control link off.
 
     Args:
         reason: What they need to do, e.g. "Solve the CAPTCHA on the GitHub sign-up page".
@@ -3631,11 +3632,15 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
         # thread (_should_force_pause_sandbox), which needs the opposite: still running
         # *past* this turn's end is the entire point (agent.background_jobs_poller
         # notifies once it's actually done).
-        # A person's control of the desktop never outlasts the turn that gave it.
+        # While a person has control of the desktop (ask_human_for_challenge_tool), the
+        # sandbox stays up: coolton waits for them with wait_tool, which ends this turn and
+        # resumes later. human_control ends control itself (finished=true, or its time
+        # limit) and pauses the sandbox then.
         from agent.tools import human_control
 
-        human_control.stop(deps.channel_id, deps.thread_ts)
-        if _should_force_pause_sandbox(deps.channel_id, deps.thread_ts):
+        if human_control.active(deps.channel_id, deps.thread_ts):
+            pass
+        elif _should_force_pause_sandbox(deps.channel_id, deps.thread_ts):
             sandbox_keepalive.cancel(deps.channel_id, deps.thread_ts)
             pause_if_running(deps.channel_id, deps.thread_ts)
 

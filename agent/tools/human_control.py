@@ -4,7 +4,10 @@ coolton doesn't solve those checks itself. Instead, the person who asked gets a 
 link that controls the sandbox's desktop for a few minutes (desktop_helpers.start_control,
 a VNC server separate from the view-only stream), gets past the check in coolton's
 browser, and coolton carries on. Control ends when coolton calls the tool with
-finished=True, after CONTROL_SECONDS, or at the end of the turn, whichever comes first.
+finished=True or after CONTROL_SECONDS. It outlives the turn that started it on purpose:
+coolton waits for the person with wait_tool, which ends the turn and resumes later, so the
+end of a turn leaves the sandbox running while control is on (agent.agent.run_agent), and
+stop() pauses it once no turn is running in the thread.
 """
 from __future__ import annotations
 
@@ -57,4 +60,12 @@ def stop(channel_id: str, thread_ts: str) -> bool:
         dh.stop_control(sandbox, proxy_info)
     except Exception:
         logger.exception("Couldn't turn desktop control off in %s/%s", channel_id, thread_ts)
+    try:
+        from agent.active_runs import is_run_active
+        from agent.sandbox_helpers import pause_if_running
+
+        if not is_run_active(channel_id, thread_ts):  # a running turn pauses it when it ends
+            pause_if_running(channel_id, thread_ts)
+    except Exception:
+        logger.exception("Couldn't pause the sandbox after desktop control in %s/%s", channel_id, thread_ts)
     return True

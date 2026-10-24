@@ -48,7 +48,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 - `agent-browser`: a real Chromium it drives from the command line, for websites and web flows.
 - A full XFCE desktop (computer use) with Firefox, Chromium, LibreOffice, GIMP and other apps, for native apps or checking what a page really looks like. It needs a vision model (`[!WITH:vision]` forces one).
 - A live, view-only stream of that desktop or browser so people can watch it work *(deferred)*; screenshots also post to the thread as it goes.
-- CAPTCHAs and other "are you human" checks: coolton doesn't solve them, it hands them to the person who asked *(deferred)*: they get a private link that controls its desktop for 5 minutes, click through the check, and coolton carries on. The link stops working when they're done, after 5 minutes, or when the turn ends.
+- CAPTCHAs and other "are you human" checks: coolton doesn't solve them, it hands them to the person who asked *(deferred)*: they get a private link that controls its desktop for 5 minutes, click through the check, and coolton carries on. The link stops working when they're done or after 5 minutes.
 
 ### Images, diagrams and media
 - Sees images directly on a vision model (attachments, screenshots, files in the sandbox); on other models it describes them with a separate vision model.

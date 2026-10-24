@@ -45,3 +45,16 @@ def test_control_turns_itself_off_after_the_time_limit(monkeypatch):
     import time
     time.sleep(0.3)
     assert calls == ["start", "stop"] and not human_control.active("C2", "2.2")
+
+
+def test_control_survives_the_turn_ending_while_coolton_waits(monkeypatch):
+    """wait_tool ends the turn and resumes later: the end of that turn must not take
+    the person's control away (it used to, so the link died seconds after it was sent)."""
+    calls = _fake_desktop(monkeypatch)
+    paused = []
+    monkeypatch.setattr("agent.sandbox_helpers.pause_if_running", lambda c, t: paused.append((c, t)))
+    monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: False)
+    human_control.start("C3", "3.3")
+    assert human_control.active("C3", "3.3")  # what run_agent's turn-end checks before pausing
+    human_control.stop("C3", "3.3")
+    assert calls == ["start", "stop"] and paused == [("C3", "3.3")]
