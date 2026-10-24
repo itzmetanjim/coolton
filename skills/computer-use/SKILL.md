@@ -64,9 +64,12 @@ most from seeing what's happening instead of just waiting:
 ```
 DISPLAY=:0 agent-browser open --headed https://example.com
 ```
-Both are required together — `--headed` alone with no DISPLAY set (or a DISPLAY nothing is
-listening on) still won't show up anywhere, and `agent_browser_stream_tool` without `--headed`
-just shows an empty desktop while agent-browser works invisibly off-screen.
+Once the desktop is up (the stream tools start it), every command already gets `DISPLAY=:0`
+and `AGENT_BROWSER_HEADED=1`, so new agent-browser sessions open as real windows even without the
+flags. The catch: agent-browser launches its browser once per session, so a session you opened
+BEFORE the desktop was up stays headless and invisible (the stream shows an empty desktop). Start
+the stream first; if a tool tells you a headless browser is running, `agent-browser close` that
+session and open the page again.
 
 `run_linux_command` defaults to a 60s timeout — plenty for a quick command, not for a cold browser
 session opening a page and waiting for it to load. Raise `timeout` up front (a few hundred

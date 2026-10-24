@@ -129,8 +129,38 @@ def ensure_desktop(sandbox, proxy_info, resolution: tuple[int, int] = (1024, 768
     else:
         raise RuntimeError("Could not start Xvfb (display never came up)")
     _run(sandbox, proxy_info, "startxfce4", background=True, timeout=0)
+    show_browsers_on_desktop(sandbox, proxy_info)
     # xfce4-session takes a moment to paint a usable desktop.
     time.sleep(2)
+
+
+_HEADED_MARKER = "# coolton: browsers show on the desktop while it's up"
+
+
+def show_browsers_on_desktop(sandbox, proxy_info) -> None:
+    """While the desktop is up, every shell command (run_linux_command runs a login shell)
+    gets DISPLAY=:0 and AGENT_BROWSER_HEADED=1, so any browser agent-browser launches is a
+    real window on the desktop the stream shows, even without --headed. Without it a
+    session opened without --headed stayed headless for good (agent-browser launches its
+    browser once per session), and the stream showed an empty desktop. Idempotent."""
+    export = f"if pgrep -x Xvfb >/dev/null 2>&1; then export DISPLAY={DISPLAY} AGENT_BROWSER_HEADED=1; fi"
+    marker, export = shlex.quote(_HEADED_MARKER), shlex.quote(export)
+    _run(
+        sandbox, proxy_info,
+        'for f in ~/.profile ~/.bash_profile ~/.bashrc; do '
+        '[ -f "$f" ] || [ "$f" = ~/.profile ] || continue; '
+        f'grep -qF {marker} "$f" 2>/dev/null || printf "%s\\n%s\\n" {marker} {export} >> "$f"; '
+        'done',
+    )
+
+
+def headless_browser_running(sandbox, proxy_info) -> bool:
+    """Whether an agent-browser session's browser is running headless (invisible on the
+    desktop): it has to be closed and opened again to show up."""
+    try:
+        return bool(_run(sandbox, proxy_info, "pgrep -f 'chrom.*--headles[s]' || true").stdout.strip())
+    except Exception:
+        return False
 
 
 def screenshot(sandbox, proxy_info) -> bytes:
@@ -262,6 +292,7 @@ def start_stream(sandbox, proxy_info) -> str:
     than once across a long computer-use session.
     """
     ensure_desktop(sandbox, proxy_info)
+    show_browsers_on_desktop(sandbox, proxy_info)  # a desktop started before this existed
 
     if _vnc_running(sandbox, proxy_info):
         password = _run(sandbox, proxy_info, f"cat {_PASSWORD_MARKER}").stdout.strip()

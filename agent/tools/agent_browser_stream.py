@@ -22,3 +22,19 @@ def agent_browser_stream(channel_id: str, thread_ts: str) -> str:
     sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
     dh.ensure_desktop(sandbox, proxy_info)
     return dh.start_stream(sandbox, proxy_info)
+
+
+HEADLESS_NOTE = (
+    " Note: an agent-browser browser is already running headless, so it's invisible on the "
+    "desktop and in the stream. Run `agent-browser close` (with the same AGENT_BROWSER_SESSION), "
+    "then open the page again: from now on browsers open as real windows on the desktop."
+)
+
+
+def headless_note(channel_id: str, thread_ts: str) -> str:
+    """HEADLESS_NOTE if a headless agent-browser browser is running in this thread's sandbox."""
+    try:
+        sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
+        return HEADLESS_NOTE if dh.headless_browser_running(sandbox, proxy_info) else ""
+    except Exception:
+        return ""

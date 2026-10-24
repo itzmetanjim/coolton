@@ -1040,6 +1040,12 @@ def ask_human_for_challenge_tool(ctx: RunContext[AgentDeps], reason: str = "", f
         return "Control link turned off." if was_on else "Control wasn't on; nothing to turn off."
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured."
+    from agent.tools.agent_browser_stream import headless_note
+
+    if headless_note(channel_id, thread_ts):  # they could only click an empty desktop
+        return ("Not sent: your agent-browser browser is running headless, so the check isn't on the "
+                "desktop for them to click. Run `agent-browser close` (same AGENT_BROWSER_SESSION), open "
+                "the page again (it now opens as a window on the desktop), then call this again.")
     try:
         url = human_control.start(channel_id, thread_ts)
     except Exception as e:
@@ -1083,17 +1089,21 @@ def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     """Start (or re-share) a live, view-only VNC stream and post it to the thread, the
     SAME desktop stream computer_stream_tool shows.
 
-    Call this once before your first `agent-browser open --headed ...` in a nontrivial
-    session so the user can watch a real browser window happen live, not just a final
-    report. Then run agent-browser with `DISPLAY=:0 agent-browser open --headed <url>`
-    (both flags required, without --headed it stays invisible even with the stream up).
+    Call this once before your first `agent-browser open` in a nontrivial session, so the
+    user can watch a real browser window happen live, not just a final report. Once the
+    desktop is up, agent-browser opens real windows on it by itself (DISPLAY and
+    AGENT_BROWSER_HEADED are set for every command); `DISPLAY=:0 agent-browser open
+    --headed <url>` still works. A browser started headless before the desktop was up stays
+    invisible: this tool says so, and then it has to be closed and opened again.
     Safe to call again later to re-post the link. When coolton is in this thread's huddle,
     the desktop is shown as its video there instead of posting a link.
     """
+    from agent.tools.agent_browser_stream import headless_note
+
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured."
     if _shared_in_huddle(ctx):
-        return _HUDDLE_SHARE_RESULT
+        return _HUDDLE_SHARE_RESULT + headless_note(ctx.deps.channel_id, ctx.deps.thread_ts)
     try:
         url = _agent_browser_stream_start(ctx.deps.channel_id, ctx.deps.thread_ts)
     except Exception as e:
@@ -1101,11 +1111,11 @@ def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     ctx.deps.sandbox_keepalive_seconds = _STREAM_KEEPALIVE_SECONDS
     sandbox_keepalive.arm(ctx.deps.channel_id, ctx.deps.thread_ts, _STREAM_KEEPALIVE_SECONDS)
     error = _surface(ctx.deps).post_embed(
-        url, "coolton's desktop", "coolton's desktop — live (view-only) — agent-browser renders here with --headed",
+        url, "coolton's desktop", "coolton's desktop, live (view-only)",
     )
     if error:
         return f"{error} | url: {url}"
-    return "Live browser view posted to the thread."
+    return "Live browser view posted to the thread." + headless_note(ctx.deps.channel_id, ctx.deps.thread_ts)
 
 
 _SANDBOX_KEEPALIVE_MAX_SECONDS = 1800

@@ -26,6 +26,7 @@ def test_the_control_link_goes_only_to_the_requester_and_finished_turns_it_off(m
     deps = SimpleNamespace(client=client, channel_id="C1", thread_ts="1.1", user_id="U1", sandbox_keepalive_seconds=0.0,
                            platform=None, surface=None)
     monkeypatch.setattr(agent_mod, "_surface", lambda deps: SimpleNamespace())
+    monkeypatch.setattr(importlib.import_module("agent.tools.agent_browser_stream"), "headless_note", lambda c, t: "")
     ctx = RunContext(model=None, usage=None, prompt="", deps=deps)
 
     result = agent_mod.ask_human_for_challenge_tool(ctx, "Solve the CAPTCHA on the sign-up page")
@@ -58,3 +59,16 @@ def test_control_survives_the_turn_ending_while_coolton_waits(monkeypatch):
     assert human_control.active("C3", "3.3")  # what run_agent's turn-end checks before pausing
     human_control.stop("C3", "3.3")
     assert calls == ["start", "stop"] and paused == [("C3", "3.3")]
+
+
+
+def test_no_link_while_the_browser_is_headless_and_invisible(monkeypatch):
+    agent_mod = importlib.import_module("agent.agent")
+    calls = _fake_desktop(monkeypatch)
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(importlib.import_module("agent.tools.agent_browser_stream"), "headless_note", lambda c, t: "headless")
+    client = Mock()
+    deps = SimpleNamespace(client=client, channel_id="C4", thread_ts="4.4", user_id="U1", sandbox_keepalive_seconds=0.0)
+    result = agent_mod.ask_human_for_challenge_tool(RunContext(model=None, usage=None, prompt="", deps=deps), "captcha")
+    assert result.startswith("Not sent") and "agent-browser close" in result
+    assert calls == [] and not client.chat_postEphemeral.called
