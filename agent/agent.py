@@ -1014,6 +1014,70 @@ def computer_stream_tool(ctx: RunContext[AgentDeps]) -> str:
 
 
 @agent.tool
+def ask_human_for_challenge_tool(ctx: RunContext[AgentDeps], reason: str = "", finished: bool = False) -> str:
+    """Hand a CAPTCHA or other "are you human" check to the person who asked you, instead of
+    solving it: they get a private link that controls your desktop for a few minutes, get
+    past the check in your browser themselves, and you carry on.
+
+    Use it whenever your browser or desktop shows a CAPTCHA, "verify you are human", a
+    reCAPTCHA/hCaptcha/Cloudflare Turnstile challenge, or a similar human check. Never try
+    to solve or get around one yourself. Make sure the page with the check is open (in a
+    browser on the desktop: agent-browser with --headed, or computer_use) before calling.
+    Then wait for them: wait_tool about 20-30 seconds at a time, and a screenshot to see
+    whether the page has moved past the check; give up after about 5 minutes. Either way,
+    call this again with finished=true afterwards, which turns the control link off.
+
+    Args:
+        reason: What they need to do, e.g. "Solve the CAPTCHA on the GitHub sign-up page".
+        finished: True once the check is done (or you've given up): turns control off.
+    """
+    from agent.tools import human_control
+
+    channel_id, thread_ts = ctx.deps.channel_id, ctx.deps.thread_ts
+    if finished:
+        was_on = human_control.stop(channel_id, thread_ts)
+        return "Control link turned off." if was_on else "Control wasn't on; nothing to turn off."
+    if not os.environ.get("E2B_API_KEY"):
+        return "Error: E2B_API_KEY not configured."
+    try:
+        url = human_control.start(channel_id, thread_ts)
+    except Exception as e:
+        return f"Error starting desktop control: {e}"
+    minutes = human_control.CONTROL_SECONDS // 60
+    ctx.deps.sandbox_keepalive_seconds = max(ctx.deps.sandbox_keepalive_seconds, human_control.CONTROL_SECONDS)
+    sandbox_keepalive.arm(channel_id, thread_ts, human_control.CONTROL_SECONDS)
+    what = (reason or "There's a human check (like a CAPTCHA) in my browser").strip().rstrip(".")
+    text = (f"{what}. I don't solve those myself, so could you? This link controls my desktop for "
+            f"{minutes} minutes, and only you can see it: {url}\nI'll carry on once the page moves past it.")
+    surface = _surface(ctx.deps)
+    from agent.surfaces.web import WebSurface
+
+    if isinstance(surface, WebSurface):  # a web conversation is only the requester's
+        error = surface.post_embed(url, "coolton's desktop (you can control it)", text)
+        if error:
+            human_control.stop(channel_id, thread_ts)
+            return f"Error sending the link: {error}"
+    else:
+        try:
+            ctx.deps.client.chat_postEphemeral(
+                channel=channel_id, user=ctx.deps.user_id, thread_ts=thread_ts or None, text=text,
+                blocks=[
+                    {"type": "section", "text": {"type": "mrkdwn", "text": text.replace(f": {url}", ".")}},
+                    {"type": "actions", "elements": [{"type": "button", "action_id": "human_control_link",
+                                                      "url": url, "style": "primary",
+                                                      "text": {"type": "plain_text", "text": "Open my desktop"}}]},
+                ],
+            )
+        except Exception as e:
+            human_control.stop(channel_id, thread_ts)
+            return f"Error sending the link: {e}"
+    return (f"Sent <@{ctx.deps.user_id}> a private link that controls your desktop for {minutes} minutes. "
+            "Tell them briefly in the thread too, then wait: wait_tool about 20-30 s at a time and a "
+            "screenshot to check whether the page is past the check. When it is (or after about 5 "
+            "minutes), call this tool with finished=true, then carry on.")
+
+
+@agent.tool
 def agent_browser_stream_tool(ctx: RunContext[AgentDeps]) -> str:
     """Start (or re-share) a live, view-only VNC stream and post it to the thread, the
     SAME desktop stream computer_stream_tool shows.
@@ -3567,6 +3631,10 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
         # thread (_should_force_pause_sandbox), which needs the opposite: still running
         # *past* this turn's end is the entire point (agent.background_jobs_poller
         # notifies once it's actually done).
+        # A person's control of the desktop never outlasts the turn that gave it.
+        from agent.tools import human_control
+
+        human_control.stop(deps.channel_id, deps.thread_ts)
         if _should_force_pause_sandbox(deps.channel_id, deps.thread_ts):
             sandbox_keepalive.cancel(deps.channel_id, deps.thread_ts)
             pause_if_running(deps.channel_id, deps.thread_ts)
@@ -3595,6 +3663,7 @@ DEFERRED_TOOLS = frozenset({
     "upload_emoji_tool", "submit_feedback_tool",
     "create_skill", "rename_skill", "delete_skill", "install_skill",
     "set_sandbox_keepalive_tool", "computer_stream_tool", "agent_browser_stream_tool",
+    "ask_human_for_challenge_tool",
     "invite_coolton_user_to_channel", "remove_reaction_tool", "leave_channel_tool",
     "slack_api_call_as_bot_tool",
 })

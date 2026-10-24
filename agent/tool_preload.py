@@ -74,7 +74,8 @@ TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
     "skills": ("Does this involve changing coolton's skills (its reusable playbooks): creating, installing, renaming, editing or deleting one?", frozenset({
         "create_skill", "rename_skill", "delete_skill", "install_skill"})),
     "live_view": ("Does the user want to watch what coolton is doing live: a live stream or view link of its browser or desktop, or keeping its sandbox running?", frozenset({
-        "set_sandbox_keepalive_tool", "computer_stream_tool", "agent_browser_stream_tool"})),
+        "set_sandbox_keepalive_tool", "computer_stream_tool", "agent_browser_stream_tool",
+        "ask_human_for_challenge_tool"})),
     "slack_admin": ("Does this involve managing Slack channels or acting as coolton's bot: inviting coolton's helper account to a channel, removing a reaction, leaving a channel, or calling the Slack API as the bot (posting as the bot, topics, bookmarks, invites, creating channels)?", frozenset({
         "invite_coolton_user_to_channel", "remove_reaction_tool", "leave_channel_tool", "slack_api_call_as_bot_tool"})),
     # The Slack MCP list and canvas tools are big (~10k tokens of definitions together), so

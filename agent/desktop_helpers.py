@@ -25,6 +25,11 @@ from agent.sandbox_helpers import _proxy_env
 DISPLAY = ":0"
 _VNC_PORT = 5900
 _NOVNC_PORT = 6080
+# A second VNC server that DOES take mouse and keyboard, for a person to get past a
+# CAPTCHA for coolton (agent.tools.human_control): its own port and password, so the
+# view-only stream's link never gives control.
+_CONTROL_VNC_PORT = 5901
+_CONTROL_NOVNC_PORT = 6081
 
 # xdotool keysym names for common human-friendly key names. Matches e2b-desktop's map so
 # behavior (e.g. what `["ctrl", "c"]` presses) is unsurprising to anyone who's used it.
@@ -284,3 +289,42 @@ def start_stream(sandbox, proxy_info) -> str:
 
     host = sandbox.get_host(_NOVNC_PORT)
     return f"https://{host}/vnc.html?autoconnect=true&view_only=true&resize=scale&password={password}"
+
+
+def start_control(sandbox, proxy_info) -> str:
+    """Start a VNC server a person can control (mouse and keyboard) next to the view-only
+    stream, with a new password every time, and return its noVNC URL. stop_control turns
+    it off; nothing else does, so callers must make sure it's stopped."""
+    ensure_desktop(sandbox, proxy_info)
+    stop_control(sandbox, proxy_info)
+    password = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20))
+    _run(sandbox, proxy_info, f"mkdir -p ~/.vnc && x11vnc -storepasswd {password} ~/.vnc/control_passwd")
+    _run(
+        sandbox, proxy_info,
+        f"x11vnc -bg -display {DISPLAY} -forever -shared -rfbport {_CONTROL_VNC_PORT} "
+        f"-rfbauth /home/user/.vnc/control_passwd 2>/tmp/x11vnc_control.log",
+    )
+    _run(
+        sandbox, proxy_info,
+        f"cd /opt/noVNC/utils && ./novnc_proxy --vnc localhost:{_CONTROL_VNC_PORT} "
+        f"--listen {_CONTROL_NOVNC_PORT} --web /opt/noVNC > /tmp/novnc_control.log 2>&1",
+        background=True, timeout=0,
+    )
+    if not _wait_for_port(sandbox, proxy_info, _CONTROL_NOVNC_PORT):
+        stop_control(sandbox, proxy_info)
+        raise RuntimeError("Could not start the control noVNC server")
+    host = sandbox.get_host(_CONTROL_NOVNC_PORT)
+    return f"https://{host}/vnc.html?autoconnect=true&resize=scale&password={password}"
+
+
+def stop_control(sandbox, proxy_info) -> None:
+    """Turn the controllable VNC server off (the view-only stream keeps running). The
+    last digit in [brackets] keeps each pattern from matching pkill's own shell."""
+    port, web = str(_CONTROL_VNC_PORT), str(_CONTROL_NOVNC_PORT)
+    _run(
+        sandbox, proxy_info,
+        f"pkill -f 'x11vnc .*-rfbport {port[:-1]}[{port[-1]}]' ; "
+        f"pkill -f 'novnc_proxy .*--listen {web[:-1]}[{web[-1]}]' ; "
+        f"pkill -f 'websockify.*{web[:-1]}[{web[-1]}]' ; "
+        "rm -f /home/user/.vnc/control_passwd ; true",
+    )

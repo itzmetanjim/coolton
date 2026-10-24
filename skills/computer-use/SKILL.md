@@ -133,6 +133,20 @@ paint, and screenshotting too early just shows you a half-drawn window.
   viewer (Evince). `launch_app` takes the `.desktop` id (e.g. `firefox-esr.desktop` or just
   `firefox-esr` — both work via `gtk-launch`).
 
+## CAPTCHAs and other human checks
+
+When a page shows a CAPTCHA, "verify you are human", reCAPTCHA, hCaptcha or a Cloudflare
+Turnstile check, don't solve or work around it yourself, and don't give up on the task either:
+
+1. Make sure the page is open on the desktop (agent-browser with `--headed`, or `computer_use`).
+2. Call `ask_human_for_challenge_tool` with a short `reason` ("Solve the CAPTCHA on the sign-up
+   page"). The person who asked gets a private link that controls your desktop for 5 minutes.
+   Tell them in the thread too.
+3. Wait: `wait_tool` 20-30 s at a time, then a screenshot (or `agent-browser snapshot`) to see
+   whether the page has moved past the check. Give up after about 5 minutes.
+4. Call `ask_human_for_challenge_tool` with `finished=true`, which turns the control link off,
+   then carry on (or say you couldn't get past it).
+
 ## Finishing
 When you're done with a computer-use session, just stop calling the tools — the sandbox (and its
 desktop) persists across the thread automatically, the same as `run_linux_command`'s sandbox. There

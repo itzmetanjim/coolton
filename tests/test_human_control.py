@@ -1,0 +1,47 @@
+"""ask_human_for_challenge_tool: control of the desktop goes to the requester only, and never
+outlasts what it was given for."""
+import importlib
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from pydantic_ai import RunContext
+
+from agent.tools import human_control
+
+
+def _fake_desktop(monkeypatch):
+    calls = []
+    monkeypatch.setattr("agent.sandbox_helpers.get_or_create_sandbox", lambda c, t: ("sandbox", "proxy"))
+    monkeypatch.setattr("agent.desktop_helpers.start_control", lambda s, p: calls.append("start") or "https://desk/vnc.html?password=x")
+    monkeypatch.setattr("agent.desktop_helpers.stop_control", lambda s, p: calls.append("stop"))
+    return calls
+
+
+def test_the_control_link_goes_only_to_the_requester_and_finished_turns_it_off(monkeypatch):
+    agent_mod = importlib.import_module("agent.agent")
+    calls = _fake_desktop(monkeypatch)
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: None)
+    client = Mock()
+    deps = SimpleNamespace(client=client, channel_id="C1", thread_ts="1.1", user_id="U1", sandbox_keepalive_seconds=0.0,
+                           platform=None, surface=None)
+    monkeypatch.setattr(agent_mod, "_surface", lambda deps: SimpleNamespace())
+    ctx = RunContext(model=None, usage=None, prompt="", deps=deps)
+
+    result = agent_mod.ask_human_for_challenge_tool(ctx, "Solve the CAPTCHA on the sign-up page")
+    assert "private link" in result and human_control.active("C1", "1.1")
+    sent = client.chat_postEphemeral.call_args.kwargs
+    assert sent["user"] == "U1" and sent["channel"] == "C1" and "https://desk/vnc.html" in sent["text"]
+    assert not client.chat_postMessage.called  # never posted where others could see it
+
+    assert agent_mod.ask_human_for_challenge_tool(ctx, finished=True) == "Control link turned off."
+    assert calls == ["start", "stop"] and not human_control.active("C1", "1.1")
+
+
+def test_control_turns_itself_off_after_the_time_limit(monkeypatch):
+    calls = _fake_desktop(monkeypatch)
+    monkeypatch.setattr(human_control, "CONTROL_SECONDS", 0.05)
+    human_control.start("C2", "2.2")
+    import time
+    time.sleep(0.3)
+    assert calls == ["start", "stop"] and not human_control.active("C2", "2.2")
