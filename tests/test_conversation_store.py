@@ -320,3 +320,21 @@ def test_last_seen_ts_only_moves_forward_and_survives_a_restart(tmp_path):
     assert store.get_last_seen_ts("C1", "1.1") == "200.000"
 
     assert _store(tmp_path).get_last_seen_ts("C1", "1.1") == "200.000"
+
+
+def test_a_tool_call_answered_by_a_retry_prompt_is_valid_history():
+    """A tool call with bad arguments gets a retry prompt instead of a return; that's a
+    complete pair, and treating it as unpaired threw away the thread's whole memory."""
+    from pydantic_ai.messages import ModelRequest, ModelResponse, RetryPromptPart, TextPart, ToolCallPart, UserPromptPart
+
+    from thread_context.store import _is_valid_history
+
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="hi")]),
+        ModelResponse(parts=[ToolCallPart(tool_name="search", args="{bad", tool_call_id="c1")]),
+        ModelRequest(parts=[RetryPromptPart(content="invalid JSON", tool_name="search", tool_call_id="c1")]),
+        ModelResponse(parts=[TextPart(content="done")]),
+    ]
+    assert _is_valid_history(history)
+    # Still caught: a call nothing answered.
+    assert not _is_valid_history(history[:2])

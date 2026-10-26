@@ -44,6 +44,12 @@ def _is_valid_history(messages: list[ModelMessage]) -> bool:
                 call_ids.add(tool_call_id)
             elif part_kind == "tool-return":
                 return_ids.add(tool_call_id)
+            elif part_kind == "retry-prompt" and getattr(part, "tool_name", None):
+                # A tool call with bad arguments is answered by a retry prompt, which the
+                # model APIs take as that call's result. (One with no tool_name answers no
+                # call: it's about the output, and its tool_call_id is made up.) Not
+                # counting these threw away the memory of every thread with one.
+                return_ids.add(tool_call_id)
     return call_ids == return_ids
 
 

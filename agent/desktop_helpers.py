@@ -322,22 +322,25 @@ def start_stream(sandbox, proxy_info) -> str:
     return f"https://{host}/vnc.html?autoconnect=true&view_only=true&resize=scale&password={password}"
 
 
-def start_control(sandbox, proxy_info) -> str:
+def start_control(sandbox, proxy_info, lifetime_seconds: int = 330) -> str:
     """Start a VNC server a person can control (mouse and keyboard) next to the view-only
     stream, with a new password every time, and return its noVNC URL. stop_control turns
-    it off; nothing else does, so callers must make sure it's stopped."""
+    it off; as a backstop (a stop that fails, say on a sandbox command timing out), both
+    processes also end themselves after `lifetime_seconds` of sandbox time."""
     ensure_desktop(sandbox, proxy_info)
     stop_control(sandbox, proxy_info)
     password = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20))
     _run(sandbox, proxy_info, f"mkdir -p ~/.vnc && x11vnc -storepasswd {password} ~/.vnc/control_passwd")
+    life = int(lifetime_seconds)
     _run(
         sandbox, proxy_info,
-        f"x11vnc -bg -display {DISPLAY} -forever -shared -rfbport {_CONTROL_VNC_PORT} "
-        f"-rfbauth /home/user/.vnc/control_passwd 2>/tmp/x11vnc_control.log",
+        f"timeout -s KILL {life} x11vnc -display {DISPLAY} -forever -shared -rfbport {_CONTROL_VNC_PORT} "
+        f"-rfbauth /home/user/.vnc/control_passwd > /tmp/x11vnc_control.log 2>&1",
+        background=True, timeout=0,
     )
     _run(
         sandbox, proxy_info,
-        f"cd /opt/noVNC/utils && ./novnc_proxy --vnc localhost:{_CONTROL_VNC_PORT} "
+        f"cd /opt/noVNC/utils && timeout -s KILL {life} ./novnc_proxy --vnc localhost:{_CONTROL_VNC_PORT} "
         f"--listen {_CONTROL_NOVNC_PORT} --web /opt/noVNC > /tmp/novnc_control.log 2>&1",
         background=True, timeout=0,
     )

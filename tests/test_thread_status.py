@@ -62,10 +62,15 @@ def test_a_long_turn_keeps_processing_alive_past_slacks_one_hour_timeout():
     assert ts._state[("C1", "1.1")]["timer"] is not timer
 
 
-def test_titles_are_cropped_to_slacks_200_character_limit():
+def test_titles_are_only_what_slack_accepts():
+    """Slack refuses a session title over 80 characters or with most punctuation, Slack
+    markup included (invalid_name, checked live), and the session then keeps a stale title."""
     client = Mock()
     ts.start(client, "C1", "1.1", request_text="x" * 300)
-    assert len(calls(client)[0][1]["title"]) == 200
+    assert len(calls(client)[0][1]["title"]) == 80
+    assert ts._title("go to <https://ctf2026.hitcon.org/|ctf2026.hitcon.org> &lt;&gt; 50% off: now/later") == \
+        "go to ctf2026.hitcon.org 50 off now later"
+    assert ts._title("&lt;&gt; look at <#C0CA5LKDDRS|coolton-auto-test> 😅") == "look at coolton-auto-test 😅"
 
 
 def test_a_code_channel_turn_is_never_titled_after_the_request(monkeypatch):

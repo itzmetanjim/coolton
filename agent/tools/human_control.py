@@ -28,7 +28,7 @@ def start(channel_id: str, thread_ts: str) -> str:
     from agent.sandbox_helpers import get_or_create_sandbox
 
     sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
-    url = dh.start_control(sandbox, proxy_info)
+    url = dh.start_control(sandbox, proxy_info, lifetime_seconds=CONTROL_SECONDS + 30)
     timer = threading.Timer(CONTROL_SECONDS, stop, args=(channel_id, thread_ts))
     timer.daemon = True
     with _lock:
@@ -52,14 +52,16 @@ def stop(channel_id: str, thread_ts: str) -> bool:
     if timer is None:
         return False
     timer.cancel()
-    try:
-        from agent import desktop_helpers as dh
-        from agent.sandbox_helpers import get_or_create_sandbox
+    from agent import desktop_helpers as dh
+    from agent.sandbox_helpers import get_or_create_sandbox
 
-        sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
-        dh.stop_control(sandbox, proxy_info)
-    except Exception:
-        logger.exception("Couldn't turn desktop control off in %s/%s", channel_id, thread_ts)
+    for attempt in range(2):  # the processes also end themselves (start_control's lifetime)
+        try:
+            sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
+            dh.stop_control(sandbox, proxy_info)
+            break
+        except Exception:
+            logger.exception("Couldn't turn desktop control off in %s/%s (try %d)", channel_id, thread_ts, attempt + 1)
     try:
         from agent.active_runs import is_run_active
         from agent.sandbox_helpers import pause_if_running

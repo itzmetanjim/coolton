@@ -16,13 +16,16 @@ very long turn keeps its loading UI. Never raises: a flaky status API must not b
 the actual turn.
 """
 
+import html
 import logging
 import re
+import unicodedata
 import threading
 
 logger = logging.getLogger(__name__)
 
-_MAX_TITLE_LEN = 200  # agent session titles: 1-200 characters
+_MAX_TITLE_LEN = 80  # what agents.sessions.* accepts in practice (its docs say 200)
+_TITLE_PUNCTUATION = set(" .,?!'\"_-&|()=")
 _REFRESH_SECONDS = 30 * 60.0
 
 _lock = threading.Lock()
@@ -30,9 +33,24 @@ _state: dict[tuple[str, str], dict] = {}
 
 
 def _title(text: str) -> str:
-    text = re.sub(r"<@[A-Z0-9]+>", "", text or "")
+    """The session title for a request, in what Slack accepts in one (checked live
+    2026-10-26; anything else is refused with invalid_name and the session keeps an old
+    title): at most 80 characters, of letters and digits in any script, emoji, spaces and
+    . , ? ! ' " _ - & | ( ) =. So Slack's message markup becomes its text (links their label
+    or domain, <#C...|name> the name), and every other character a space."""
+    text = re.sub(r"<@[A-Z0-9]+(\|[^>]*)?>", "", text or "")
+    text = re.sub(r"<#[A-Z0-9]+\|([^>]*)>", r"\1", text)
+    text = re.sub(r"<![a-z]+\^?[A-Z0-9]*\|?([^>]*)>", lambda m: m.group(1) or "here", text)
+    text = re.sub(r"<(?:https?|mailto):[^|>]*\|([^>]*)>", r"\1", text)
+    text = re.sub(r"<(?:https?://|mailto:)([^/>|]*)[^>]*>", r"\1", text)  # a bare link: its domain
+    text = html.unescape(text)
+    text = re.sub(r"^\s*(?:<>|##)\s*", "", text)  # coolton's own message prefixes
+    text = "".join(c if c.isalnum() or c in _TITLE_PUNCTUATION or unicodedata.category(c) == "So" else " "
+                   for c in text)
     text = " ".join(text.split())
-    return (text[:_MAX_TITLE_LEN - 1] + "…") if len(text) > _MAX_TITLE_LEN else (text or "coolton")
+    if len(text) > _MAX_TITLE_LEN:
+        text = text[:_MAX_TITLE_LEN - 3].rstrip() + "..."
+    return text or "coolton"
 
 
 def _call(client, method: str, channel_id: str, thread_ts: str, **fields) -> None:

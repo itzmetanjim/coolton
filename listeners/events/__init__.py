@@ -16,3 +16,6 @@ def register(app: App):
     app.event("message")(handle_message)
     app.event("member_joined_channel")(handle_member_joined_channel)
     app.event("member_left_channel")(handle_member_left_channel)
+    # Subscribed for link unfurls (the app's unfurl domains), which coolton doesn't do yet:
+    # acknowledged so Bolt doesn't log every one as an unhandled request.
+    app.event("link_shared")(lambda: None)
