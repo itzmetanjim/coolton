@@ -46,3 +46,14 @@ def test_the_prompt_and_tool_descriptions_have_no_em_dashes():
     assert "—" not in prompt
     tools = importlib.import_module("agent.agent").agent._function_toolset.tools
     assert [name for name, tool in tools.items() if "—" in (tool.description or "")] == []
+
+
+def test_a_lowercase_reply_stays_lowercase_but_names_and_drafts_keep_their_capitals():
+    from agent.writing_style import lowercase_sentence_starts as fix
+
+    assert fix("bottom line: it's free. The catch is the data. You get a daily cap. OmniRush owns it.") == \
+        "bottom line: it's free. the catch is the data. you get a daily cap. OmniRush owns it."
+    assert fix("- one thing.\n- I checked `The Code` and <https://x.y|The Docs>.") == \
+        "- one thing.\n- i checked `The Code` and <https://x.y|The Docs>."
+    draft = "Hi team,\n\nThe launch is tomorrow. Please review the doc."
+    assert fix(draft) == draft  # a reply that starts capitalized is a deliberate draft

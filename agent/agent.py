@@ -211,11 +211,11 @@ def _redact_tool_result(ctx, *, call, tool_def, args, result):
 
 def _redact_output(ctx, *, output_context, output):
     if isinstance(output, str):
-        from agent.writing_style import lift_tables, strip_em_dashes
+        from agent.writing_style import lift_tables, lowercase_sentence_starts, strip_em_dashes
 
         from agent.mentions import defuse_mass_mentions
 
-        return defuse_mass_mentions(lift_tables(strip_em_dashes(_redact(output, context="final response"))))
+        return defuse_mass_mentions(lift_tables(lowercase_sentence_starts(strip_em_dashes(_redact(output, context="final response")))))
     return output
 
 
