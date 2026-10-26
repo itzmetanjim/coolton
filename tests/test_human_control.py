@@ -12,7 +12,7 @@ from agent.tools import human_control
 def _fake_desktop(monkeypatch):
     calls = []
     monkeypatch.setattr("agent.sandbox_helpers.get_or_create_sandbox", lambda c, t: ("sandbox", "proxy"))
-    monkeypatch.setattr("agent.desktop_helpers.start_control", lambda s, p: calls.append("start") or "https://desk/vnc.html?password=x")
+    monkeypatch.setattr("agent.desktop_helpers.start_control", lambda s, p, lifetime_seconds=0: calls.append("start") or "https://desk/vnc.html?password=x")
     monkeypatch.setattr("agent.desktop_helpers.stop_control", lambda s, p: calls.append("stop"))
     return calls
 
