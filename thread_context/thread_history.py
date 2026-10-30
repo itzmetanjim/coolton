@@ -21,6 +21,9 @@ def _display_name(client, user_id: str, cache: dict) -> str:
             name = profile.get("display_name") or profile.get("real_name") or user_id
     except Exception:
         pass
+    from agent.display_names import safe_name
+
+    name = safe_name(name, fallback=user_id)
     cache[user_id] = name
     return name
 
@@ -80,7 +83,9 @@ def _to_model_message(client, msg: dict, name_cache: dict, coolton_bot_id: str):
         if is_bot_message and coolton_bot_id and msg.get("user") == coolton_bot_id:
             return ModelResponse(parts=[TextPart(content=text)])
         if is_bot_message:
-            bot_name = msg.get("username") or msg.get("bot_id") or "unknown bot"
+            from agent.display_names import safe_name
+
+            bot_name = safe_name(msg.get("username") or msg.get("bot_id"), fallback="unknown bot")
             return ModelRequest(parts=[UserPromptPart(content=f"[other bot] {bot_name}:\n{text}", timestamp=_timestamp(msg))])
         user = msg.get("user") or "unknown"
         name = _display_name(client, user, name_cache)

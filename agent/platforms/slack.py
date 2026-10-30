@@ -134,8 +134,11 @@ class SlackPlatform(PlatformAdapter):
         try:
             resp = self.client.users_info(user=user_id)
             if resp.get("ok"):
+                from agent.display_names import safe_name
+
                 profile = resp["user"].get("profile", {})
-                return profile.get("display_name") or profile.get("real_name") or resp["user"].get("name") or user_id
+                return safe_name(profile.get("display_name") or profile.get("real_name") or resp["user"].get("name"),
+                                 fallback=user_id)
         except Exception:
             pass
         return user_id

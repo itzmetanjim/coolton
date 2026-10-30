@@ -718,7 +718,10 @@ class HuddleSession:
             try:
                 user = self.client.users_info(user=user_id).get("user") or {}
                 profile = user.get("profile") or {}
-                return profile.get("display_name") or profile.get("real_name") or user.get("name") or user_id
+                from agent.display_names import safe_name
+
+                return safe_name(profile.get("display_name") or profile.get("real_name") or user.get("name"),
+                                 fallback=user_id)
             except Exception:
                 return user_id
 
