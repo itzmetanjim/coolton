@@ -3361,8 +3361,10 @@ def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: 
 
     Args:
         name: Skill name (will be slugified, e.g. "My Cool Skill" -> "my-cool-skill").
-        description: One-line description; used for skill discovery. Describe when
-            the skill should trigger.
+        description: One-line description; used for skill discovery. It's all a future turn
+            sees before loading the skill, so name the situations and requests it's for, in
+            terms that make sense without knowing the skill (say what a named service is; no
+            "and other X tasks" catch-alls, no how-to).
         body: The skill's instructions/body (Markdown). If empty, a minimal
             template is created for you to fill in later.
     """
@@ -3452,7 +3454,8 @@ def update_skill(ctx: RunContext[AgentDeps], name: str, description: str = "", b
 
     Args:
         name: The skill's name/folder.
-        description: New description; leave empty to keep the current one.
+        description: New description; leave empty to keep the current one. Same rules as
+            create_skill's: when to use it, understandable before loading the skill.
         body: New instructions (Markdown, without frontmatter); leave empty to keep the current ones.
     """
     src = _resolve_skill(name)

@@ -107,6 +107,14 @@ better as plain docs, a template, or a one-off script.
 - `description`: third-person, <=1024 chars, states both what it does and when to use it. Prefer
   single-quoted YAML with `USE FOR:` and `DO NOT USE FOR:` cues, e.g.
   `description: 'Drafts release notes from validated repo context. USE FOR: release summaries. DO NOT USE FOR: publishing releases.'`
+- The description is all an agent sees before it loads the skill, so it has to decide from the
+  description alone, knowing nothing about the skill or the service behind it. Write it in terms
+  of the situations and requests that call for it, and say what any named tool or service is.
+  No catch-alls that only make sense after loading ("and other Flaron API data", "other X tasks"),
+  and no how-to (endpoints, steps, quirks): that goes in the body.
+  - bad: `Use Flaron to look up channel names, user details, and other documented Flaron API data.`
+  - good: `Look up a Slack channel's name from its ID or its ID from its name (private channels
+    too), or check a user's ID verification, fraud or NDA status, when Slack's own API can't.`
 
 ### Body shape
 Concise frontmatter → `When to use` / `When not to use` → `Required inputs` → `Instructions` →

@@ -702,6 +702,10 @@ just the skill name, never an absolute path or `..`:
   "turn this into a skill").
 - `update_skill(name, description?, body?)`: edit an existing skill's description or instructions
   (empty keeps that part; a body replaces all the instructions, so load the skill first).
+- A skill's description is all you'll see before loading it, so write it as when to use the skill,
+  readable by someone who knows nothing about it: the concrete situations and requests it's for,
+  and what any service it names is. No "and other X API tasks" catch-alls and no how-to; the
+  instructions go in the body.
 - `rename_skill(old_name, new_name)` / `delete_skill(name)` (permanent).
 Skills are shared by everyone who uses coolton, so a change only goes live right away when the
 coolton maintainer asks for it; for anyone else these tools send it to the maintainer for review

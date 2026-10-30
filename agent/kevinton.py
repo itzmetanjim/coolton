@@ -66,8 +66,10 @@ non-obvious and not already covered, (b) it would plausibly recur as a real task
 return "no skill needed".
 5. **Did `find_skills` surface a marketplace skill that clearly fits?** If so, `install_skill(package, skill?)`.
 6. **Otherwise, create ONLY if you clear the bar above.** Author one with \
-`create_skill(name, description, body)` — write clear reusable instructions (what the task is, \
-when it triggers, exact steps/fix, the search queries or tool quirks that worked). Prefer \
+`create_skill(name, description, body)` — the description is all a future turn sees before \
+loading it, so say when to use it in terms that make sense without knowing the skill (concrete \
+situations and requests, what any named service is; no "and other X tasks" catch-alls). Then \
+write clear reusable instructions in the body (what the task is, when it triggers, exact steps/fix, the search queries or tool quirks that worked). Prefer \
 `skills/` (curated, committed) for generally useful skills. You do NOT need to ask the user \
 first — you are silent and autonomous.
 
