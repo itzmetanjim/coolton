@@ -1055,7 +1055,8 @@ def ask_human_for_challenge_tool(ctx: RunContext[AgentDeps], reason: str = "", f
     sandbox_keepalive.arm(channel_id, thread_ts, human_control.CONTROL_SECONDS)
     what = (reason or "There's a human check (like a CAPTCHA) in my browser").strip().rstrip(".")
     text = (f"{what}. I don't solve those myself, so could you? This link controls my desktop for "
-            f"{minutes} minutes, and only you can see it: {url}\nI'll carry on once the page moves past it.")
+            f"{minutes} minutes, and only you can see it: {url}\nI'll carry on once the page moves past it "
+            "(tell me when you're done).")
     surface = _surface(ctx.deps)
     from agent.surfaces.web import WebSurface
 
@@ -1070,9 +1071,12 @@ def ask_human_for_challenge_tool(ctx: RunContext[AgentDeps], reason: str = "", f
                 channel=channel_id, user=ctx.deps.user_id, thread_ts=thread_ts or None, text=text,
                 blocks=[
                     {"type": "section", "text": {"type": "mrkdwn", "text": text.replace(f": {url}", ".")}},
-                    {"type": "actions", "elements": [{"type": "button", "action_id": "human_control_link",
-                                                      "url": url, "style": "primary",
-                                                      "text": {"type": "plain_text", "text": "Open my desktop"}}]},
+                    {"type": "actions", "elements": [
+                        {"type": "button", "action_id": "human_control_link", "url": url, "style": "primary",
+                         "text": {"type": "plain_text", "text": "Open my desktop"}},
+                        {"type": "button", "action_id": "human_control_done", "value": f"{channel_id}|{thread_ts}",
+                         "text": {"type": "plain_text", "text": "I'm done"}},
+                    ]},
                 ],
             )
         except Exception as e:
@@ -1080,8 +1084,9 @@ def ask_human_for_challenge_tool(ctx: RunContext[AgentDeps], reason: str = "", f
             return f"Error sending the link: {e}"
     return (f"Sent <@{ctx.deps.user_id}> a private link that controls your desktop for {minutes} minutes. "
             "Tell them briefly in the thread too, then wait: wait_tool about 20-30 s at a time and a "
-            "screenshot to check whether the page is past the check. When it is (or after about 5 "
-            "minutes), call this tool with finished=true, then carry on.")
+            "screenshot to check whether the page is past the check. If they say they're done, you're "
+            "woken early. When it's past (or after about 5 minutes), call this tool with finished=true, "
+            "then carry on.")
 
 
 @agent.tool
@@ -3297,6 +3302,17 @@ def apply_skill_change(spec: dict) -> str:
             return f"Error renaming skill: {e}"
         return f"Renamed skill '{spec['old_name']}' -> '{new_slug}'."
 
+    if op == "update":
+        src = _resolve_skill(spec["name"])
+        if not src:
+            return f"Error: skill '{spec['name']}' not found in any skill directory."
+        try:
+            with open(os.path.join(src, "SKILL.md"), "w") as f:
+                f.write(spec["content"])
+        except OSError as e:
+            return f"Error updating skill: {e}"
+        return f"Updated skill '{spec['name']}'. The new version is what load_skill returns from now on."
+
     if op == "delete":
         src = _resolve_skill(spec["name"])
         if not src:
@@ -3404,6 +3420,57 @@ def rename_skill(ctx: RunContext[AgentDeps], old_name: str, new_name: str) -> st
     return _apply_or_submit_skill_change(
         ctx, {"op": "rename", "old_name": old_name, "new_slug": new_slug},
         f"rename skill `{old_name}` -> `{new_slug}`",
+    )
+
+
+def _updated_skill_md(current: str, description: str, body: str) -> str:
+    """`current` SKILL.md with a new description and/or body (empty keeps the old one);
+    the rest of the frontmatter stays as it was."""
+    import yaml
+
+    end = current.find("\n---", 3)
+    data = yaml.safe_load(current[3:end]) if current.startswith("---") and end != -1 else None
+    if not isinstance(data, dict):
+        raise ValueError("its SKILL.md has no readable frontmatter")
+    old_body = current[end + 4:].lstrip("\n")
+    if description:
+        data["description"] = description
+    frontmatter = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=1_000_000)
+    return f"---\n{frontmatter}---\n\n{body or old_body.rstrip()}\n"
+
+
+@agent.tool
+def update_skill(ctx: RunContext[AgentDeps], name: str, description: str = "", body: str = "") -> str:
+    """Edit an existing agent skill: its description (what it's for and when to use it), its
+    instructions, or both. Its name and any other files stay as they are.
+
+    Use this when the user wants to change, reword, fix or extend a skill. `body` replaces the
+    whole instructions, so to change part of them, load_skill first and pass the full new text.
+    Unless the coolton maintainer asked for it, the edit waits for maintainer review (the result
+    says which happened, relay that, don't guess). Do NOT use sandbox shell commands, they have
+    no effect on the agent.
+
+    Args:
+        name: The skill's name/folder.
+        description: New description; leave empty to keep the current one.
+        body: New instructions (Markdown, without frontmatter); leave empty to keep the current ones.
+    """
+    src = _resolve_skill(name)
+    if not src:
+        return f"Error: skill '{name}' not found in any skill directory."
+    description, body = description.strip(), body.strip()
+    if not description and not body:
+        return "Error: pass a new description, a new body, or both."
+    try:
+        with open(os.path.join(src, "SKILL.md")) as f:
+            content = _updated_skill_md(f.read(), description, body)
+    except (OSError, ValueError, ImportError) as e:
+        return f"Error reading skill '{name}': {e}"
+    ok, err = _validate_skill_md(content)
+    if not ok:
+        return f"Error: the updated SKILL.md failed validation ({err}). The skill was NOT changed."
+    return _apply_or_submit_skill_change(
+        ctx, {"op": "update", "name": name, "content": content}, f"update skill `{name}`", content,
     )
 
 
@@ -3676,7 +3743,7 @@ DEFERRED_TOOLS = frozenset({
     "install_opencode_tool", "run_opencode_tool",
     "send_html_embed_tool", "send_whiteboard_embed_tool", "render_mermaid_tool",
     "upload_emoji_tool", "submit_feedback_tool",
-    "create_skill", "rename_skill", "delete_skill", "install_skill",
+    "create_skill", "update_skill", "rename_skill", "delete_skill", "install_skill",
     "set_sandbox_keepalive_tool", "computer_stream_tool", "agent_browser_stream_tool",
     "ask_human_for_challenge_tool",
     "invite_coolton_user_to_channel", "remove_reaction_tool", "leave_channel_tool",

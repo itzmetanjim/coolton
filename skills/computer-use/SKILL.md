@@ -146,7 +146,8 @@ Turnstile check, don't solve or work around it yourself, and don't give up on th
    page"). The person who asked gets a private link that controls your desktop for 5 minutes.
    Tell them in the thread too.
 3. Wait: `wait_tool` 20-30 s at a time, then a screenshot (or `agent-browser snapshot`) to see
-   whether the page has moved past the check. Give up after about 5 minutes.
+   whether the page has moved past the check. If they click "I'm done" under the link (or say so),
+   you're woken early. Give up after about 5 minutes.
 4. Call `ask_human_for_challenge_tool` with `finished=true`, which turns the control link off,
    then carry on (or say you couldn't get past it).
 

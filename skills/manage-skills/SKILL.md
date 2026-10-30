@@ -25,6 +25,9 @@ a skill via sandbox commands, and never ask the user to run such commands. Alway
 - `create_skill(name, description, body?)` — create a new custom skill in `skills/`. The name is
   slugified automatically; pass a clear `description` (triggers when to use it) and `body` with the
   workflow. Empty body gets a starter template.
+- `update_skill(name, description?, body?)` — edit an existing skill's description and/or
+  instructions; whatever you leave empty stays. `body` replaces all the instructions, so
+  `load_skill` first and pass the full new text.
 - `rename_skill(old_name, new_name)` — rename a skill (moves its folder + updates frontmatter).
   Names are slugified.
 - `delete_skill(name)` — permanently remove a skill. This is destructive — confirm with the user

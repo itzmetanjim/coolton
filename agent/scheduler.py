@@ -529,7 +529,7 @@ def _sync_wait_jobs():
             _add_wait_job(wait)
 
 
-def _fire_wait(wait_id: str) -> None:
+def _fire_wait(wait_id: str, early_because: str = "") -> None:
     with wait_tasks_lock:
         data = _load_waits()
         wait = next((w for w in data["waits"] if w["id"] == wait_id), None)
@@ -545,9 +545,10 @@ def _fire_wait(wait_id: str) -> None:
         return
 
     channel_id, thread_ts = wait["channel_id"], wait["thread_ts"]
+    over = f"your wait ended early: {early_because}" if early_because else f"your {int(wait.get('seconds', 0))}s wait is over"
     prompt = (
-        f"[SYSTEM: your {int(wait.get('seconds', 0))}s wait is over (you were waiting for: "
-        f"{wait['reason']}). Continue and respond in this same conversation.]"
+        f"[SYSTEM: {over} (you were waiting for: {wait['reason']}). "
+        "Continue and respond in this same conversation.]"
     )
     # What people see in the thread. The reason is coolton's own note to itself and goes
     # only into the prompt above.
@@ -565,6 +566,24 @@ def _fire_wait(wait_id: str) -> None:
 
     from agent.background_jobs_poller import AUTOMATED_USER_ID, _dispatch_wake, _wake_executor
     _wake_executor.submit(_dispatch_wake, channel_id, thread_ts, AUTOMATED_USER_ID, banner, prompt, wait["user_id"])
+
+
+def end_waits_early(channel_id: str, thread_ts: str, because: str) -> bool:
+    """Fire this conversation's pending waits now, telling coolton `because`.
+    Returns whether there were any."""
+    with wait_tasks_lock:
+        ids = [
+            w["id"] for w in _load_waits()["waits"]
+            if not w.get("fired") and w["channel_id"] == channel_id and w["thread_ts"] == (thread_ts or "")
+        ]
+    for wait_id in ids:
+        if _scheduler is not None:
+            try:
+                _scheduler.remove_job(f"wait:{wait_id}")
+            except Exception:
+                pass
+        _fire_wait(wait_id, early_because=because)
+    return bool(ids)
 
 
 def create_wait(user_id: str, channel_id: str, thread_ts: str, reason: str, seconds: int) -> str:

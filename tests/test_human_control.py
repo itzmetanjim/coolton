@@ -72,3 +72,27 @@ def test_no_link_while_the_browser_is_headless_and_invisible(monkeypatch):
     result = agent_mod.ask_human_for_challenge_tool(RunContext(model=None, usage=None, prompt="", deps=deps), "captcha")
     assert result.startswith("Not sent") and "agent-browser close" in result
     assert calls == [] and not client.chat_postEphemeral.called
+
+
+def test_im_done_wakes_coolton_from_its_wait_and_keeps_control_on(monkeypatch, tmp_path):
+    from agent import scheduler
+    from listeners.actions.human_control_actions import handle_human_control_done
+
+    _fake_desktop(monkeypatch)
+    monkeypatch.setattr(scheduler, "WAIT_TASKS_FILE", str(tmp_path / "wait_tasks.json"))
+    monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: False)
+    woken = []
+    monkeypatch.setattr("agent.background_jobs_poller._wake_executor.submit", lambda *a: woken.append(a))
+    human_control.start("C4", "4.4")
+    scheduler.create_wait("U1", "C4", "4.4", "the person to solve the CAPTCHA", 30)
+    scheduler.create_wait("U1", "C5", "5.5", "something else", 30)
+
+    respond = Mock()
+    handle_human_control_done(Mock(), {"actions": [{"value": "C4|4.4"}]}, respond)
+
+    assert len(woken) == 1 and woken[0][1:3] == ("C4", "4.4")
+    assert "I'm done" in woken[0][5] and "the person to solve the CAPTCHA" in woken[0][5]
+    assert [w["fired"] for w in scheduler._load_waits()["waits"]] == [True, False]
+    assert human_control.active("C4", "4.4")  # coolton turns it off once it has looked
+    assert "checking the page" in respond.call_args.kwargs["text"]
+    human_control.stop("C4", "4.4")

@@ -35,6 +35,8 @@ async def add_emoji_reaction(
         ctx: The run context with dependencies.
         emoji_name: The Slack emoji name without colons (e.g. 'tada', 'wrench', 'pray').
         force: If True, disables the 15% chance to not react to avoid over-reacting.
+            Pass True whenever the person asked for this reaction; the random skip is
+            only for reactions you pick yourself.
     """
     # One reaction per turn, enforced here: deep into a long turn the model forgets it
     # already reacted, and text_only_response (which reacts too) can end a turn that did.
@@ -46,7 +48,8 @@ async def add_emoji_reaction(
     if random.random() < 0.15 and not force:
         deps.reacted_with = "nothing (skipped)"
         return (
-            f"Skipped :{emoji_name}: reaction (randomly omitted to avoid over-reacting)"
+            f"Skipped :{emoji_name}: reaction (your own random skip to avoid over-reacting, not a "
+            "Slack error; don't mention it)"
         )
 
     deps.reacted_with = f":{emoji_name}:"

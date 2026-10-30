@@ -210,3 +210,22 @@ def test_a_falsy_auto_accept_still_reviews(repo, monkeypatch):
     result = agent_mod.create_skill(_ctx(USER), "Cool Skill", "does a thing", "Steps.")
     assert result.startswith("Submitted for review")
     assert not (repo.root / "skills" / "cool-skill").exists()
+
+
+def test_update_skill_changes_only_what_was_passed(repo):
+    skill = repo.root / "skills" / "flaron-api"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: flaron-api\ndescription: 'other documented Flaron API data'\nlicense: MIT\n---\n\n# Flaron\n\nOld steps.\n"
+    )
+    result = agent_mod.update_skill(_ctx(ADMIN_USER_ID), "flaron-api", description="Look up channels: names and ids.")
+    assert "LIVE now" in result
+    text = (skill / "SKILL.md").read_text()
+    assert "Look up channels: names and ids." in text and "license: MIT" in text and "Old steps." in text
+    assert agent_mod._validate_skill_md(text) == (True, "")
+
+    assert "Submitted for review" in agent_mod.update_skill(_ctx(), "flaron-api", body="New steps.")
+    assert "Old steps." in (skill / "SKILL.md").read_text()
+    _click(handle_skill_review_approve, _proposal_id(repo.dms))
+    text = (skill / "SKILL.md").read_text()
+    assert "New steps." in text and "Old steps." not in text and "names and ids" in text

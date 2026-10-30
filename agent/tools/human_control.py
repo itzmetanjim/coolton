@@ -3,7 +3,8 @@
 coolton doesn't solve those checks itself. Instead, the person who asked gets a private
 link that controls the sandbox's desktop for a few minutes (desktop_helpers.start_control,
 a VNC server separate from the view-only stream), gets past the check in coolton's
-browser, and coolton carries on. Control ends when coolton calls the tool with
+browser, and coolton carries on (sooner if they click "I'm done", which wakes it from
+its wait: done()). Control ends when coolton calls the tool with
 finished=True or after CONTROL_SECONDS. It outlives the turn that started it on purpose:
 coolton waits for the person with wait_tool, which ends the turn and resumes later, so the
 end of a turn leaves the sandbox running while control is on (agent.agent.run_agent), and
@@ -43,6 +44,26 @@ def start(channel_id: str, thread_ts: str) -> str:
 def active(channel_id: str, thread_ts: str) -> bool:
     with _lock:
         return (channel_id, thread_ts) in _timers
+
+
+DONE_NOTE = ("the person you handed the human check to clicked \"I'm done\". Take a screenshot to "
+             "confirm the page is past it (if it isn't, ask them again), then call "
+             "ask_human_for_challenge_tool with finished=true and carry on")
+
+
+def done(channel_id: str, thread_ts: str) -> bool:
+    """The person says they're past the check: wake coolton now instead of when its wait
+    ends. Control stays on until coolton has looked. Returns whether control was on."""
+    if not active(channel_id, thread_ts):
+        return False
+    from agent.active_runs import is_run_active
+    from agent.scheduler import end_waits_early
+
+    if not end_waits_early(channel_id, thread_ts, DONE_NOTE) and is_run_active(channel_id, thread_ts):
+        from agent.steering_store import queue_steering_message
+
+        queue_steering_message(channel_id, thread_ts, f"[SYSTEM: {DONE_NOTE}.]", user_id="", message_ts="")
+    return True
 
 
 def stop(channel_id: str, thread_ts: str) -> bool:

@@ -72,7 +72,7 @@ TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
     "custom_emoji": ("Does this involve custom Slack emoji: adding, uploading or making a new one?", frozenset({"upload_emoji_tool"})),
     "coolton_feedback": ("Is the user reporting a bug or problem with coolton itself, complaining about it, or giving feedback, ideas or suggestions about coolton?", frozenset({"submit_feedback_tool"})),
     "skills": ("Does this involve changing coolton's skills (its reusable playbooks): creating, installing, renaming, editing or deleting one?", frozenset({
-        "create_skill", "rename_skill", "delete_skill", "install_skill"})),
+        "create_skill", "update_skill", "rename_skill", "delete_skill", "install_skill"})),
     "live_view": ("Does the user want to watch what coolton is doing live: a live stream or view link of its browser or desktop, or keeping its sandbox running?", frozenset({
         "set_sandbox_keepalive_tool", "computer_stream_tool", "agent_browser_stream_tool",
         "ask_human_for_challenge_tool"})),
