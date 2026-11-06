@@ -133,7 +133,7 @@ def get_runtime_model(deps_user_id: str | None = None):
         return provider_config.build_model(model_name, api_key)
     raise RuntimeError(
         "No AI provider configured. "
-        "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or HCAI_API_KEY."
+        "Set HCAI_API_KEY, INCEPTION_API_KEY or GROQ_API_KEY."
     )
 
 
