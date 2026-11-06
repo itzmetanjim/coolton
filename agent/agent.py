@@ -1757,11 +1757,13 @@ def run_opencode_tool(ctx: RunContext[AgentDeps], task: str, model: str = "") ->
     
     Opencode is an open-source AI coding agent (like Claude Code).
     It can read/write files, run commands, and use tools to complete tasks.
-    Install it first with install_opencode_tool.
+    Install it first with install_opencode_tool. It only runs on free models that don't train
+    on what's sent. "Free usage limit reached" in its output means OpenCode is refusing the
+    sandbox: say so and do the work another way.
     
     Args:
         task: The task/question for opencode to complete.
-        model: Optional model override (e.g., "anthropic/claude-sonnet-4-6").
+        model: "opencode/glm-5.3-flash-free" (the default) or "opencode/deepseek-v4.1-flash-free".
     """
     from agent.tools.data_analysis import run_opencode_in_sandbox
     return run_opencode_in_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts, task, model)

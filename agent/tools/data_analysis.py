@@ -205,6 +205,15 @@ def run_sql_on_csv(channel_id: str, thread_ts: str, csv_path: str, sql_query: st
         return f"Error running SQL: {str(e)}"
 
 
+# OpenCode's free models whose provider keeps nothing and doesn't train on it, per its docs
+# (opencode.ai/docs/zen); most of the others may use what's sent. The first is the default.
+OPENCODE_MODELS = ("opencode/glm-5.3-flash-free", "opencode/deepseek-v4.1-flash-free")
+# Where its installer puts it when `npm install -g` isn't allowed; only .bashrc adds it to PATH.
+_OPENCODE_PATH = 'PATH="$HOME/.opencode/bin:$PATH"'
+_OPENCODE_INSTALL = "npm install -g opencode-ai 2>&1 || curl -fsSL https://opencode.ai/install | bash 2>&1"
+_OPENCODE_TIMEOUT = 280
+
+
 def run_opencode_in_sandbox(channel_id: str, thread_ts: str, task: str, model: str = "") -> str:
     """Run opencode in the sandbox to perform complex coding tasks.
     
@@ -215,28 +224,35 @@ def run_opencode_in_sandbox(channel_id: str, thread_ts: str, task: str, model: s
         channel_id: Slack channel ID.
         thread_ts: Thread timestamp.
         task: The task/question for opencode to complete.
-        model: Optional model override (e.g., "anthropic/claude-sonnet-4-6").
+        model: One of OPENCODE_MODELS (default: the first).
         
     Returns:
         Opencode's output/results.
     """
+    model = model or OPENCODE_MODELS[0]
+    if model not in OPENCODE_MODELS:
+        return f"Error: opencode only runs on models that don't train on what's sent: {', '.join(OPENCODE_MODELS)}."
     sandbox, err = _get_sandbox(channel_id, thread_ts)
     if err:
         return err
     try:
         # Install opencode if not present
-        install_check = run_command(sandbox, "which opencode || echo 'not found'")
+        install_check = run_command(sandbox, f"{_OPENCODE_PATH} which opencode || echo 'not found'")
         if "not found" in install_check.stdout:
             # Install via npm (requires node/npm)
-            install_result = run_command(sandbox, "npm install -g opencode-ai 2>&1 || curl -fsSL https://opencode.ai/install | bash 2>&1")
+            install_result = run_command(sandbox, _OPENCODE_INSTALL)
             if install_result.stderr and "error" in install_result.stderr.lower():
                 return f"Failed to install opencode: {install_result.stderr}"
         
         # opencode reads the task from stdin; both it and the model are quoted, so an
-        # apostrophe in the task doesn't end the string early.
-        model_flag = f"--model {shlex.quote(model)}" if model else ""
-        cmd = f"printf '%s' {shlex.quote(task)} | opencode run {model_flag} 2>&1"
-        result = run_command(sandbox, cmd, timeout=300)
+        # apostrophe in the task doesn't end the string early. small_model pins its background
+        # calls (session titles) too. It retries an API error until it's killed and only logs
+        # it, so the logs are on and `timeout` ends it.
+        config = shlex.quote(json.dumps({"model": model, "small_model": model}))
+        cmd = (f"printf '%s' {shlex.quote(task)} | {_OPENCODE_PATH} OPENCODE_CONFIG_CONTENT={config} "
+               f"timeout {_OPENCODE_TIMEOUT} opencode run --model {shlex.quote(model)} "
+               "--print-logs --log-level ERROR 2>&1")
+        result = run_command(sandbox, cmd, timeout=_OPENCODE_TIMEOUT + 20)
         
         output = []
         if result.stdout:
@@ -264,14 +280,14 @@ def install_opencode_in_sandbox(channel_id: str, thread_ts: str) -> str:
         return err
     try:
         # Check if already installed
-        check = run_command(sandbox, "which opencode")
+        check = run_command(sandbox, f"{_OPENCODE_PATH} which opencode")
         if check.stdout.strip():
             return f"Opencode already installed at: {check.stdout.strip()}"
         
         # Install via npm
-        result = run_command(sandbox, "npm install -g opencode-ai 2>&1")
+        result = run_command(sandbox, _OPENCODE_INSTALL)
         if result.stdout:
-            return f"Installed via npm:\n{result.stdout}"
+            return f"Install output:\n{result.stdout}"
         if result.stderr:
             return f"STDERR:\n{result.stderr}"
         return "Installation attempted (check output)."

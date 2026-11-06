@@ -40,7 +40,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 - Reads, writes, edits and searches files in the sandbox.
 - Long-running commands (dev servers, watchers, builds) in the background; coolton is told automatically when one finishes, even after its turn ended. After 2 hours without anyone checking on a job, coolton stops watching it and stops keeping the sandbox awake for it.
 - GitHub as coolton-agent: clone, commit, push to its own fork, open PRs, read issues and PRs with `gh`.
-- Hands big coding jobs to opencode, an open-source coding agent, in the sandbox *(deferred)*.
+- Hands big coding jobs to opencode, an open-source coding agent, in the sandbox, on free models that don't train on what's sent *(deferred)*. OpenCode's free usage limit can refuse sandboxes.
 - `code_mode`: runs a Python program in the sandbox that calls coolton's own tools in a loop, for bulk work like checking hundreds of Slack members.
 - Data analysis on CSVs and spreadsheets: pandas summaries, SQL with DuckDB, arbitrary analysis code, and unpacking .tar.gz archives *(deferred)*.
 
