@@ -63,7 +63,7 @@ two things only: bare social replies & one-line factual lookups ("hi", "what is 
 ### reliability
 
 - **multi-provider fallback**: one ordered chain (`providers.json` + `agent/agent.py`) tries
-  HCAI, Inception's Mercury and Groq in sequence, so the bot keeps answering when one provider
+  HCAI, Inception's Mercury, OpenRouter and Groq in sequence, so the bot keeps answering when one provider
   is down, rate-limited, or out of credits. Providers that train on what's sent to them aren't
   used.
 - **fallback cache**: remembers which provider last worked and which ones are currently dead, so
@@ -243,6 +243,7 @@ wins, falling through on failure.
 | --- | --- |
 | `HCAI_API_KEY` | HCAI gateway |
 | `INCEPTION_API_KEY` | Inception Labs (Mercury) |
+| `OPENROUTER_API_KEY_FALLBACK` | OpenRouter (free models from hosts that don't collect data) |
 | `GROQ_API_KEY` | Groq |
 
 everything else in `.env.sample` is optional and additive.

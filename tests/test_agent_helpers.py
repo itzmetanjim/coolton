@@ -540,6 +540,7 @@ def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
     [
         "HCAI_API_KEY",
         "INCEPTION_API_KEY",
+        "OPENROUTER_API_KEY_FALLBACK",
         "GROQ_API_KEY",
     ],
 )
@@ -558,6 +559,14 @@ def test_get_model_accepts_documented_provider_keys(monkeypatch, clean_env, env_
     monkeypatch.setenv(env_key, "test-key")
     result = agent_mod.get_model()
     assert result.model_name == expected.split(":", 1)[-1]
+
+
+def test_openrouter_models_only_use_hosts_that_dont_collect_data():
+    from agent.provider_config import build_model
+
+    model = build_model("openrouter:some/model:free", "k")
+    assert model.model_name == "some/model:free"
+    assert model.settings["openrouter_provider"]["data_collection"] == "deny"
 
 
 # ---------------------------------------------------------------------------

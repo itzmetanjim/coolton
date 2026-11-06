@@ -362,6 +362,14 @@ def build_model(model_name: str, api_key: str | None):
     from pydantic_ai.models import infer_model
     from pydantic_ai.providers import infer_provider_class
 
+    if model_name.startswith("openrouter:"):
+        from pydantic_ai.models.openrouter import OpenRouterModel
+        from pydantic_ai.providers.openrouter import OpenRouterProvider
+
+        # Only hosts OpenRouter lists as not collecting what's sent. A free model's host can
+        # change; if none qualifies the request fails and the chain moves on.
+        return OpenRouterModel(model_name.split(":", 1)[1], provider=OpenRouterProvider(api_key=api_key),
+                               settings={"openrouter_provider": {"data_collection": "deny"}})
     return infer_model(model_name, provider_factory=lambda provider: infer_provider_class(provider)(api_key=api_key))
 
 
