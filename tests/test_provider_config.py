@@ -367,3 +367,55 @@ def test_provider_family_strips_the_generated_index_suffix():
 def test_provider_family_leaves_an_unindexed_name_alone():
     assert provider_config.provider_family("hcai") == "hcai"
     assert provider_config.provider_family("byok") == "byok"
+
+
+def _tag_only_config(isolated_config, monkeypatch):
+    monkeypatch.setenv("P1_KEY", "k")
+    monkeypatch.setenv("COOLTON_OWNER_USER_ID", "UOWNER")
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": "https://p1.test/v1", "api_key_env_var_name": "P1_KEY"}],
+        "models": [
+            {"provider": "p1", "model": "chain", "tags": ["chain", "vision"], "context_window": 100_000},
+            {"provider": "p1", "model": "public", "tags": ["public", "vision"], "context_window": 50_000, "tag_only": True},
+            {"provider": "p1", "model": "private", "tags": ["private", "vision"], "context_window": 50_000,
+             "tag_only": True, "owner_only": True},
+        ],
+    })
+
+
+def _models(user_id, tag=None):
+    return [config["model"] for _, config in provider_config.build_provider_order(user_id, tag)]
+
+
+def test_tag_only_models_stay_out_of_every_shared_route(isolated_config, monkeypatch):
+    _tag_only_config(isolated_config, monkeypatch)
+    assert _models("UOWNER") == ["chain"]
+    assert _models("UOWNER", "vision") == ["chain"]
+    assert [entry[3] for entry in provider_config.build_vision_chain()] == ["chain"]
+    assert provider_config.get_min_context_window() == 100_000
+
+
+def test_tag_only_model_is_reachable_by_its_own_tag(isolated_config, monkeypatch):
+    _tag_only_config(isolated_config, monkeypatch)
+    assert _models("USOMEONE", "public") == ["public"]
+    assert provider_config.extract_tag_directive("[!WITH:public] hi", "USOMEONE")[1] == "public"
+    assert provider_config.get_min_context_window("public") == 50_000
+
+
+def test_owner_only_model_is_refused_and_hidden_from_everyone_else(isolated_config, monkeypatch):
+    _tag_only_config(isolated_config, monkeypatch)
+    assert _models("UOWNER", "private") == ["private"]
+    assert provider_config.extract_tag_directive("[!WITH:private] hi", "UOWNER")[1] == "private"
+
+    assert _models("USOMEONE", "private") == []
+    _, tag, error = provider_config.extract_tag_directive("[!WITH:private] hi", "USOMEONE")
+    assert tag is None
+    assert "Invalid tag" in error
+    assert "`private`" not in error.split("Current tags are:")[1].split(". Use")[0]
+
+
+def test_owner_only_model_is_nobodys_when_the_owner_is_not_configured(isolated_config, monkeypatch):
+    _tag_only_config(isolated_config, monkeypatch)
+    monkeypatch.delenv("COOLTON_OWNER_USER_ID")
+    assert _models(None, "private") == []
+    assert _models("UOWNER", "private") == []

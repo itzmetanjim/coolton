@@ -169,7 +169,7 @@ def run_agent_turn(
         from agent.fast_mode import extract_fast_directive
         text, fast = extract_fast_directive(text)
         from agent.provider_config import extract_tag_directive
-        text, tag_filter, tag_error = extract_tag_directive(text)
+        text, tag_filter, tag_error = extract_tag_directive(text, user_id)
         if tag_error:
             if say:
                 say(text=tag_error, thread_ts=thread_ts)

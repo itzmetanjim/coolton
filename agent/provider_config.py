@@ -63,8 +63,28 @@ def _is_chat_model(entry: dict) -> bool:
     return entry.get("kind", "chat") == "chat"
 
 
-def get_all_tags() -> list[str]:
-    """All distinct model tags declared in providers.json, sorted.
+def _matches_tag(entry: dict, tag: str | None) -> bool:
+    """Whether a model serves a turn asking for `tag` (None: the normal chain).
+
+    A `tag_only` model stays out of the chain and answers only to its first tag, so
+    `[!WITH:sonnet-5]` reaches it but a shared tag like `[!WITH:vision]` doesn't.
+    """
+    tags = entry.get("tags") or []
+    if entry.get("tag_only"):
+        return bool(tags) and tag == tags[0]
+    return not tag or tag in tags
+
+
+def _may_use(entry: dict, user_id: str | None) -> bool:
+    """An `owner_only` model is for COOLTON_OWNER_USER_ID alone; if that's unset, nobody."""
+    if not entry.get("owner_only"):
+        return True
+    owner = os.environ.get("COOLTON_OWNER_USER_ID")
+    return bool(owner) and user_id == owner
+
+
+def get_all_tags(user_id: str | None = None) -> list[str]:
+    """All distinct model tags `user_id` can pick, sorted.
 
     Chat models only (see _is_chat_model) — an image-gen tag like
     "image-high" is not a valid `[!WITH:tag]` target (that directive picks
@@ -72,9 +92,10 @@ def get_all_tags() -> list[str]:
     """
     tags: set[str] = set()
     for m in _get_models():
-        if not _is_chat_model(m):
+        if not _is_chat_model(m) or not _may_use(m, user_id):
             continue
-        tags.update(m.get("tags") or [])
+        model_tags = m.get("tags") or []
+        tags.update(model_tags[:1] if m.get("tag_only") else model_tags)
     return sorted(tags)
 
 
@@ -94,7 +115,7 @@ def get_min_context_window(tag: str | None = None, default: int = 128_000) -> in
     for model_entry in _get_models():
         if not _is_chat_model(model_entry):
             continue
-        if tag and tag not in (model_entry.get("tags") or []):
+        if not _matches_tag(model_entry, tag):
             continue
         pconf = pmap.get(model_entry["provider"])
         if not pconf:
@@ -135,7 +156,7 @@ def is_vision_model(model_name: str) -> bool:
 _TAG_DIRECTIVE_RE = re.compile(r"(\\)?\[!WITH:([^\]]*)\]")
 
 
-def extract_tag_directive(text: str) -> tuple[str, str | None, str | None]:
+def extract_tag_directive(text: str, user_id: str | None = None) -> tuple[str, str | None, str | None]:
     """Parse a `[!WITH:tag]` directive out of `text`, forcing the provider
     fallback chain to only try models carrying that tag for the turn.
 
@@ -152,7 +173,7 @@ def extract_tag_directive(text: str) -> tuple[str, str | None, str | None]:
     """
     found_tag: str | None = None
     invalid_tag: str | None = None
-    known_tags = get_all_tags()
+    known_tags = get_all_tags(user_id)
 
     def _sub(match: re.Match) -> str:
         nonlocal found_tag, invalid_tag
@@ -290,7 +311,7 @@ def build_provider_order(user_id: str | None = None, tag: str | None = None) -> 
     for model_idx, model_entry in enumerate(_get_models()):
         if not _is_chat_model(model_entry):
             continue
-        if tag and tag not in (model_entry.get("tags") or []):
+        if not _matches_tag(model_entry, tag) or not _may_use(model_entry, user_id):
             continue
         pid = model_entry["provider"]
         pconf = pmap.get(pid)
@@ -338,7 +359,7 @@ def build_vision_chain() -> list[tuple[str, str, str, str]]:
     chain: list[tuple[str, str, str, str]] = []
 
     for entry in _get_models():
-        if "vision" not in (entry.get("tags") or []):
+        if "vision" not in (entry.get("tags") or []) or entry.get("tag_only"):
             continue
         pid = entry["provider"]
         pconf = pmap.get(pid)
@@ -392,7 +413,7 @@ def get_model_from_config(user_id: str | None = None):
     """The first viable model in the config, ready to run: an OpenAIChatModel for
     base_url providers (HCAI/BYOK), otherwise the provider's own model class."""
     for model_entry in _get_models():
-        if not _is_chat_model(model_entry):
+        if not _is_chat_model(model_entry) or model_entry.get("tag_only"):
             continue
         pid = model_entry["provider"]
         pconf = _provider_map().get(pid, {})
