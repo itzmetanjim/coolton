@@ -11,7 +11,8 @@ import pytest
 from pydantic_ai import RunContext
 
 from agent import slack_access
-from agent.slack_access import check_api_call, file_info_read_error
+from agent.created_slack_files import created_file_id, remember
+from agent.slack_access import api_error_note, check_api_call, file_info_read_error
 from agent.slack_mcp_guard import GuardedSlackMCPToolset, guard_args
 
 ASKER = "U0ASKER1"
@@ -440,3 +441,60 @@ def test_guarded_toolset_hides_blocked_tools_and_returns_refusals():
     assert set(asyncio.run(toolset.get_tools(ctx))) == {"slack_read_thread"}
     assert asyncio.run(toolset.call_tool("slack_add_reaction", {"channel_id": "C1"}, ctx, None)) == "called slack_add_reaction"
     assert "isn't available" in asyncio.run(toolset.call_tool("slack_send_message", {}, ctx, None))
+
+
+# ---------------------------------------------------------------------------
+# Canvases and lists coolton created
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("result", [
+    '{"canvas_id":"F0ABC123XYZ","canvas_url":"https:\\/\\/x.slack.com\\/docs\\/T1\\/F0ABC123XYZ"}',
+    {"canvas_id": "F0ABC123XYZ"},
+    "Created: https://x.slack.com/docs/T0266FRGM/F0ABC123XYZ",
+    {"list_id": "F0ABC123XYZ"},
+])
+def test_created_file_id_is_found_in_any_result_shape(result):
+    assert created_file_id(result) == "F0ABC123XYZ"
+
+
+def _unshared_canvas(monkeypatch):
+    monkeypatch.setattr(slack_access, "fetch_file_info", lambda file_id, token: ({"user": "U_COOLTON"}, None))
+    return {"canvas_id": "F1", "sections": []}
+
+
+def test_a_canvas_coolton_created_stays_editable_where_and_for_whom_it_was_made(monkeypatch):
+    args = _unshared_canvas(monkeypatch)
+    assert "refused" in guard_args("slack_update_canvas", args, _deps())[1]
+
+    remember("F1", "C1", ASKER)
+
+    assert guard_args("slack_update_canvas", args, _deps())[1] is None
+    assert guard_args("slack_update_canvas", args, _deps(channel_id="C2"))[1] is None
+    assert guard_args("slack_update_canvas", args, _deps(user_id="U_OTHER"))[1] is None
+    automated = _deps(channel_id="C2", user_id="AUTOMATED", on_behalf_of=ASKER)
+    assert guard_args("slack_update_canvas", args, automated)[1] is None
+
+
+def test_a_created_canvas_stays_closed_to_other_people_in_other_conversations(monkeypatch):
+    args = _unshared_canvas(monkeypatch)
+    remember("F1", "C1", ASKER)
+    assert "refused" in guard_args("slack_update_canvas", args, _deps(channel_id="C2", user_id="U_OTHER"))[1]
+
+
+def test_creating_a_canvas_through_the_guard_remembers_it(monkeypatch):
+    class Inner:
+        async def call_tool(self, name, args, ctx, tool):
+            return '{"canvas_id":"F1NEWCANVAS"}'
+
+    monkeypatch.setattr(slack_access, "fetch_file_info", lambda file_id, token: ({"user": "U_COOLTON"}, None))
+    toolset = GuardedSlackMCPToolset(Inner())
+    ctx = SimpleNamespace(deps=_deps())
+    asyncio.run(toolset.call_tool("slack_create_canvas", {"title": "t"}, ctx, None))
+    assert guard_args("slack_update_canvas", {"canvas_id": "F1NEWCANVAS", "sections": []}, _deps())[1] is None
+
+
+def test_cant_invite_says_not_to_invent_a_cause():
+    assert "don't name a cause" in api_error_note({"ok": False, "error": "cant_invite"})
+    assert api_error_note({"ok": False, "error": "channel_not_found"}) == ""
+

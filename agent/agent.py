@@ -2020,7 +2020,8 @@ def slack_api_call(ctx: RunContext[AgentDeps], method: str, api_parameters: str)
                 if on_success:
                     on_success(res_json)
                 return f"Success: {_redact(str(res_json), context='slack_api_call')}"
-            return f"Slack API error: {_redact(str(res_json), context='slack_api_call')}"
+            from agent.slack_access import api_error_note
+            return f"Slack API error: {_redact(str(res_json), context='slack_api_call')}{api_error_note(res_json)}"
         except Exception as e:
             return f"Error: {_redact(str(e), context='slack_api_call')}"
 

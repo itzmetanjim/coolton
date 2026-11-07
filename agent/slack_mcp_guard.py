@@ -7,7 +7,8 @@ tools:
 
 - reads of a channel, thread, file, canvas, or list follow agent.slack_access
   (the current conversation, or public channels/files, only), and so do edits
-  of an existing canvas or list;
+  of an existing canvas or list, except that a canvas or list coolton created stays
+  usable from that conversation and by whoever asked for it (agent.created_slack_files);
 - listing or searching channels only ever covers public ones (cooltonUser's own
   private channels and DMs aren't anyone else's to know about);
 - creating a channel goes through slack_api_call's conversations.create instead,
@@ -25,6 +26,7 @@ tools:
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +34,9 @@ from pydantic_ai import RunContext
 from pydantic_ai.toolsets import WrapperToolset
 
 from agent.attribution import attribute_text, attribution_user_id
+from agent.created_slack_files import created_file_id, created_for, remember
+
+logger = logging.getLogger(__name__)
 
 # slack_search_public is the same keyword search as coolton's own search_slack_tool (no
 # semantic search on this workspace), so it's off: one message search, the cheaper one.
@@ -55,6 +60,8 @@ _FILE_READ_TOOLS = {
     "slack_add_list_record": "list_id",
     "slack_update_list_record": "list_id",
 }
+
+_FILE_CREATE_TOOLS = {"slack_create_canvas", "slack_create_list"}
 
 # Tool -> the arg naming the channel types it lists, and what it lists when that's left out.
 _CHANNEL_LISTING_TOOLS = {
@@ -87,7 +94,7 @@ def guard_args(name: str, args: dict[str, Any], deps: Any) -> tuple[dict[str, An
         if not file_id:
             return None, f"Error: {name} needs an explicit {_FILE_READ_TOOLS[name]} (looking one up by name isn't allowed)."
         denied = file_read_error(file_id, current, getattr(deps, "user_id", "") or "")
-        if denied:
+        if denied and not created_for(file_id, current, attribution_user_id(deps)):
             return None, f"Error: {name} refused — {denied}"
 
     credited = attribution_user_id(deps)
@@ -101,6 +108,14 @@ def guard_args(name: str, args: dict[str, Any], deps: Any) -> tuple[dict[str, An
     return args, None
 
 
+def _remember_created(name: str, result: Any, deps: Any) -> None:
+    file_id = created_file_id(result)
+    if not file_id:
+        logger.warning("Couldn't find the new file's id in %s's result", name)
+        return
+    remember(file_id, getattr(deps, "channel_id", "") or "", attribution_user_id(deps))
+
+
 @dataclass
 class GuardedSlackMCPToolset(WrapperToolset[Any]):
     async def get_tools(self, ctx: RunContext[Any]):
@@ -112,4 +127,7 @@ class GuardedSlackMCPToolset(WrapperToolset[Any]):
         args, error = await asyncio.to_thread(guard_args, name, tool_args, ctx.deps)
         if error:
             return error
-        return await super().call_tool(name, args, ctx, tool)
+        result = await super().call_tool(name, args, ctx, tool)
+        if name in _FILE_CREATE_TOOLS:
+            await asyncio.to_thread(_remember_created, name, result, ctx.deps)
+        return result

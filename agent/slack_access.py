@@ -148,6 +148,15 @@ def channel_read_error(channel_id: str, current_channel_id: str) -> str | None:
     return assert_readable_channel(channel_id, current_channel_id)
 
 
+def api_error_note(res_json: dict) -> str:
+    """Added to a Slack API error whose code invites a wrong explanation."""
+    if res_json.get("error") == "cant_invite":
+        return (" Slack only says this user can't be invited to this channel, not why, so don't "
+                "name a cause such as the channel being private, and don't retry. Report the exact "
+                "error and suggest the person joins themselves or asks someone who manages the channel.")
+    return ""
+
+
 def check_api_call(method: str, params: dict, current_channel_id: str, requester_id: str = "") -> str | None:
     """None if slack_api_call(_as_bot_tool) may make this call, else an
     "Error: ..." string to hand back to the model."""

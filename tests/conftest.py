@@ -63,6 +63,12 @@ def _no_real_dns(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_created_slack_files(tmp_path, monkeypatch):
+    from agent import created_slack_files
+    monkeypatch.setattr(created_slack_files, "CREATED_SLACK_FILES_FILE", str(tmp_path / "created_slack_files.json"))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_leave_thread_store(tmp_path, monkeypatch):
     monkeypatch.setattr(leave_thread_store, "LEAVE_THREAD_STORE_FILE", str(tmp_path / "leave_thread_store.json"))
 

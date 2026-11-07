@@ -120,6 +120,7 @@ private_hooks*
 code_channels.json
 skill_proposals.json
 feedback.json
+created_slack_files.json
 skill_proposals/
 inflight_runs.json
 .gh_proxy_admin_token

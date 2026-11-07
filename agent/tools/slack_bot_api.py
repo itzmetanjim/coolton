@@ -42,7 +42,8 @@ def slack_api_call_as_bot(method: str, api_parameters: dict, on_success=None) ->
                 on_success(res_json)
             return f"Success: {redact(str(res_json), context='slack_api_call_as_bot')}"
 
-        return f"Slack API error: {redact(str(res_json), context='slack_api_call_as_bot')}"
+        from agent.slack_access import api_error_note
+        return f"Slack API error: {redact(str(res_json), context='slack_api_call_as_bot')}{api_error_note(res_json)}"
 
     except Exception as e:
         return f"Error executing Slack API call: {redact(str(e), context='slack_api_call_as_bot')}"
