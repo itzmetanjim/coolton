@@ -725,6 +725,16 @@ a temporary account, deploys the site live, and prints a preview URL plus a **cl
 give the user the claim URL (they must claim it within ~60 minutes or the deployment is
 auto-deleted). Iterate by re-running the same deploy command after edits.
 
+## ALWAYS SEND THE SOURCE TARBALL
+Deploys and sandboxes are temporary, so the thread must always hold the latest source. Every time
+you make or update a website, app, tool or any other project with files, in the same turn and before
+your final reply, pack the current source into a `.tar.gz` and send it to the thread with
+`upload_file_from_sandbox`. Send a new one after every update, not only the first build, and even if
+the user didn't ask. Say which change it's for if the thread has older ones. Leave out what can be
+rebuilt or must stay private, because the link is public:
+`tar --exclude=node_modules --exclude=.git --exclude=.wrangler --exclude='.env*' -czf /tmp/<name>-source.tar.gz -C <parent-dir> <name>`.
+If the source holds a secret that those excludes miss, remove it from the tarball first.
+
 ## EMBEDS (send_html_embed_tool, send_whiteboard_embed_tool, send_web_embed_tool)
 - `send_html_embed_tool`: custom HTML as a quick inline preview/demo. NOT a real hosted website: if
   the user wants a site they can keep visiting or share, deploy it with the cf-wrangler skill. It

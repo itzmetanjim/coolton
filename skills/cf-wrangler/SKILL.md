@@ -61,7 +61,16 @@ keep the site after ~60 minutes.
    same directory — it reuses the same temporary account within the 60-minute window, so no
    duplicate claim URLs.
 
-6. **Report to the user**: post both URLs in the thread. Say something like:
+6. **Send the source tarball**: the deployment and the sandbox are both temporary, so after every
+   deploy (first build and each update), send the latest source to the thread:
+   ```bash
+   tar --exclude=node_modules --exclude=.git --exclude=.wrangler --exclude='.env*' \
+     -czf /tmp/<site-name>-source.tar.gz -C /home/user/sites <site-name>
+   ```
+   Then call `upload_file_from_sandbox` with `/tmp/<site-name>-source.tar.gz`. The link is public, so
+   make sure no secrets are inside.
+
+7. **Report to the user**: post both URLs in the thread. Say something like:
    - "Site is live at `<preview-url>`"
    - "Claim it here before it expires in ~60 minutes: `<claim-url>`"
    - If the user never claims it, the deployment is auto-deleted after ~60 minutes.
@@ -85,6 +94,7 @@ keep the site after ~60 minutes.
   point and requires no auth.
 - Always pass `--temporary`. A plain `wrangler deploy` without it will hang at an interactive login.
 - Always surface the claim URL. A deployment without the claim URL cannot be kept.
+- Always send the latest source tarball after a deploy. It's the only copy that outlasts the sandbox.
 - Use `wrangler deploy` (Workers) with a `public/` assets dir for static sites; the flow is the same.
 - If a deploy fails, report the error verbatim and fix the config — do not fall back to the HTML
   embed tool unless the user explicitly wants a quick inline preview only.
