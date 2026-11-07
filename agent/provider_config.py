@@ -67,7 +67,7 @@ def _matches_tag(entry: dict, tag: str | None) -> bool:
     """Whether a model serves a turn asking for `tag` (None: the normal chain).
 
     A `tag_only` model stays out of the chain and answers only to its first tag, so
-    `[!WITH:sonnet-5]` reaches it but a shared tag like `[!WITH:vision]` doesn't.
+    `[!WITH:kavyansh-sonnet-5]` reaches it but a shared tag like `[!WITH:vision]` doesn't.
     """
     tags = entry.get("tags") or []
     if entry.get("tag_only"):

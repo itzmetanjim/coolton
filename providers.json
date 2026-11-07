@@ -19,8 +19,8 @@
     {"provider": "openrouter_fb", "model": "openrouter:cohere/north-mini-code:free", "display": "OpenRouter Cohere North Mini Code (free)", "tags": ["north-mini-code", "free"], "context_window": 256000},
     {"provider": "groq", "model": "groq:openai/gpt-oss-120b", "display": "Groq GPT-OSS-120B", "tags": ["gpt-oss-120b"], "context_window": 131072},
     {"provider": "groq", "model": "groq:openai/gpt-oss-20b", "display": "Groq GPT-OSS-20B", "tags": ["gpt-oss-20b"], "context_window": 131072},
-    {"provider": "kavyansh", "model": "claude-sonnet-5", "display": "Kavyansh Claude Sonnet 5", "tags": ["sonnet-5", "vision"], "context_window": 200000, "tag_only": true},
-    {"provider": "kavyansh", "model": "claude-opus-5", "display": "Kavyansh Claude Opus 5", "tags": ["opus-5", "vision"], "context_window": 200000, "tag_only": true, "owner_only": true},
+    {"provider": "kavyansh", "model": "claude-sonnet-5", "display": "Kavyansh Claude Sonnet 5", "tags": ["kavyansh-sonnet-5", "vision"], "context_window": 200000, "tag_only": true},
+    {"provider": "kavyansh", "model": "claude-opus-5", "display": "Kavyansh Claude Opus 5", "tags": ["kavyansh-opus-5", "vision"], "context_window": 200000, "tag_only": true, "owner_only": true},
     {"provider": "hcai", "model": "google/gemini-3-pro-image-preview", "display": "HCAI Gemini 3 Pro Image (high)", "tags": ["image-high"], "kind": "image"},
     {"provider": "hcai", "model": "google/gemini-2.5-flash-image", "display": "HCAI Gemini 2.5 Flash Image (low)", "tags": ["image-low"], "kind": "image"},
     {"provider": "hcai", "model": "jev-latest", "display": "HCAI Jev", "tags": ["jev"], "kind": "jev", "api_path": "/jev/systemone"}
