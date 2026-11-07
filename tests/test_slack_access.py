@@ -4,13 +4,15 @@ the person asking, so reads outside the current conversation are limited to
 public channels, and the generic API tools only reach allowlisted methods."""
 import asyncio
 import importlib
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 from pydantic_ai import RunContext
+from pydantic_ai.tools import ToolDefinition
 
-from agent import slack_access
+from agent import canvas_sharing, slack_access, slack_mcp_guard
 from agent.created_slack_files import created_file_id, remember
 from agent.slack_access import api_error_note, check_api_call, file_info_read_error
 from agent.slack_mcp_guard import GuardedSlackMCPToolset, guard_args
@@ -482,16 +484,124 @@ def test_a_created_canvas_stays_closed_to_other_people_in_other_conversations(mo
     assert "refused" in guard_args("slack_update_canvas", args, _deps(channel_id="C2", user_id="U_OTHER"))[1]
 
 
-def test_creating_a_canvas_through_the_guard_remembers_it(monkeypatch):
-    class Inner:
-        async def call_tool(self, name, args, ctx, tool):
-            return '{"canvas_id":"F1NEWCANVAS"}'
+@dataclass
+class _FakeTool:
+    tool_def: ToolDefinition
 
+
+class _CreatesCanvas:
+    def __init__(self):
+        self.sent = None
+
+    async def call_tool(self, name, args, ctx, tool):
+        self.sent = args
+        return '{"canvas_id":"F1NEWCANVAS"}'
+
+
+def _create_canvas(monkeypatch, args, deps=None, problems=()):
+    """Create a canvas through the guard. Returns (result, what Slack got, share call)."""
+    shared = []
+    monkeypatch.setattr(slack_mcp_guard, "share_new_canvas",
+                        lambda *a: shared.append(a) or list(problems))
+    inner = _CreatesCanvas()
+    ctx = SimpleNamespace(deps=deps or _deps())
+    result = asyncio.run(GuardedSlackMCPToolset(inner).call_tool("slack_create_canvas", args, ctx, None))
+    return result, inner.sent, shared[0]
+
+
+def test_creating_a_canvas_through_the_guard_remembers_and_shares_it(monkeypatch):
     monkeypatch.setattr(slack_access, "fetch_file_info", lambda file_id, token: ({"user": "U_COOLTON"}, None))
-    toolset = GuardedSlackMCPToolset(Inner())
-    ctx = SimpleNamespace(deps=_deps())
-    asyncio.run(toolset.call_tool("slack_create_canvas", {"title": "t"}, ctx, None))
+    _, _, shared = _create_canvas(monkeypatch, {"title": "t"})
+    assert shared == ("F1NEWCANVAS", "C1", ASKER, False)
     assert guard_args("slack_update_canvas", {"canvas_id": "F1NEWCANVAS", "sections": []}, _deps())[1] is None
+
+
+def test_private_flag_reaches_the_sharing_but_not_slack(monkeypatch):
+    _, sent, shared = _create_canvas(monkeypatch, {"title": "t", "private": True})
+    assert shared[-1] is True
+    assert "private" not in sent
+
+
+def test_a_failed_share_is_reported_to_the_model(monkeypatch):
+    result, _, _ = _create_canvas(monkeypatch, {"title": "t"}, problems=["C1: restricted_action"])
+    assert "F1NEWCANVAS" in result and "C1: restricted_action" in result
+
+
+def test_the_private_flag_is_offered_on_canvas_creation_only():
+    wrapped = Mock()
+    create = ToolDefinition(name="slack_create_canvas", parameters_json_schema={"properties": {"title": {}}})
+    other = ToolDefinition(name="slack_update_canvas", parameters_json_schema={"properties": {}})
+
+    async def get_tools(ctx):
+        return {d.name: _FakeTool(d) for d in (create, other)}
+
+    wrapped.get_tools = get_tools
+    tools = asyncio.run(GuardedSlackMCPToolset(wrapped).get_tools(SimpleNamespace(deps=_deps())))
+    assert set(tools["slack_create_canvas"].tool_def.parameters_json_schema["properties"]) == {"title", "private"}
+    assert "private" not in tools["slack_update_canvas"].tool_def.parameters_json_schema["properties"]
+    assert "private" not in create.parameters_json_schema["properties"]
+
+
+# ---------------------------------------------------------------------------
+# Who a new canvas is shared with
+# ---------------------------------------------------------------------------
+
+
+def _sharing(monkeypatch, failed_users=()):
+    calls = []
+
+    def fake_call(method, token, payload):
+        if method == "auth.test":
+            return {"ok": True, "user_id": "U_BOT"}
+        calls.append(payload)
+        return {"ok": True, "failed_to_update_user_ids": list(failed_users)} if "user_ids" in payload else {"ok": True}
+
+    monkeypatch.setattr(canvas_sharing, "_call", fake_call)
+    monkeypatch.setenv("SLACK_USER_TOKEN", "u")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "b")
+    monkeypatch.setenv("COOLTON_USER_ID", "U_COOLTON")
+    monkeypatch.setenv("CANVAS_SHARE_CHANNEL_IDS", "C_GEN1, C_GEN2")
+    return calls
+
+
+def _grants(calls):
+    return {(tuple(c.get("channel_ids") or c.get("user_ids")), c["access_level"]) for c in calls}
+
+
+def test_a_canvas_in_a_channel_is_shared_with_it_coolton_and_the_general_channels(monkeypatch):
+    calls = _sharing(monkeypatch)
+    assert canvas_sharing.share_new_canvas("F1", "C1", ASKER) == []
+    assert _grants(calls) == {
+        (("C1",), "write"), (("U_BOT", "U_COOLTON"), "write"), (("C_GEN1", "C_GEN2"), "read"),
+    }
+
+
+def test_a_canvas_in_a_dm_is_shared_with_the_person(monkeypatch):
+    calls = _sharing(monkeypatch)
+    canvas_sharing.share_new_canvas("F1", "D1", ASKER)
+    assert ((ASKER, "U_BOT", "U_COOLTON"), "write") in _grants(calls)
+    assert not any(c.get("channel_ids") == ["D1"] for c in calls)
+
+
+def test_a_private_canvas_skips_the_general_channels(monkeypatch):
+    calls = _sharing(monkeypatch)
+    canvas_sharing.share_new_canvas("F1", "C1", ASKER, private=True)
+    assert _grants(calls) == {(("C1",), "write"), (("U_BOT", "U_COOLTON"), "write")}
+
+
+def test_a_general_channel_keeps_write_access_when_the_canvas_is_made_there(monkeypatch):
+    calls = _sharing(monkeypatch)
+    canvas_sharing.share_new_canvas("F1", "C_GEN1", ASKER)
+    assert _grants(calls) == {
+        (("C_GEN1",), "write"), (("U_BOT", "U_COOLTON"), "write"), (("C_GEN2",), "read"),
+    }
+
+
+def test_the_owner_failing_to_update_is_not_a_problem_but_others_are(monkeypatch):
+    _sharing(monkeypatch, failed_users=["U_COOLTON"])
+    assert canvas_sharing.share_new_canvas("F1", "C1", ASKER) == []
+    _sharing(monkeypatch, failed_users=["U_BOT"])
+    assert canvas_sharing.share_new_canvas("F1", "C1", ASKER) == ["U_BOT: not updated"]
 
 
 def test_cant_invite_says_not_to_invent_a_cause():

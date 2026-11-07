@@ -27,13 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import WrapperToolset
 
 from agent.attribution import attribute_text, attribution_user_id
+from agent.canvas_sharing import share_new_canvas
 from agent.created_slack_files import created_file_id, created_for, remember
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,16 @@ _FILE_READ_TOOLS = {
 }
 
 _FILE_CREATE_TOOLS = {"slack_create_canvas", "slack_create_list"}
+
+# Coolton's own argument on slack_create_canvas; the Slack server never sees it.
+_PRIVATE_ARG = {
+    "type": "boolean",
+    "description": (
+        "Share only with this channel or person and coolton. Leave false and the canvas is also "
+        "readable from the workspace's general channels. Use true for anything private or sensitive, "
+        "or when the user asks."
+    ),
+}
 
 # Tool -> the arg naming the channel types it lists, and what it lists when that's left out.
 _CHANNEL_LISTING_TOOLS = {
@@ -99,6 +110,8 @@ def guard_args(name: str, args: dict[str, Any], deps: Any) -> tuple[dict[str, An
 
     credited = attribution_user_id(deps)
     args = dict(args)
+    if name == "slack_create_canvas":
+        args.pop("private", None)
     if name == "slack_schedule_message":
         args["message"] = attribute_text(str(args.get("message") or ""), credited)
     elif name == "slack_create_list":
@@ -108,19 +121,39 @@ def guard_args(name: str, args: dict[str, Any], deps: Any) -> tuple[dict[str, An
     return args, None
 
 
-def _remember_created(name: str, result: Any, deps: Any) -> None:
+def _with_private_arg(tool: Any) -> Any:
+    schema = dict(tool.tool_def.parameters_json_schema)
+    schema["properties"] = {**schema.get("properties", {}), "private": _PRIVATE_ARG}
+    return replace(tool, tool_def=replace(tool.tool_def, parameters_json_schema=schema))
+
+
+def _after_create(name: str, result: Any, deps: Any, private: bool) -> Any:
+    """Remember a new canvas or list and share a new canvas. Returns the tool's result,
+    with a note if the canvas couldn't be shared with everyone it should be."""
     file_id = created_file_id(result)
     if not file_id:
         logger.warning("Couldn't find the new file's id in %s's result", name)
-        return
-    remember(file_id, getattr(deps, "channel_id", "") or "", attribution_user_id(deps))
+        return result
+    channel_id = getattr(deps, "channel_id", "") or ""
+    requester = attribution_user_id(deps)
+    remember(file_id, channel_id, requester)
+    if name != "slack_create_canvas":
+        return result
+    problems = share_new_canvas(file_id, channel_id, requester, private)
+    if problems:
+        return f"{result}\n\nThe canvas was created, but sharing it partly failed: {'; '.join(problems)}"
+    return result
 
 
 @dataclass
 class GuardedSlackMCPToolset(WrapperToolset[Any]):
     async def get_tools(self, ctx: RunContext[Any]):
         tools = await super().get_tools(ctx)
-        return {name: tool for name, tool in tools.items() if name not in BLOCKED_SLACK_MCP_TOOLS}
+        return {
+            name: _with_private_arg(tool) if name == "slack_create_canvas" else tool
+            for name, tool in tools.items()
+            if name not in BLOCKED_SLACK_MCP_TOOLS
+        }
 
     async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: RunContext[Any], tool) -> Any:
         # The read checks make blocking Slack API calls — keep them off the loop.
@@ -129,5 +162,6 @@ class GuardedSlackMCPToolset(WrapperToolset[Any]):
             return error
         result = await super().call_tool(name, args, ctx, tool)
         if name in _FILE_CREATE_TOOLS:
-            await asyncio.to_thread(_remember_created, name, result, ctx.deps)
+            private = tool_args.get("private") in (True, "true")
+            return await asyncio.to_thread(_after_create, name, result, ctx.deps, private)
         return result

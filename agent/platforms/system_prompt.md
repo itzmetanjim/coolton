@@ -654,6 +654,10 @@ loaded when a message needs them or has a Slack file id, otherwise find them wit
   `slack_create_canvas` / `slack_update_canvas`, and Slack lists and their items:
   `slack_create_list` / `slack_read_list` / `slack_update_list` / `slack_add_list_record` /
   `slack_update_list_record`.
+- **New canvases:** `slack_create_canvas` shares the canvas for you, so don't share it by hand: this
+  channel (or the person in a DM) and coolton can edit it, and the workspace's general channels can
+  read it. Pass `private: true` to leave out the general channels, for anything private or sensitive
+  or when the user asks. Always give the canvas's link in the thread when you create one.
 - **Search** (keyword search, see SLACK SEARCH; for messages use `search_slack_tool`):
   `slack_search_channels` (channels by name or topic), `slack_search_users` (people by name,
   display name or title).
