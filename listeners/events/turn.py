@@ -98,6 +98,16 @@ def _post_debug_report(conv_surface, debug_timer, logger) -> None:
         logger.exception("Failed to post [!DEBUG] timing report")
 
 
+def cut_off_note(result) -> str:
+    """A note for a final reply the model stopped writing because it hit its output limit,
+    so a cut-off answer is never passed off as complete."""
+    response = getattr(result, "response", None)
+    if getattr(response, "finish_reason", None) != "length":
+        return ""
+    return ("\n\n_This reply hit the model's output limit and was cut off here. "
+            "Say \"continue\" for the rest._")
+
+
 def run_agent_turn(
     *,
     client: WebClient,
@@ -256,7 +266,7 @@ def run_agent_turn(
         else:
             finalize_plan_message(deps, result.output)
 
-            output = _redact(result.output, context="final response")
+            output = _redact(result.output, context="final response") + cut_off_note(result)
             if is_slack:
                 feedback_blocks = build_feedback_blocks(_turn_footer(channel_id, thread_ts, turn_started))
                 if not thread_ts:

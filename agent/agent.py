@@ -4223,6 +4223,10 @@ def _run_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | None =
                 if model_name.lower().startswith("anthropic/"):
                     settings = {**settings, "extra_body": {**(settings.get("extra_body") or {}),
                                                            "cache_control": {"type": "ephemeral"}}}
+                # Without its own limit, a gateway picks one: the Kavyansh proxy stops every
+                # reply at 4,096 tokens, which cut long answers off mid-sentence.
+                if prov_config.get("max_output_tokens"):
+                    settings = {**settings, "max_tokens": prov_config["max_output_tokens"]}
                 run_kwargs["model_settings"] = settings
                 result = agent_dynamic.run_sync(**run_kwargs)
                 if timer:

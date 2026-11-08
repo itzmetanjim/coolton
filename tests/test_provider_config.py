@@ -419,3 +419,16 @@ def test_owner_only_model_is_nobodys_when_the_owner_is_not_configured(isolated_c
     monkeypatch.delenv("COOLTON_OWNER_USER_ID")
     assert _models(None, "private") == []
     assert _models("UOWNER", "private") == []
+
+
+def test_a_models_output_limit_reaches_its_run(isolated_config, monkeypatch):
+    monkeypatch.setenv("P1_KEY", "k")
+    isolated_config({
+        "providers": [{"id": "p1", "api_url": "https://p1.test/v1", "api_key_env_var_name": "P1_KEY"}],
+        "models": [{"provider": "p1", "model": "long", "tags": ["a"], "max_output_tokens": 32000},
+                   {"provider": "p1", "model": "plain", "tags": ["b"]}],
+    })
+    configs = [config for _, config in provider_config.build_provider_order(None)]
+    assert configs[0]["max_output_tokens"] == 32000
+    assert "max_output_tokens" not in configs[1]
+

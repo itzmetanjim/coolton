@@ -773,3 +773,11 @@ def test_session_status_waits_until_the_thread_has_a_reply(mocks, message_ts, pl
     assert bool(statuses) == expect_status
     if expect_status:
         assert order.index("plan") < order.index("agents.sessions.setStatus")
+
+
+def test_a_reply_cut_off_by_the_output_limit_says_so():
+    cut = SimpleNamespace(response=SimpleNamespace(finish_reason="length"))
+    whole = SimpleNamespace(response=SimpleNamespace(finish_reason="stop"))
+    assert "cut off" in turn.cut_off_note(cut)
+    assert turn.cut_off_note(whole) == ""
+    assert turn.cut_off_note(SimpleNamespace()) == ""
