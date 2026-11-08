@@ -3845,6 +3845,21 @@ def _claude_through_gateway(prov_config: dict, http_client):
     return OpenRouterModel(prov_config["model"], provider=provider, profile=profile)
 
 
+def anthropic_gateway_settings(settings: dict, fast: bool = False) -> dict:
+    """`settings` for a Claude model behind an Anthropic-compatible gateway. A gateway may
+    not support Anthropic's automatic top-level caching, so the cache breakpoint goes on
+    the last message block instead (plus the instructions and tool definitions, already
+    set), which the Kavyansh proxy honors. A non-streaming request with a large max_tokens
+    needs an explicit timeout, or Anthropic's SDK refuses it outright."""
+    settings = {k: v for k, v in settings.items() if k != "anthropic_cache"}
+    settings.update(anthropic_cache_instructions=True, anthropic_cache_tool_definitions=True,
+                    anthropic_cache_messages=True)
+    settings.setdefault("timeout", 900)
+    if not fast:
+        settings.setdefault("anthropic_effort", "high")
+    return settings
+
+
 def chain_model(prov_config: dict, http_client=None):
     """The pydantic-ai model for one entry of the provider order: endpoints with a base_url
     (BYOK, HCAI) through the OpenAI-compatible API (Claude behind HCAI's gateway through
@@ -3852,6 +3867,16 @@ def chain_model(prov_config: dict, http_client=None):
     model_name = prov_config["model"]
     if not prov_config.get("base_url"):
         return provider_config.build_model(model_name, prov_config.get("api_key"))
+    if prov_config.get("api_style") == "anthropic":
+        # An Anthropic-compatible endpoint (the Kavyansh proxy): its /v1/messages honors
+        # Claude's cache markers, which its OpenAI-compatible route ignored (0 cached
+        # tokens on every request, checked live 2026-11-08).
+        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
+
+        return AnthropicModel(model_name, provider=AnthropicProvider(
+            base_url=prov_config["base_url"], api_key=prov_config["api_key"], http_client=http_client,
+        ))
     if model_name.lower().startswith("anthropic/"):
         return _claude_through_gateway(prov_config, http_client)
     from pydantic_ai.models.openai import OpenAIChatModel
@@ -4227,6 +4252,8 @@ def _run_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | None =
                 # reply at 4,096 tokens, which cut long answers off mid-sentence.
                 if prov_config.get("max_output_tokens"):
                     settings = {**settings, "max_tokens": prov_config["max_output_tokens"]}
+                if prov_config.get("api_style") == "anthropic":
+                    settings = anthropic_gateway_settings(settings, fast=deps.fast)
                 run_kwargs["model_settings"] = settings
                 result = agent_dynamic.run_sync(**run_kwargs)
                 if timer:

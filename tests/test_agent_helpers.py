@@ -2453,3 +2453,17 @@ def test_web_search_for_one_specific_page_says_to_fetch_it(monkeypatch, query, p
         assert result.startswith("Not searched") and f"fetch_url_tool(url={page!r})" in result
     else:
         assert result == "SEARCHED"
+
+
+def test_an_anthropic_style_gateway_gets_claudes_own_api_with_per_message_caching():
+    from pydantic_ai.models.anthropic import AnthropicModel
+
+    model = agent_mod.chain_model({"model": "claude-haiku-5-5", "base_url": "https://gw.test",
+                                   "api_key": "k", "api_style": "anthropic"})
+    assert isinstance(model, AnthropicModel)
+
+    settings = agent_mod.anthropic_gateway_settings({"anthropic_cache": True, "max_tokens": 32000})
+    assert "anthropic_cache" not in settings
+    assert settings["anthropic_cache_messages"] and settings["anthropic_cache_instructions"]
+    assert settings["timeout"] == 900 and settings["anthropic_effort"] == "high"
+    assert "anthropic_effort" not in agent_mod.anthropic_gateway_settings({}, fast=True)

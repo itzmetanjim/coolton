@@ -4,7 +4,7 @@
     {"id": "groq", "api_url": null, "api_key_env_var_name": "GROQ_API_KEY", "displayname": "Groq"},
     {"id": "openrouter_fb", "api_url": null, "api_key_env_var_name": "OPENROUTER_API_KEY_FALLBACK", "pydantic_ai_env_var": "OPENROUTER_API_KEY", "displayname": "OpenRouter Fallback", "max_retries": 5},
     {"id": "inception", "api_url": "https://api.inceptionlabs.ai/v1", "api_key_env_var_name": "INCEPTION_API_KEY", "displayname": "Inception Labs"},
-    {"id": "kavyansh", "api_url": "https://ai.kavyansh.org/v1", "api_key_env_var_name": "KAVYANSH_AI_API_KEY", "displayname": "Kavyansh AI"}
+    {"id": "kavyansh", "api_url": "https://ai.kavyansh.org", "api_style": "anthropic", "api_key_env_var_name": "KAVYANSH_AI_API_KEY", "displayname": "Kavyansh AI"}
   ],
   "models": [
     {"provider": "hcai", "model": "openai/gpt-6-luna", "display": "HCAI GPT-6 Luna", "tags": ["luna", "vision"], "context_window": 1050000},

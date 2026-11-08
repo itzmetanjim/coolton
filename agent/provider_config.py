@@ -334,6 +334,8 @@ def build_provider_order(user_id: str | None = None, tag: str | None = None) -> 
             config["compact_at"] = model_entry["compact_at"]
         if model_entry.get("max_output_tokens"):
             config["max_output_tokens"] = model_entry["max_output_tokens"]
+        if pconf.get("api_style"):
+            config["api_style"] = pconf["api_style"]
         if pconf.get("max_retries"):
             config["max_retries"] = pconf["max_retries"]
         provider_order.append((name, config))
