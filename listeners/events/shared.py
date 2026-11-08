@@ -125,6 +125,26 @@ def handled_ban_command(client, logger, text: str, bot_id: str, user_id: str, ch
     return True
 
 
+def handled_threadrip_command(client, text: str, bot_id: str, user_id: str, channel_id: str,
+                              event: dict) -> bool:
+    """Run a `!threadrip [link]` (agent.thread_rip), and say whether `text` was one. Like
+    !ban, only the admin's runs; anyone else's is dropped without a reply. Without a link
+    it rips the thread the command was sent in."""
+    import threading
+
+    from agent.thread_rip import handle_threadrip, parse_threadrip
+
+    is_command, link = parse_threadrip(text, bot_id)
+    if not is_command:
+        return False
+    if is_authorized(user_id):
+        threading.Thread(
+            target=handle_threadrip, daemon=True, name="threadrip",
+            args=(client, link, user_id, channel_id, event.get("thread_ts") or "", event.get("thread_ts")),
+        ).start()
+    return True
+
+
 def steered_into_active_run(client, logger, channel_id: str, thread_ts: str, text: str, user_id: str, message_ts: str) -> bool:
     """coolton is already working in this thread: steer the run in flight instead of racing
     a second one alongside it (agent/steering_store.py, plan_block.after_tool)."""

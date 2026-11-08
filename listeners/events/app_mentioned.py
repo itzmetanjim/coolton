@@ -11,6 +11,7 @@ from agent.stop_store import is_stop_command
 from listeners.commands import parse_command, respond
 from listeners.events.shared import (
     handled_ban_command,
+    handled_threadrip_command,
     held_by_private_hooks,
     is_ignored,
     pass_to_private_hooks,
@@ -82,6 +83,8 @@ def handle_app_mentioned(
             return
 
         if handled_ban_command(client, logger, command_text, bot_id, user_id, channel_id, event["ts"]):
+            return
+        if handled_threadrip_command(client, command_text, bot_id, user_id, channel_id, event):
             return
 
         # A mention in the thread of a huddle coolton is in goes to the huddle's voice agent

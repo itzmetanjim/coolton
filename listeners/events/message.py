@@ -13,6 +13,7 @@ from agent.stop_store import is_stop_command
 from listeners.commands import parse_command, respond
 from listeners.events.shared import (
     handled_ban_command,
+    handled_threadrip_command,
     held_by_private_hooks,
     is_ignored,
     pass_to_private_hooks,
@@ -109,6 +110,11 @@ def handle_message(
             logger.info("Ignoring '!stop' without an @mention")
         else:
             stop_thread(say, channel_id, thread_ts)
+        return
+
+    # !threadrip [link]: the admin deleting coolton's messages in a thread. Taken
+    # anywhere a message reaches coolton, mention or not: it's admin-only.
+    if handled_threadrip_command(client, text, bot_id, user_id, channel_id, event):
         return
 
     # !help / !connections: same addressing rule as !stop (a DM or a code
