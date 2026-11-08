@@ -520,6 +520,73 @@ button { font: inherit; color: inherit; }
   border-top: 1px solid var(--line);
 }
 
+/* Cards (send_card_tool): Slack Block Kit drawn in the page's own tokens. */
+.bk-card {
+  position: relative; margin: 9px 0; padding: 14px 16px;
+  border: 1px solid var(--line); border-radius: var(--r); background: var(--panel);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.bk-header { margin: 0; font-size: 17px; line-height: 1.3; }
+.bk-section > :first-child, .bk-field > :first-child { margin-top: 0; }
+.bk-section > :last-child, .bk-field > :last-child { margin-bottom: 0; }
+.bk-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 20px; }
+.bk-field strong { color: var(--bone-2); font-weight: 600; font-size: 13px; }
+.bk-field p { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.35; }
+.bk-context { font-size: 12.5px; color: var(--bone-2); }
+.bk-context p { margin: 0; }
+.bk-divider { border: none; border-top: 1px solid var(--line); margin: 2px 0; width: 100%; }
+.bk-image { max-width: 100%; border-radius: var(--r); }
+.bk-table-wrap { overflow-x: auto; }
+.bk-table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.bk-table caption { text-align: left; font-weight: 600; padding-bottom: 6px; }
+.bk-table th, .bk-table td { padding: 5px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.bk-table th { color: var(--bone-2); font-weight: 600; white-space: nowrap; }
+.bk-table th[tabindex] { cursor: pointer; }
+.bk-table th[data-dir="asc"]::after { content: " ↑"; }
+.bk-table th[data-dir="desc"]::after { content: " ↓"; }
+.bk-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.bk-chart-card { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--r); position: relative; }
+.bk-chart-title { font-weight: 600; margin-bottom: 6px; }
+.bk-chart { width: 100%; height: auto; display: block; overflow: visible; }
+.bk-grid { stroke: var(--line); stroke-width: 1; }
+.bk-axis { fill: var(--bone-3); font-size: 11px; font-family: var(--font-ui); }
+.bk-axis-title { font-size: 11.5px; color: var(--bone-3); }
+.bk-axis-title.x { text-align: center; }
+.bk-cross { stroke: var(--bone-3); stroke-width: 1; }
+.bk-mark { stroke: var(--panel); stroke-width: 2; }
+.bk-mark:hover, .bk-mark:focus { filter: brightness(1.18); outline: none; }
+.bk-pie-wrap { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.bk-pie { width: 170px; height: 170px; }
+.bk-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--bone-2); margin-top: 6px; }
+.bk-pie-wrap .bk-legend { flex-direction: column; }
+.bk-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.bk-legend-key.box { width: 10px; height: 10px; border-radius: 2px; }
+.bk-legend-key.line { width: 14px; height: 2px; }
+.bk-tip {
+  position: absolute; z-index: 5; pointer-events: none; padding: 6px 9px;
+  background: var(--raise); border: 1px solid var(--line-lit); border-radius: var(--r); font-size: 12.5px;
+}
+.bk-tip-title { color: var(--bone-2); margin-bottom: 2px; }
+.bk-tip-row { display: flex; align-items: center; gap: 6px; }
+.bk-tip-key { width: 12px; height: 2px; }
+.bk-tip-name { color: var(--bone-2); }
+.bk-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.bk-button {
+  padding: 5px 12px; border: 1px solid var(--line-lit); border-radius: var(--r);
+  background: var(--raise); color: var(--bone); font-size: 13px; font-weight: 600;
+  text-decoration: none; cursor: pointer;
+}
+.bk-button:hover { border-color: var(--green-live); }
+.bk-button.primary { background: var(--green-mid); border-color: var(--green-mid); }
+.bk-button.danger { background: var(--red-deep); border-color: var(--red-deep); }
+.bk-button:disabled { opacity: 0.5; cursor: default; }
+.bk-select, .bk-date {
+  padding: 4px 8px; border: 1px solid var(--line-lit); border-radius: var(--r);
+  background: var(--raise); color: var(--bone); font: inherit; font-size: 13px;
+}
+.bk-choices { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13.5px; }
+.bk-choice { display: inline-flex; align-items: center; gap: 5px; }
+
 .file-preview { width: 100%; max-height: 280px; object-fit: cover; display: block; }
 .file-row { display: flex; align-items: stretch; }
 .file-card .file-label {

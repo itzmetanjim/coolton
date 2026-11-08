@@ -711,6 +711,438 @@
     return `<table class="kv-table">${rows}</table>`;
   }
 
+  // ---------------------------------------------------------------------
+  // Cards: the Slack Block Kit coolton posts with send_card_tool, drawn here
+  // (agent/tools/json_render_card.py). Every string from the blocks goes in
+  // through textContent or the sanitizing Markdown renderer, never raw HTML.
+  // ---------------------------------------------------------------------
+
+  let cardPromptSender = null;
+  // Categorical order for chart series, stepped for this dark surface
+  // (passes the dataviz palette checks on --panel).
+  const SERIES_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function svgEl(tag, attrs) {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+    return node;
+  }
+
+  // Slack mrkdwn -> Markdown, then the usual sanitized render.
+  function mrkdwnToHtml(text) {
+    const md = String(text || '')
+      .replace(/<(https?:\/\/[^|>]+)\|([^>]+)>/g, '[$2]($1)')
+      .replace(/<(https?:\/\/[^>]+)>/g, '$1')
+      .replace(/<@([A-Z0-9]+)>/g, '@$1')
+      .replace(/<#([A-Z0-9]+)(\|[^>]*)?>/g, '#$1')
+      .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, '$1**$2**')
+      .replace(/(^|[\s(])~([^~\n]+)~(?=[\s).,!?:;]|$)/g, '$1~~$2~~')
+      // Slack keeps single line breaks (a field's label, then its value).
+      .replace(/\n/g, '  \n');
+    return renderMarkdown(md);
+  }
+
+  function textOf(obj) {
+    return (obj && obj.text) || '';
+  }
+
+  function renderTable(block) {
+    const wrap = el('div', 'bk-table-wrap');
+    const table = el('table', 'bk-table');
+    if (block.caption) table.appendChild(el('caption', '', block.caption));
+    const rows = block.rows || [];
+    const cell = (c) => (c && (c.text !== undefined ? String(c.text) : c.value !== undefined ? String(c.value) : '')) || '';
+    const numeric = (rows[0] || []).map((_, i) => rows.slice(1).length > 0 &&
+      rows.slice(1).every((r) => /^[-+$€£]?[\d.,]+[%kKmMbB]?$/.test(cell(r[i]).trim())));
+    const thead = el('thead');
+    const head = el('tr');
+    (rows[0] || []).forEach((c, i) => {
+      const th = el('th', numeric[i] ? 'num' : '', cell(c));
+      if (block.type === 'data_table') {
+        th.tabIndex = 0;
+        th.title = 'Sort';
+        const sort = () => {
+          const dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+          head.querySelectorAll('th').forEach((h) => delete h.dataset.dir);
+          th.dataset.dir = dir;
+          const value = (r) => {
+            const t = r.children[i].textContent;
+            const n = parseFloat(t.replace(/[^\d.-]/g, ''));
+            return numeric[i] && !isNaN(n) ? n : t.toLowerCase();
+          };
+          const sorted = [...tbody.children].sort((a, b) => (value(a) > value(b) ? 1 : value(a) < value(b) ? -1 : 0));
+          if (dir === 'desc') sorted.reverse();
+          sorted.forEach((r) => tbody.appendChild(r));
+        };
+        th.addEventListener('click', sort);
+        th.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sort(); } });
+      }
+      head.appendChild(th);
+    });
+    thead.appendChild(head);
+    const tbody = el('tbody');
+    rows.slice(1).forEach((r) => {
+      const tr = el('tr');
+      r.forEach((c, i) => tr.appendChild(el('td', numeric[i] ? 'num' : '', cell(c))));
+      tbody.appendChild(tr);
+    });
+    table.append(thead, tbody);
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  function fmtNum(n) {
+    if (Math.abs(n) >= 1e9) return `${+(n / 1e9).toFixed(1)}B`;
+    if (Math.abs(n) >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
+    if (Math.abs(n) >= 1e4) return `${+(n / 1e3).toFixed(1)}k`;
+    return String(+n.toFixed(2));
+  }
+
+  function niceMax(max) {
+    if (max <= 0) return 1;
+    const step = Math.pow(10, Math.floor(Math.log10(max)));
+    for (const m of [1, 2, 2.5, 5, 10]) if (m * step >= max) return m * step;
+    return 10 * step;
+  }
+
+  function chartTooltip(card) {
+    let tip = card.querySelector('.bk-tip');
+    if (!tip) { tip = el('div', 'bk-tip'); tip.hidden = true; card.appendChild(tip); }
+    return tip;
+  }
+
+  function showTip(card, x, y, title, rows) {
+    const tip = chartTooltip(card);
+    tip.replaceChildren(el('div', 'bk-tip-title', title));
+    rows.forEach(([name, value, color]) => {
+      const row = el('div', 'bk-tip-row');
+      const key = el('span', 'bk-tip-key');
+      key.style.background = color;
+      row.append(key, el('strong', '', value), el('span', 'bk-tip-name', name));
+      tip.appendChild(row);
+    });
+    tip.hidden = false;
+    const box = card.getBoundingClientRect();
+    tip.style.left = `${Math.min(Math.max(x - box.left + 12, 4), box.width - tip.offsetWidth - 4)}px`;
+    tip.style.top = `${Math.max(y - box.top - tip.offsetHeight - 10, 4)}px`;
+  }
+
+  function hideTip(card) {
+    const tip = card.querySelector('.bk-tip');
+    if (tip) tip.hidden = true;
+  }
+
+  function legend(items, shape) {
+    const row = el('div', 'bk-legend');
+    items.forEach(([name, color]) => {
+      const item = el('span', 'bk-legend-item');
+      const key = el('span', `bk-legend-key ${shape}`);
+      key.style.background = color;
+      item.append(key, document.createTextNode(name));
+      row.appendChild(item);
+    });
+    return row;
+  }
+
+  function renderPie(card, chart) {
+    const segments = chart.segments || [];
+    const total = segments.reduce((sum, s) => sum + s.value, 0) || 1;
+    const svg = svgEl('svg', { viewBox: '0 0 200 200', class: 'bk-pie', role: 'img' });
+    let angle = -Math.PI / 2;
+    segments.forEach((s, i) => {
+      const color = SERIES_COLORS[i % SERIES_COLORS.length];
+      const sweep = (s.value / total) * Math.PI * 2;
+      const [x1, y1] = [100 + 90 * Math.cos(angle), 100 + 90 * Math.sin(angle)];
+      const [x2, y2] = [100 + 90 * Math.cos(angle + sweep), 100 + 90 * Math.sin(angle + sweep)];
+      const path = segments.length === 1
+        ? svgEl('circle', { cx: 100, cy: 100, r: 90 })
+        : svgEl('path', { d: `M100 100 L${x1} ${y1} A90 90 0 ${sweep > Math.PI ? 1 : 0} 1 ${x2} ${y2} Z` });
+      path.setAttribute('fill', color);
+      path.setAttribute('class', 'bk-mark');
+      path.setAttribute('tabindex', '0');
+      const pct = `${Math.round((s.value / total) * 100)}%`;
+      const show = (e) => {
+        const r = path.getBoundingClientRect();
+        showTip(card, e.clientX || r.left + r.width / 2, e.clientY || r.top, s.label, [['', `${fmtNum(s.value)} · ${pct}`, color]]);
+      };
+      path.addEventListener('pointermove', show);
+      path.addEventListener('focus', show);
+      path.addEventListener('pointerleave', () => hideTip(card));
+      path.addEventListener('blur', () => hideTip(card));
+      svg.appendChild(path);
+      angle += sweep;
+    });
+    const wrap = el('div', 'bk-pie-wrap');
+    wrap.appendChild(svg);
+    wrap.appendChild(legend(segments.map((s, i) => [s.label, SERIES_COLORS[i % SERIES_COLORS.length]]), 'box'));
+    return wrap;
+  }
+
+  function renderSeriesChart(card, chart) {
+    const cats = (chart.axis_config && chart.axis_config.categories) || [];
+    const series = chart.series || [];
+    const values = series.map((s) => cats.map((c) => {
+      const p = (s.data || []).find((d) => d.label === c);
+      return p ? Number(p.value) : 0;
+    }));
+    const W = 640, H = 260, L = 48, R = 12, T = 12, B = 34;
+    const max = niceMax(Math.max(0, ...values.flat()));
+    const min = Math.min(0, ...values.flat());
+    const y = (v) => T + (H - T - B) * (1 - (v - min) / ((max - min) || 1));
+    const band = (W - L - R) / Math.max(cats.length, 1);
+    const xMid = (i) => L + band * (i + 0.5);
+    const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'bk-chart', role: 'img' });
+
+    for (let k = 0; k <= 4; k++) {
+      const v = min + ((max - min) * k) / 4;
+      svg.appendChild(svgEl('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'bk-grid' }));
+      const label = svgEl('text', { x: L - 6, y: y(v) + 4, class: 'bk-axis', 'text-anchor': 'end' });
+      label.textContent = fmtNum(v);
+      svg.appendChild(label);
+    }
+    const every = Math.ceil(cats.length / 10);
+    cats.forEach((c, i) => {
+      if (i % every) return;
+      const label = svgEl('text', { x: xMid(i), y: H - B + 18, class: 'bk-axis', 'text-anchor': 'middle' });
+      label.textContent = c;
+      svg.appendChild(label);
+    });
+
+    const color = (j) => SERIES_COLORS[j % SERIES_COLORS.length];
+    if (chart.type === 'bar') {
+      const inner = band * 0.72;
+      const w = Math.max((inner - 2 * (series.length - 1)) / series.length, 2);
+      values.forEach((vals, j) => vals.forEach((v, i) => {
+        const x = xMid(i) - inner / 2 + j * (w + 2);
+        const top = y(Math.max(v, 0));
+        const h = Math.max(Math.abs(y(v) - y(0)), 1);
+        const r = Math.min(4, w / 2, h);
+        svg.appendChild(svgEl('path', {
+          d: `M${x} ${top + h} V${top + r} Q${x} ${top} ${x + r} ${top} H${x + w - r} Q${x + w} ${top} ${x + w} ${top + r} V${top + h} Z`,
+          fill: color(j), class: 'bk-mark',
+        }));
+      }));
+    } else {
+      values.forEach((vals, j) => {
+        const pts = vals.map((v, i) => `${xMid(i)},${y(v)}`);
+        if (chart.type === 'area') {
+          svg.appendChild(svgEl('polygon', {
+            points: `${xMid(0)},${y(0)} ${pts.join(' ')} ${xMid(vals.length - 1)},${y(0)}`,
+            fill: color(j), 'fill-opacity': series.length > 1 ? 0.18 : 0.28,
+          }));
+        }
+        svg.appendChild(svgEl('polyline', { points: pts.join(' '), fill: 'none', stroke: color(j), 'stroke-width': 2 }));
+      });
+    }
+
+    // One hit column per category: hover or focus shows every series there.
+    const cross = svgEl('line', { y1: T, y2: H - B, class: 'bk-cross', visibility: 'hidden' });
+    svg.appendChild(cross);
+    cats.forEach((c, i) => {
+      const hit = svgEl('rect', { x: L + band * i, y: T, width: band, height: H - T - B, fill: 'transparent', tabindex: 0 });
+      const show = (e) => {
+        if (chart.type !== 'bar') {
+          cross.setAttribute('x1', xMid(i)); cross.setAttribute('x2', xMid(i));
+          cross.setAttribute('visibility', 'visible');
+        }
+        const r = hit.getBoundingClientRect();
+        showTip(card, e.clientX || r.left + r.width / 2, e.clientY || r.top,
+          c, series.map((s, j) => [s.name, fmtNum(values[j][i]), color(j)]));
+      };
+      const hide = () => { cross.setAttribute('visibility', 'hidden'); hideTip(card); };
+      hit.addEventListener('pointermove', show);
+      hit.addEventListener('focus', show);
+      hit.addEventListener('pointerleave', hide);
+      hit.addEventListener('blur', hide);
+      svg.appendChild(hit);
+    });
+
+    const wrap = el('div', 'bk-series-wrap');
+    if (chart.axis_config && chart.axis_config.y_label) wrap.appendChild(el('div', 'bk-axis-title', chart.axis_config.y_label));
+    wrap.appendChild(svg);
+    if (chart.axis_config && chart.axis_config.x_label) wrap.appendChild(el('div', 'bk-axis-title x', chart.axis_config.x_label));
+    if (series.length > 1) wrap.appendChild(legend(series.map((s, j) => [s.name, color(j)]), chart.type === 'bar' ? 'box' : 'line'));
+    return wrap;
+  }
+
+  function renderChart(block) {
+    const card = el('figure', 'bk-chart-card');
+    card.appendChild(el('figcaption', 'bk-chart-title', block.title || ''));
+    const chart = block.chart || {};
+    card.appendChild(chart.type === 'pie' ? renderPie(card, chart) : renderSeriesChart(card, chart));
+    return card;
+  }
+
+  function renderInput(element) {
+    const id = element.action_id || '';
+    const options = element.options || [];
+    if (element.type === 'static_select') {
+      const select = el('select', 'bk-select');
+      select.dataset.actionId = id;
+      select.appendChild(el('option', '', textOf(element.placeholder) || 'Choose')).value = '';
+      options.forEach((o) => {
+        const opt = el('option', '', textOf(o.text));
+        opt.value = o.value;
+        if (element.initial_option && element.initial_option.value === o.value) opt.selected = true;
+        select.appendChild(opt);
+      });
+      return select;
+    }
+    if (element.type === 'checkboxes' || element.type === 'radio_buttons') {
+      const group = el('div', 'bk-choices');
+      group.dataset.actionId = id;
+      const chosen = new Set([...(element.initial_options || []), ...(element.initial_option ? [element.initial_option] : [])].map((o) => o.value));
+      const name = `${id}-${Math.random().toString(36).slice(2)}`;
+      options.forEach((o) => {
+        const label = el('label', 'bk-choice');
+        const input = el('input');
+        input.type = element.type === 'checkboxes' ? 'checkbox' : 'radio';
+        input.name = name;
+        input.value = o.value;
+        input.dataset.label = textOf(o.text);
+        input.checked = chosen.has(o.value);
+        label.append(input, document.createTextNode(textOf(o.text)));
+        group.appendChild(label);
+      });
+      return group;
+    }
+    if (element.type === 'datepicker') {
+      const input = el('input', 'bk-date');
+      input.type = 'date';
+      input.dataset.actionId = id;
+      if (element.initial_date) input.value = element.initial_date;
+      input.title = textOf(element.placeholder);
+      return input;
+    }
+    return null;
+  }
+
+  // What every input in the card is set to, in the same words as agent/block_state.py.
+  function cardState(card) {
+    const lines = [];
+    card.querySelectorAll('[data-action-id]').forEach((node) => {
+      const name = node.dataset.actionId.replace(/^card_input_/, '');
+      let value;
+      if (node.tagName === 'SELECT') {
+        value = node.value ? `${node.selectedOptions[0].textContent} (${node.value})` : 'nothing selected';
+      } else if (node.tagName === 'INPUT') {
+        value = node.value || 'not set';
+      } else {
+        const chosen = [...node.querySelectorAll('input:checked')].map((i) => (i.dataset.label === i.value ? i.value : `${i.dataset.label} (${i.value})`));
+        value = chosen.join(', ') || 'nothing selected';
+      }
+      lines.push(`- ${name}: ${value}`);
+    });
+    return lines;
+  }
+
+  function renderActions(block, card) {
+    const row = el('div', 'bk-actions');
+    (block.elements || []).forEach((element) => {
+      if (element.type !== 'button') {
+        const input = renderInput(element);
+        if (input) row.appendChild(input);
+        return;
+      }
+      const label = textOf(element.text);
+      if (element.url) {
+        const a = el('a', `bk-button${element.style ? ` ${element.style}` : ''}`, label);
+        a.href = safeUrl(element.url);
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        row.appendChild(a);
+        return;
+      }
+      const button = el('button', `bk-button${element.style ? ` ${element.style}` : ''}`, label);
+      button.type = 'button';
+      if (!element.value || !/^card_prompt_/.test(element.action_id || '')) {
+        button.disabled = true;
+      } else {
+        button.addEventListener('click', () => {
+          const state = cardState(card);
+          const text = `[clicked the "${label}" button on your card] ${element.value}` +
+            (state.length ? `\nThe card's inputs at the time:\n${state.join('\n')}` : '');
+          if (cardPromptSender) cardPromptSender(text);
+        });
+      }
+      row.appendChild(button);
+    });
+    return row;
+  }
+
+  function renderBlocks(blocks) {
+    const card = el('div', 'bk-card');
+    (blocks || []).forEach((block) => {
+      switch (block.type) {
+        case 'header':
+          card.appendChild(el('h3', 'bk-header', textOf(block.text)));
+          break;
+        case 'section': {
+          if (block.text) {
+            const div = el('div', 'bk-section');
+            div.innerHTML = mrkdwnToHtml(textOf(block.text));
+            card.appendChild(div);
+          }
+          if (block.fields) {
+            const grid = el('div', 'bk-fields');
+            block.fields.forEach((f) => {
+              const div = el('div', 'bk-field');
+              div.innerHTML = mrkdwnToHtml(textOf(f));
+              grid.appendChild(div);
+            });
+            card.appendChild(grid);
+          }
+          break;
+        }
+        case 'markdown': {
+          const div = el('div', 'bk-section');
+          div.innerHTML = renderMarkdown(block.text || '');
+          card.appendChild(div);
+          break;
+        }
+        case 'context': {
+          const div = el('div', 'bk-context');
+          div.innerHTML = (block.elements || []).filter((e) => e.text).map((e) => mrkdwnToHtml(e.text)).join(' ');
+          card.appendChild(div);
+          break;
+        }
+        case 'divider':
+          card.appendChild(el('hr', 'bk-divider'));
+          break;
+        case 'image': {
+          const img = el('img', 'bk-image');
+          img.src = safeUrl(block.image_url);
+          img.alt = block.alt_text || '';
+          img.loading = 'lazy';
+          card.appendChild(img);
+          break;
+        }
+        case 'table':
+        case 'data_table':
+          card.appendChild(renderTable(block));
+          break;
+        case 'data_visualization':
+          card.appendChild(renderChart(block));
+          break;
+        case 'actions':
+          card.appendChild(renderActions(block, card));
+          break;
+        default:
+          break;
+      }
+    });
+    linkifyExternal(card);
+    return card;
+  }
+
   function handleAgentMessage(ev) {
     const turn = ensureTurn();
     const content = turn.querySelector('.turn-content');
@@ -774,6 +1206,10 @@
 
       card.appendChild(row);
       content.appendChild(card);
+      return;
+    }
+    if (ev.variant === 'card') {
+      content.appendChild(renderBlocks(ev.blocks));
       return;
     }
     if (ev.variant === 'embed') {
@@ -972,28 +1408,32 @@
     }
   });
 
+  async function sendText(text, attachments) {
+    if (!currentConversationId) await createConversation();
+    if (!currentConversationId) return;
+    try {
+      await api(`/api/conversations/${currentConversationId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, attachment_ids: (attachments || []).map((a) => a.id) }),
+      });
+    } catch (err) {
+      console.error('Failed to send message', err);
+    }
+  }
+  cardPromptSender = sendText;
+
   composerEl.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = composerInput.value.trim();
     if (!text && !pendingAttachments.length) return;
-    if (!currentConversationId) await createConversation();
-    if (!currentConversationId) return;
 
     const attachments = pendingAttachments;
     pendingAttachments = [];
     renderAttachmentTray();
     composerInput.value = '';
     autoGrow();
-
-    try {
-      await api(`/api/conversations/${currentConversationId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, attachment_ids: attachments.map((a) => a.id) }),
-      });
-    } catch (err) {
-      console.error('Failed to send message', err);
-    }
+    await sendText(text, attachments);
   });
 
   stopBtn.addEventListener('click', async () => {

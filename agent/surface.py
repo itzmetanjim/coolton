@@ -48,8 +48,8 @@ class Surface(Protocol):
         """Post a rich embed (whiteboard, HTML, agent-browser/desktop stream)."""
         ...
 
-    def post_card(self, blocks: list, text: str, markdown: str) -> str:
-        """Post a rich card: Block Kit `blocks` where the platform has it, else `markdown`.
+    def post_card(self, blocks: list, text: str) -> str:
+        """Post a rich card made of Block Kit `blocks` (agent.tools.json_render_card).
         `text` is the short fallback for notifications."""
         ...
 

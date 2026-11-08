@@ -260,6 +260,30 @@ def test_a_slash_command_or_button_reaches_coolton_as_that_persons_message(monke
         ("U2", '[used button "Approve" (value: yes) [action_id: approve] in one of your Block Kit tabs]', "5.5")]
 
 
+def test_tab_inputs_only_ride_along_with_a_button(monkeypatch):
+    handed = []
+    monkeypatch.setattr(code_channel_app, "handle_code_channel_app_mention", lambda event, a, c: handed.append(event))
+    coolton = Mock()
+    coolton.chat_postMessage.return_value = {"ts": "5.5"}
+    state = {"values": {
+        "b1": {"env": {"type": "static_select", "selected_option": {"text": {"text": "Production"}, "value": "prod"}}},
+        "b2": {"checks": {"type": "checkboxes", "selected_options": []}},
+        "b3": {"go": {"type": "button"}}}}
+    select = {"type": "static_select", "action_id": "env", "selected_option": {"value": "prod"}}
+
+    code_channel_app.handle_block_action({"channel": {"id": "CCODE"}, "user": {"id": "U2"}, "actions": [select],
+                                          "state": state}, Mock(), coolton)
+    assert handed == []
+
+    code_channel_app.handle_block_action({"channel": {"id": "CCODE"}, "user": {"id": "U2"}, "actions": [
+        {"type": "button", "action_id": "go", "text": {"text": "Deploy"}, "value": "now"}],
+        "view": {"state": state}}, Mock(), coolton)
+    assert handed[0]["text"].endswith(
+        "in one of your Block Kit tabs]\nThe tab's inputs at the time:\n"
+        "- env: Production (prod)\n- checks: nothing selected")
+    assert "• env: Production (prod)" in coolton.chat_postMessage.call_args.kwargs["text"]
+
+
 def test_the_stop_button_in_a_code_channel_stops_coolton_there(monkeypatch):
     stopped = []
     monkeypatch.setattr("agent.active_runs.is_run_active", lambda c, t: True)

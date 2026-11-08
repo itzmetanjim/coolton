@@ -1895,7 +1895,7 @@ def send_html_embed_tool(
 @agent.tool
 def send_card_tool(ctx: RunContext[AgentDeps], spec: str) -> str:
     """Post a rich card in the thread: a title, KPI fields, a table, up to 2 native charts,
-    images and link buttons, built from a json-render spec (JSON text). Use it when numbers,
+    images, link buttons and prompt buttons, built from a json-render spec (JSON text). Use it when numbers,
     comparisons or a dashboard read better as a card than as prose. Anything else you want
     to say goes in your normal reply.
 
@@ -1914,21 +1914,29 @@ def send_card_tool(ctx: RunContext[AgentDeps], spec: str) -> str:
       [one number per category]}], "xLabel"?, "yLabel"?}. Labels max 20 chars, max 20
       categories and 12 series. Only 2 charts per card are drawn; more become plain text.
     - Divider. Image: url (public https), alt.
-    - Actions: children are LinkButton (label, url). Buttons that run actions don't exist here.
+    - Actions: children are LinkButton (label, url) and Button (label, prompt, style? default |
+      primary | danger). Clicking a Button asks you its prompt in this thread, as the person who
+      clicked, so write the prompt as a complete request ("Break Q3 sales down by region and
+      chart it"). Offer the follow-ups someone is likely to want.
+    - Inputs, also children of Actions, each with its own id: Select (label?, options
+      [{label, value?}], initial?), Checkboxes (options, initial? [values]), RadioButtons
+      (options, initial?), DatePicker (label?, initial? "YYYY-MM-DD"). Using one asks you
+      nothing; when someone clicks a Button, what every input is set to comes with its prompt
+      (e.g. a Select "region" and a Button "Show sales" with prompt "Show sales for the chosen
+      region").
 
     Write literal values: $state, repeat and other json-render expressions aren't supported.
 
     Args:
         spec: The json-render spec, as JSON text.
     """
-    from agent.tools.json_render_card import CardSpecError, to_blocks, to_markdown
+    from agent.tools.json_render_card import CardSpecError, to_blocks
 
     try:
         blocks, text = to_blocks(spec)
-        markdown = to_markdown(spec)
     except CardSpecError as e:
         return "Error: the card spec has problems; fix them and call again:\n- " + "\n- ".join(e.issues)
-    return _surface(ctx.deps).post_card(blocks, text, markdown)
+    return _surface(ctx.deps).post_card(blocks, text)
 
 
 def _parse_json_object_param(param_name: str, value: str, example: str = '{"key": "value"}') -> tuple[dict | None, str | None]:

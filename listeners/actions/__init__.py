@@ -19,6 +19,7 @@ from .policy_actions import handle_policy_opt_in, handle_policy_opt_out
 from .mcp_server_actions import handle_mcp_server_add, mcp_server_delete_pattern
 from .huddle_actions import handle_huddle_join_approve, handle_huddle_join_decline
 from .human_control_actions import handle_human_control_done
+from .card_prompt_actions import handle_card_prompt
 from .skill_review_actions import handle_skill_review_approve, handle_skill_review_reject
 
 
@@ -44,6 +45,7 @@ def register(app: App):
     app.action("huddle_join_approve")(handle_huddle_join_approve)
     app.action("huddle_join_decline")(handle_huddle_join_decline)
     app.action("human_control_done")(handle_human_control_done)
+    app.action(re.compile(r"^card_prompt_\d+$"))(handle_card_prompt)
     # Last, so it only gets what nothing above handles: clicks on Block Kit coolton posted
     # in a message (link buttons included), which Slack still sends and expects acknowledged.
     app.action(re.compile(r".*"))(acknowledge_unhandled_action)

@@ -3,7 +3,8 @@
 The model writes a spec with json-render's chat components (`@json-render/chat`'s
 standard catalog), and this turns it into Slack Block Kit the way Vercel's Chat SDK
 Slack adapter does: a header, KPI fields, a native data table, data_visualization
-charts and link buttons. What Slack can't show natively (a second table, a third chart,
+charts, link buttons, and prompt buttons: a Button carries a prompt, and clicking it asks
+coolton that prompt in the thread (listeners.actions.card_prompt_actions). What Slack can't show natively (a second table, a third chart,
 a chart over Slack's limits) becomes a plain-text table in a code block, as there.
 
 This is a Python port of that catalog and conversion, not the npm package: coolton
@@ -35,15 +36,22 @@ CHART_LABEL_MAX = 20
 CHART_MAX_SERIES = 12
 CHART_MAX_POINTS = 20
 MAX_ELEMENTS = 200
+PROMPT_MAX = 1900  # A button's value holds at most 2000 characters.
+# action_id of a prompt button; its value is the prompt.
+PROMPT_ACTION_PREFIX = "card_prompt_"
+# action_id prefix of an input (select, checkboxes...); agent.block_state names it by its id.
+INPUT_ACTION_PREFIX = "card_input_"
+INPUT_KINDS = ("Select", "Checkboxes", "RadioButtons", "DatePicker")
+OPTIONS_MAX = {"Select": 100, "Checkboxes": 10, "RadioButtons": 10}
 
 COMPONENTS = ("Card", "Section", "Text", "Fields", "Field", "Table", "Chart", "Divider", "Image",
-              "Actions", "LinkButton")
+              "Actions", "LinkButton", "Button", *INPUT_KINDS)
 _CONTAINERS = {"Card", "Section", "Fields", "Actions"}
 _ALLOWED_CHILDREN = {
-    "Card": set(COMPONENTS) - {"Card", "Field", "LinkButton"},
-    "Section": set(COMPONENTS) - {"Card", "Section", "Field", "LinkButton"},
+    "Card": set(COMPONENTS) - {"Card", "Field", "LinkButton", "Button", *INPUT_KINDS},
+    "Section": set(COMPONENTS) - {"Card", "Section", "Field", "LinkButton", "Button", *INPUT_KINDS},
     "Fields": {"Field"},
-    "Actions": {"LinkButton"},
+    "Actions": {"LinkButton", "Button", *INPUT_KINDS},
 }
 
 
@@ -151,8 +159,7 @@ def _check(node: dict, issues: list[str], parent: str | None = None) -> None:
     key, kind, props = node["key"], node["type"], node["props"]
     where = f"{key} ({kind})"
     if kind not in COMPONENTS:
-        hint = " Buttons that run actions do nothing in a message, so use LinkButton." if kind == "Button" else ""
-        issues.append(f"{key}: unknown component {kind!r}; use one of {', '.join(COMPONENTS)}.{hint}")
+        issues.append(f"{key}: unknown component {kind!r}; use one of {', '.join(COMPONENTS)}.")
         return
     if not isinstance(props, dict):
         issues.append(f"{where}: props must be an object")
@@ -194,6 +201,27 @@ def _check(node: dict, issues: list[str], parent: str | None = None) -> None:
             issues.append(f"{where}: label is required")
         if not re.match(r"^https?://", str(props.get("url") or "")):
             issues.append(f"{where}: url must be an http(s) URL")
+    elif kind == "Button":
+        if not _is_text(props.get("label")):
+            issues.append(f"{where}: label is required")
+        if not _is_text(props.get("prompt")):
+            issues.append(f"{where}: prompt is required: what you'll be asked when someone clicks it")
+        elif len(props["prompt"]) > PROMPT_MAX:
+            issues.append(f"{where}: prompt is longer than {PROMPT_MAX} characters")
+        if props.get("style") not in (None, "default", "primary", "danger"):
+            issues.append(f"{where}: style must be default, primary or danger")
+    elif kind in INPUT_KINDS:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,60}", str(props.get("id") or "")):
+            issues.append(f"{where}: id is required: letters, digits, _ or -, up to 60")
+        if kind != "DatePicker":
+            options = props.get("options")
+            if not isinstance(options, list) or not options or not all(
+                    isinstance(o, dict) and _is_text(o.get("label")) for o in options):
+                issues.append(f"{where}: options must be a non-empty list of {{label, value?}}")
+            elif len(options) > OPTIONS_MAX[kind]:
+                issues.append(f"{where}: at most {OPTIONS_MAX[kind]} options")
+        elif props.get("initial") and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(props["initial"])):
+            issues.append(f"{where}: initial must be a date like 2026-11-08")
     elif kind == "Card" and props.get("imageUrl") and not str(props["imageUrl"]).startswith("https://"):
         issues.append(f"{where}: imageUrl must be a public https URL")
 
@@ -333,6 +361,49 @@ def _native_chart(title: str, chart: dict) -> dict | None:
     }}
 
 
+def _input(node: dict) -> dict:
+    kind, props = node["type"], node["props"]
+    action_id = f"{INPUT_ACTION_PREFIX}{props['id']}"
+    plain = lambda text: {"type": "plain_text", "text": _truncate(str(text), 75)}  # noqa: E731
+    if kind == "DatePicker":
+        element = {"type": "datepicker", "action_id": action_id}
+        if props.get("label"):
+            element["placeholder"] = plain(props["label"])
+        if props.get("initial"):
+            element["initial_date"] = props["initial"]
+        return element
+    options = [{"text": plain(o["label"]), "value": _truncate(str(o.get("value") or o["label"]), 150)}
+               for o in props["options"]]
+    initial = props.get("initial")
+    chosen = [o for o in options if o["value"] in (initial if isinstance(initial, list) else [initial])]
+    if kind == "Select":
+        element = {"type": "static_select", "action_id": action_id, "options": options,
+                   "placeholder": plain(props.get("label") or "Choose")}
+        if chosen:
+            element["initial_option"] = chosen[0]
+    else:
+        element = {"type": "checkboxes" if kind == "Checkboxes" else "radio_buttons",
+                   "action_id": action_id, "options": options}
+        if chosen and kind == "Checkboxes":
+            element["initial_options"] = chosen
+        elif chosen:
+            element["initial_option"] = chosen[0]
+    return element
+
+
+def _button(node: dict, index: int) -> dict:
+    if node["type"] in INPUT_KINDS:
+        return _input(node)
+    props = node["props"]
+    button = {"type": "button", "text": {"type": "plain_text", "text": _truncate(props["label"], BUTTON_TEXT_MAX)}}
+    if node["type"] == "LinkButton":
+        return {**button, "url": props["url"], "action_id": f"link_{index}"}
+    button.update(action_id=f"{PROMPT_ACTION_PREFIX}{index}", value=props["prompt"])
+    if props.get("style") in ("primary", "danger"):
+        button["style"] = props["style"]
+    return button
+
+
 def _blocks_for(node: dict, state: dict) -> list[dict]:
     kind, props = node["type"], node["props"]
     if kind == "Card":
@@ -371,8 +442,7 @@ def _blocks_for(node: dict, state: dict) -> list[dict]:
     if kind == "Image":
         return [{"type": "image", "image_url": props["url"], "alt_text": _truncate(props["alt"], ALT_TEXT_MAX)}]
     if kind == "Actions":
-        buttons = [{"type": "button", "text": {"type": "plain_text", "text": _truncate(b["props"]["label"], BUTTON_TEXT_MAX)},
-                    "url": b["props"]["url"], "action_id": f"link_{i}"} for i, b in enumerate(node["children"])]
+        buttons = [_button(b, i) for i, b in enumerate(node["children"])]
         return [{"type": "actions", "elements": buttons[i:i + BUTTONS_PER_ACTIONS]}
                 for i in range(0, len(buttons), BUTTONS_PER_ACTIONS)]
     return []
@@ -391,11 +461,20 @@ def _fallback_text(node: dict) -> str:
     return _truncate(" · ".join([text, *rest] if text else rest), 300)
 
 
+def _walk(node: dict):
+    yield node
+    for child in node["children"]:
+        yield from _walk(child)
+
+
 def to_blocks(spec: Any) -> tuple[list[dict], str]:
     """(Slack blocks, fallback text) for a json-render spec. Raises CardSpecError."""
     tree = parse_spec(spec)
     issues: list[str] = []
     _check(tree, issues)
+    ids = [n["props"].get("id") for n in _walk(tree) if n["type"] in INPUT_KINDS]
+    if len(ids) != len(set(ids)):
+        issues.append("every Select, Checkboxes, RadioButtons and DatePicker needs its own id")
     if issues:
         raise CardSpecError(issues)
     blocks = _blocks_for(tree, {"table": False, "charts": 0})
@@ -404,43 +483,3 @@ def to_blocks(spec: Any) -> tuple[list[dict], str]:
     if len(blocks) > MAX_BLOCKS:
         raise CardSpecError([f"the card makes {len(blocks)} Slack blocks; a message holds at most {MAX_BLOCKS}"])
     return blocks, _fallback_text(tree) or "card"
-
-
-def to_markdown(spec: Any) -> str:
-    """The card as Markdown, for surfaces without Block Kit (the web UI)."""
-    tree = parse_spec(spec)
-    issues: list[str] = []
-    _check(tree, issues)
-    if issues:
-        raise CardSpecError(issues)
-    return "\n\n".join(p for p in _markdown_for(tree, {"table": False, "charts": CHART_MAX_PER_MESSAGE}) if p)
-
-
-def _markdown_for(node: dict, state: dict) -> list[str]:
-    kind, props = node["type"], node["props"]
-    children = [p for c in node["children"] for p in _markdown_for(c, state)]
-    if kind == "Card":
-        head = [f"## {props['title']}"] if props.get("title") else []
-        head += [f"_{props['subtitle']}_"] if props.get("subtitle") else []
-        return head + children
-    if kind in ("Section", "Fields"):
-        return children if kind == "Section" else ["\n".join(children)]
-    if kind == "Field":
-        return [f"- **{props['label']}:** {_display(props['value'])}"]
-    if kind == "Text":
-        text = props["content"]
-        return [f"**{text}**" if props.get("style") == "bold" else f"_{text}_" if props.get("style") == "muted" else text]
-    if kind == "Table":
-        headers, rows = _table_rows(props)
-        lines = ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers),
-                 *("| " + " | ".join(r) + " |" for r in rows)]
-        return ([f"**{props['caption']}**"] if props.get("caption") else []) + ["\n".join(lines)]
-    if kind == "Chart":
-        return [f"**{props['title']}**\n```\n{_chart_fallback(props['title'], props['chart'])}\n```"]
-    if kind == "Divider":
-        return ["---"]
-    if kind == "Image":
-        return [f"![{props['alt']}]({props['url']})"]
-    if kind == "Actions":
-        return [" · ".join(f"[{b['props']['label']}]({b['props']['url']})" for b in node["children"])]
-    return []

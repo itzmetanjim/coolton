@@ -12,9 +12,10 @@ answered once (agent.mention_ids).
 
 As the agent, this app also gets what happens in its code channels: Slack's stop button
 (agent_session_stopped, halting coolton's run there), its per-channel slash commands
-(agent.tools.code_channel_tools.set_commands) and the Block Kit tabs' buttons and selects
-(block_actions). Each command or interaction is posted in the channel by coolton, saying
-who did what, and handed to coolton as that person's message.
+(agent.tools.code_channel_tools.set_commands) and the Block Kit tabs' buttons (block_actions,
+with what the tab's selects, checkboxes and other inputs are set to; those don't ask coolton
+anything on their own). Each command or button press is posted in the channel by coolton,
+saying who did what, and handed to coolton as that person's message.
 """
 from __future__ import annotations
 
@@ -146,16 +147,25 @@ def _describe_action(action: dict) -> str:
 
 
 def handle_block_action(body: dict, app_client: WebClient, coolton: WebClient) -> None:
-    """Someone used a button or select in one of coolton's Block Kit tabs."""
+    """Someone used a button, select or other element in one of coolton's Block Kit tabs."""
     channel_id = ((body.get("channel") or {}).get("id") or (body.get("container") or {}).get("channel_id") or "")
     user_id = (body.get("user") or {}).get("id", "")
     actions = body.get("actions") or []
     if not channel_id or not user_id or not actions:
         logger.info("Code channels app: block action without a channel or user: %s", list(body))
         return
+    from agent.block_state import describe_state, is_prompting, with_state
+
+    # Selects, checkboxes, pickers and the like only change the tab's state; a button asks
+    # coolton, with the state of all of them.
+    actions = [a for a in actions if is_prompting(a)]
+    if not actions:
+        return
     described = "; ".join(_describe_action(a) for a in actions)
-    _hand_to_coolton(coolton, app_client, channel_id, user_id, f"<@{user_id}> used {described} in a tab",
-                     f"[used {described} in one of your Block Kit tabs]", (body.get("team") or {}).get("id"))
+    inputs = "".join(f"\n> • {line}" for line in describe_state(body))
+    _hand_to_coolton(coolton, app_client, channel_id, user_id, f"<@{user_id}> used {described} in a tab{inputs}",
+                     with_state(f"[used {described} in one of your Block Kit tabs]", body, "The tab's"),
+                     (body.get("team") or {}).get("id"))
 
 
 def handle_context_bar_action(event: dict, app_client: WebClient, coolton: WebClient) -> None:

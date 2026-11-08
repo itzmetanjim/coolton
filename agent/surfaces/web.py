@@ -56,10 +56,10 @@ class WebSurface:
         })
         return f"Success: embed posted to conversation {self.conversation_id}"
 
-    def post_card(self, blocks: list, text: str, markdown: str) -> str:
-        # The web UI has no Block Kit; the same card as Markdown.
-        self._append({"type": "agent_message", "variant": "status", "text": markdown})
-        return f"Success: card posted to conversation {self.conversation_id} (as Markdown: the web UI has no charts)"
+    def post_card(self, blocks: list, text: str) -> str:
+        # web/static/app.js draws the same blocks (charts and tables included).
+        self._append({"type": "agent_message", "variant": "card", "blocks": blocks, "text": text})
+        return f"Success: card posted to conversation {self.conversation_id}"
 
     def react(self, emoji_name: str) -> str:
         self._append({"type": "reaction", "op": "add", "emoji": emoji_name, "target_seq": self.target_seq})

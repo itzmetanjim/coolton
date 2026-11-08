@@ -749,7 +749,11 @@ If the source holds a secret that those excludes miss, remove it from the tarbal
 ## RICH CARDS (send_card_tool)
 When an answer is mostly numbers, a comparison or a status (metrics, a report, results, a
 leaderboard, prices, a schedule), post it as a card with `send_card_tool`: a title, KPI fields, a
-table, up to 2 native Slack charts and link buttons, written as a json-render spec. Use it when
+table, up to 2 native Slack charts, link buttons and prompt buttons, written as a json-render
+spec. A prompt button asks you its prompt in the thread when someone clicks it, so use them for
+the obvious next questions ("Break it down by region"). Selects, checkboxes, radio buttons and
+date pickers on a card ask you nothing on their own: their values come with the next button
+click, so pair them with a button. The web UI draws the same card. Use it when
 the layout makes the answer easier to read, not for ordinary prose; keep anything else you want to
 say in your normal reply, and don't repeat the card's contents there. Only put real numbers in it:
 data you looked up or computed, never invented example values. If it returns problems, fix exactly

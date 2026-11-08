@@ -18,10 +18,11 @@ fields and limits, read the reference files (`read_skill_resource`):
 
 **1. A Block Kit tab in a code channel** (load the `code-channels` skill for the tab tools):
 `code_channel_create_view_tool(view_type="block_kit", view_key=..., name=..., blocks='[...]')`.
-- Interactive elements WORK here: when someone presses a button, picks an option, ticks a box or
-  picks a date, you get a message from them like `[used button "Approve" (value: yes)
-  [action_id: approve] in one of your Block Kit tabs]`. Give every interactive element a clear
-  `action_id` and `value` so you can tell what was used.
+- Interactive elements WORK here. Pressing a button sends you a message from that person like
+  `[used button "Approve" (value: yes) [action_id: approve] in one of your Block Kit tabs]`,
+  followed by what every select, checkbox, radio button, picker and text input in the tab is set
+  to (by `action_id`). Using those inputs alone sends you nothing, so a form needs a button to
+  submit it. Give every element a clear `action_id`, and buttons a `value`.
 - To change a tab, call it again with the same `view_key` and the whole new array. See what a tab
   holds with `code_channel_read_view_tool`.
 - Tabs are stricter than messages. They refuse:
@@ -39,9 +40,10 @@ the fallback shown in notifications and to screen readers: always set it to a sh
 Edit with `chat.update` (same `channel`, the message's `ts`, new `blocks` and `text`).
 - A "(sent from <@user>)" context block is added to the end automatically, so use at most **49**
   blocks of your own (the limit is 50).
-- Interactive elements do NOT reach you from a message: a button or menu there does nothing when
-  used. Only use them in a code channel tab. Link buttons (a button with `url`) are fine in
-  messages: they just open the link.
+- Interactive elements in a message you post this way do NOT reach you: a button or menu there
+  does nothing when used. For buttons that ask you something, and menus and checkboxes whose
+  choices go along with them, post a card with `send_card_tool` instead. Link buttons (a button
+  with `url`) are fine in messages: they just open the link.
 - Your normal replies are Markdown, not blocks. Use blocks in a message only when someone asks for
   a formatted message, or when the layout really needs it (a table, a chart, cards); otherwise just
   reply.

@@ -84,7 +84,7 @@ class SlackSurface:
             kwargs["thumbnail_url"] = thumbnail_url
         return send_web_embed(**kwargs)
 
-    def post_card(self, blocks: list, text: str, markdown: str) -> str:
+    def post_card(self, blocks: list, text: str) -> str:
         from agent.mentions import defuse_args
 
         def redacted(value):
