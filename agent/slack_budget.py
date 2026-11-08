@@ -34,7 +34,7 @@ _lock = threading.Lock()
 # Tools whose arguments can end up in a Slack message without being a "Slack tool" above.
 _OTHER_POSTING_TOOLS = frozenset({"send_message", "text_only_response", "upload_file_from_sandbox",
                                   "send_html_embed_tool", "send_whiteboard_embed_tool", "generate_image_tool",
-                                  "render_mermaid_tool"})
+                                  "render_mermaid_tool", "send_card_tool"})
 
 
 def posts_to_slack(name: str) -> bool:

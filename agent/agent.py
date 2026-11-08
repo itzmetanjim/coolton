@@ -1892,6 +1892,45 @@ def send_html_embed_tool(
     return _surface(ctx.deps).post_embed(url, title, text, _EMBED_THUMBNAIL_URL)
 
 
+@agent.tool
+def send_card_tool(ctx: RunContext[AgentDeps], spec: str) -> str:
+    """Post a rich card in the thread: a title, KPI fields, a table, up to 2 native charts,
+    images and link buttons, built from a json-render spec (JSON text). Use it when numbers,
+    comparisons or a dashboard read better as a card than as prose. Anything else you want
+    to say goes in your normal reply.
+
+    The spec is json-render's flat form: {"root": "<key>", "elements": {"<key>": {"type": ...,
+    "props": {...}, "children": ["<key>", ...]}}}. The root is a Card.
+
+    Components (props; ? = optional):
+    - Card: title?, subtitle?, imageUrl? (https). Children: anything below.
+    - Section: groups children.
+    - Text: content (Markdown: **bold**, [links](https://...)), style? plain | bold | muted.
+    - Fields: children are Field. Field: label, value (a KPI, e.g. "$4.2M +18%").
+    - Table: headers [..], rows [[..]] (one cell per header), caption?. The first table is a
+      sortable Slack table; later ones become plain text.
+    - Chart: title (max 50 chars), chart: {"type": "pie", "segments": [{"label", "value" > 0}]}
+      or {"type": "bar" | "line" | "area", "categories": [..], "series": [{"name", "values":
+      [one number per category]}], "xLabel"?, "yLabel"?}. Labels max 20 chars, max 20
+      categories and 12 series. Only 2 charts per card are drawn; more become plain text.
+    - Divider. Image: url (public https), alt.
+    - Actions: children are LinkButton (label, url). Buttons that run actions don't exist here.
+
+    Write literal values: $state, repeat and other json-render expressions aren't supported.
+
+    Args:
+        spec: The json-render spec, as JSON text.
+    """
+    from agent.tools.json_render_card import CardSpecError, to_blocks, to_markdown
+
+    try:
+        blocks, text = to_blocks(spec)
+        markdown = to_markdown(spec)
+    except CardSpecError as e:
+        return "Error: the card spec has problems; fix them and call again:\n- " + "\n- ".join(e.issues)
+    return _surface(ctx.deps).post_card(blocks, text, markdown)
+
+
 def _parse_json_object_param(param_name: str, value: str, example: str = '{"key": "value"}') -> tuple[dict | None, str | None]:
     """Parse `value` (a JSON-encoded object) into a dict. Returns (parsed, None) on
     success, or (None, error_message) on failure.

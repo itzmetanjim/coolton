@@ -54,6 +54,7 @@ Use this when someone asks about coolton itself. Answer from these facts, not gu
 - Sees images directly on a vision model (attachments, screenshots, files in the sandbox); on other models it describes them with a separate vision model.
 - Generates images (up to 4 at a time) and edits or combines existing ones, using Hack Club AI's Gemini image models, or the person's own image endpoint from App Home.
 - Renders Mermaid diagrams as images: flowcharts, sequence, class, state, Gantt, pie, ER *(deferred)*.
+- Rich cards in the thread (`send_card_tool`): a title, KPI fields, a sortable table, up to 2 native Slack charts (bar, line, area, pie) and link buttons, written as a [json-render](https://github.com/vercel-labs/json-render) spec.
 - Live HTML embeds in the thread (a quick demo, mini app or calculator) and shared tldraw whiteboards *(deferred)*.
 - Skills for text-to-speech and transcription (`voice`) and 67ify-style animated GIFs (`67ify`).
 - Adds custom Slack emoji, as a new image or an alias, when the workspace has that set up *(deferred)*.

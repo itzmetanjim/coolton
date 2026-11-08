@@ -84,6 +84,30 @@ class SlackSurface:
             kwargs["thumbnail_url"] = thumbnail_url
         return send_web_embed(**kwargs)
 
+    def post_card(self, blocks: list, text: str, markdown: str) -> str:
+        from agent.mentions import defuse_args
+
+        def redacted(value):
+            if isinstance(value, str):
+                return _redact(value, context="send_card")
+            if isinstance(value, dict):
+                return {k: redacted(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [redacted(v) for v in value]
+            return value
+
+        try:
+            resp = self.client.chat_postMessage(
+                channel=self.channel_id, thread_ts=self.thread_ts or None,
+                blocks=defuse_args(redacted(blocks)), text=defuse_args(redacted(text)),
+            )
+        except Exception as e:
+            error = getattr(getattr(e, "response", None), "data", None) or str(e)
+            return f"Error: Slack refused the card: {error}"
+        if not resp.get("ok"):
+            return f"Error: Slack refused the card: {resp.get('error')}"
+        return "Posted the card in the thread."
+
     def react(self, emoji_name: str) -> str:
         """React to the message. A name Slack doesn't know (invalid_name: the model made it
         up, or used the emoji's Unicode name instead of Slack's) is tried under the same

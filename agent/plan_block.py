@@ -394,6 +394,7 @@ TOOL_DISPLAY_NAMES = {
     "run_opencode_tool": "Running opencode",
     "send_whiteboard_embed_tool": "Sending whiteboard",
     "send_html_embed_tool": "Sending HTML embed",
+    "send_card_tool": "Sending card",
     "slack_api_call": "Calling Slack API",
     "slack_api_call_as_bot_tool": "Calling Slack API (bot)",
     "leave_thread_tool": "Leaving thread",
