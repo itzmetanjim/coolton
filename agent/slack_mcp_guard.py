@@ -68,9 +68,9 @@ _FILE_CREATE_TOOLS = {"slack_create_canvas", "slack_create_list"}
 _PRIVATE_ARG = {
     "type": "boolean",
     "description": (
-        "Share only with this channel or person and coolton. Leave false and the canvas is also "
-        "readable from the workspace's general channels. Use true for anything private or sensitive, "
-        "or when the user asks."
+        "Share only with this channel or person and coolton, not the workspace's general channels. "
+        "Canvases made in a DM or private channel are always private. In a public channel, use true "
+        "for anything sensitive or when the user asks."
     ),
 }
 

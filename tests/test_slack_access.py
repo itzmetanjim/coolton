@@ -547,8 +547,10 @@ def test_the_private_flag_is_offered_on_canvas_creation_only():
 # ---------------------------------------------------------------------------
 
 
-def _sharing(monkeypatch, failed_users=()):
+def _sharing(monkeypatch, failed_users=(), public=("C1", "C_GEN1")):
     calls = []
+    monkeypatch.setattr(canvas_sharing, "assert_readable_channel",
+                        lambda channel_id: None if channel_id in public else "private")
 
     def fake_call(method, token, payload):
         if method == "auth.test":
@@ -576,11 +578,16 @@ def test_a_canvas_in_a_channel_is_shared_with_it_coolton_and_the_general_channel
     }
 
 
-def test_a_canvas_in_a_dm_is_shared_with_the_person(monkeypatch):
+def test_a_canvas_in_a_dm_is_shared_with_the_person_only(monkeypatch):
     calls = _sharing(monkeypatch)
     canvas_sharing.share_new_canvas("F1", "D1", ASKER)
-    assert ((ASKER, "U_BOT", "U_COOLTON"), "write") in _grants(calls)
-    assert not any(c.get("channel_ids") == ["D1"] for c in calls)
+    assert _grants(calls) == {((ASKER, "U_BOT", "U_COOLTON"), "write")}
+
+
+def test_a_canvas_in_a_private_channel_is_private_on_its_own(monkeypatch):
+    calls = _sharing(monkeypatch)
+    canvas_sharing.share_new_canvas("F1", "C_PRIVATE", ASKER)
+    assert _grants(calls) == {(("C_PRIVATE",), "write"), (("U_BOT", "U_COOLTON"), "write")}
 
 
 def test_a_private_canvas_skips_the_general_channels(monkeypatch):

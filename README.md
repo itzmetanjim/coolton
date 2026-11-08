@@ -244,7 +244,7 @@ wins, falling through on failure.
 | `HCAI_API_KEY` | HCAI gateway |
 | `INCEPTION_API_KEY` | Inception Labs (Mercury) |
 | `KAVYANSH_AI_API_KEY` | Kavyansh AI proxy (tag-only `kavyansh-sonnet-5` and `kavyansh-opus-5`) |
-| `CANVAS_SHARE_CHANNEL_IDS` | Channels that can read every canvas coolton creates, unless it's private (comma-separated) |
+| `CANVAS_SHARE_CHANNEL_IDS` | Channels that can read every canvas coolton creates in a public channel, unless it's private (comma-separated) |
 | `COOLTON_OWNER_USER_ID` | The only Slack user who can pick `owner_only` models (`kavyansh-opus-5`) |
 | `OPENROUTER_API_KEY_FALLBACK` | OpenRouter (free models from hosts that don't collect data) |
 | `GROQ_API_KEY` | Groq |

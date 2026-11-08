@@ -1,8 +1,9 @@
 """Who gets a canvas coolton just created. A new canvas is shared with nobody, so without
 this it can't be opened by the people it's for, or by coolton from anywhere else.
 
-Coolton (bot and cooltonUser) and the conversation it was made in can edit it. Unless it's
-private, the channels in CANVAS_SHARE_CHANNEL_IDS can read it too.
+Coolton (bot and cooltonUser) and the conversation it was made in can edit it. The channels
+in CANVAS_SHARE_CHANNEL_IDS can read it too, unless it's private: asked for, or made in a DM,
+a private channel, or anywhere that can't be confirmed to be a public channel.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ import logging
 import os
 
 import requests
+
+from agent.tools.slack_search import assert_readable_channel
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +72,8 @@ def share_new_canvas(canvas_id: str, channel_id: str, requester_id: str, private
     if user_ids:
         problems += _grant(token, canvas_id, "write", {coolton_user}, user_ids=user_ids)
 
-    if not private:
+    # Fails closed: a channel whose visibility can't be checked counts as private.
+    if not private and assert_readable_channel(channel_id) is None:
         extra = [c.strip() for c in os.environ.get("CANVAS_SHARE_CHANNEL_IDS", "").split(",") if c.strip()]
         # Not the current channel: it already has write access, and this would lower it.
         extra = [c for c in extra if c != channel_id]
