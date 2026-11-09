@@ -85,8 +85,17 @@ def _to_model_message(client, msg: dict, name_cache: dict, coolton_bot_id: str):
         if is_bot_message:
             from agent.display_names import safe_name
 
-            bot_name = safe_name(msg.get("username") or msg.get("bot_id"), fallback="unknown bot")
-            return ModelRequest(parts=[UserPromptPart(content=f"[other bot] {bot_name}:\n{text}", timestamp=_timestamp(msg))])
+            # A bot's name, not its id: the model called another bot "B0A400" in a thread
+            # because only the bot id was there. Its id stays alongside, for mentions.
+            bot_user = msg.get("user") or ""
+            bot_name = safe_name(
+                (msg.get("bot_profile") or {}).get("name") or msg.get("username")
+                or (_display_name(client, bot_user, name_cache) if bot_user else "") or msg.get("bot_id"),
+                fallback="unknown bot",
+            )
+            ids = bot_user or msg.get("bot_id") or ""
+            label = f"{bot_name} ({ids})" if ids and ids != bot_name else bot_name
+            return ModelRequest(parts=[UserPromptPart(content=f"[other bot] {label}:\n{text}", timestamp=_timestamp(msg))])
         user = msg.get("user") or "unknown"
         name = _display_name(client, user, name_cache)
         return ModelRequest(parts=[UserPromptPart(content=f"{user} ({name}):\n{text}", timestamp=_timestamp(msg))])

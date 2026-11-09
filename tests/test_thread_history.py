@@ -134,7 +134,7 @@ def test_unseen_messages_keep_only_new_human_and_other_bot_messages(monkeypatch)
 
     texts = _texts(unseen)
     assert "haven't seen them" in texts[0]  # header first
-    assert texts[1:] == ["U3 (Alice):\nnew point from Carol", "[other bot] otherbot:\nbuild failed"]
+    assert texts[1:] == ["U3 (Alice):\nnew point from Carol", "[other bot] otherbot (B9):\nbuild failed"]
     assert client.conversations_replies.call_args.kwargs["oldest"] == "5.0"
 
 
@@ -168,3 +168,16 @@ def test_unseen_catch_up_includes_file_only_messages():
     ])
     unseen = build_unseen_messages(client, "C1", "1.0", "5.0", exclude_ts="10.0", history=[])
     assert unseen[1].parts[0].content.endswith("[attachments: diagram.png (F0DDD)]")
+
+
+def test_another_bot_is_named_not_just_its_id(monkeypatch):
+    from thread_context.thread_history import _to_model_message
+
+    client = Mock()
+    client.users_info.return_value = {"ok": True, "user": {"profile": {"display_name": "kyto"}}}
+    profile = {"ts": "1.0", "user": "UB1", "bot_id": "B1", "bot_profile": {"name": "gorkie-dev"}, "text": "done"}
+    by_user = {"ts": "2.0", "user": "UB2", "bot_id": "B2", "text": "working"}
+
+    assert _texts([_to_model_message(client, profile, {}, "UBOT")]) == ["[other bot] gorkie-dev (UB1):\ndone"]
+    assert _texts([_to_model_message(client, by_user, {}, "UBOT")]) == ["[other bot] kyto (UB2):\nworking"]
+
