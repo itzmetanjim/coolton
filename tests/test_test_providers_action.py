@@ -2,7 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from agent.admin_alerts import ADMIN_USER_ID
+from agent.admin_alerts import MAINTAINER_ID as ADMIN_USER_ID
 from listeners.actions.test_providers import (
     build_test_provider_modal,
     handle_test_provider_open,

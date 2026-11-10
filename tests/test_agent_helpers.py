@@ -11,10 +11,12 @@ import importlib
 
 import agent.sandbox_helpers as helpers_mod
 import agent.redact as redact_mod
+from agent.tool_groups import slack_bots as slack_bots_tools
 
 
 
 agent_mod = importlib.import_module("agent.agent")
+skill_tools = importlib.import_module("agent.tool_groups.skills")
 
 
 @pytest.fixture
@@ -486,7 +488,7 @@ def test_proxy_cache_capped(monkeypatch):
 
 
 def test_build_skill_md_escapes_apostrophes():
-    md = agent_mod._build_skill_md(
+    md = skill_tools._build_skill_md(
         "my-skill", "handles don't and it's tricky", "body text"
     )
     assert "don''t" in md
@@ -494,7 +496,7 @@ def test_build_skill_md_escapes_apostrophes():
 
 
 def test_build_skill_md_frontmatter():
-    md = agent_mod._build_skill_md("cool-skill", "A cool skill.", "Instructions here")
+    md = skill_tools._build_skill_md("cool-skill", "A cool skill.", "Instructions here")
     assert md.startswith("---\n")
     assert "name: cool-skill" in md
     assert "description: 'A cool skill.'" in md
@@ -503,37 +505,37 @@ def test_build_skill_md_frontmatter():
 
 
 def test_validate_skill_md_valid():
-    ok, err = agent_mod._validate_skill_md("---\nname: x\ndescription: y\n---\n\nbody")
+    ok, err = skill_tools._validate_skill_md("---\nname: x\ndescription: y\n---\n\nbody")
     assert ok is True and err == ""
 
 
 def test_validate_skill_md_missing_delimiters():
-    ok, err = agent_mod._validate_skill_md("name: x")
+    ok, err = skill_tools._validate_skill_md("name: x")
     assert ok is False and "delimiters" in err
 
 
 def test_validate_skill_md_requires_name_and_description():
-    ok, err = agent_mod._validate_skill_md("---\nname: x\n---\n\nbody")
+    ok, err = skill_tools._validate_skill_md("---\nname: x\n---\n\nbody")
     assert ok is False and "required" in err
 
 
 def test_safe_name_slugifies():
-    assert agent_mod._safe_name("My Cool Skill!") == "my-cool-skill-"
+    assert skill_tools._safe_name("My Cool Skill!") == "my-cool-skill-"
 
 
 def test_is_within_no_traversal():
     root = "/a/b/c"
-    assert agent_mod._is_within("/a/b/c", root) is True
-    assert agent_mod._is_within("/a/b/c/d", root) is True
-    assert agent_mod._is_within("/a/b/cd", root) is False
-    assert agent_mod._is_within("/a/b", root) is False
+    assert skill_tools._is_within("/a/b/c", root) is True
+    assert skill_tools._is_within("/a/b/c/d", root) is True
+    assert skill_tools._is_within("/a/b/cd", root) is False
+    assert skill_tools._is_within("/a/b", root) is False
 
 
 def test_resolve_skill_rejects_traversal(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent_mod, "_skill_dirs", lambda: [str(tmp_path / "skills")])
-    assert agent_mod._resolve_skill("../etc") is None
-    assert agent_mod._resolve_skill("a/b") is None
-    assert agent_mod._resolve_skill("") is None
+    monkeypatch.setattr(skill_tools, "_skill_dirs", lambda: [str(tmp_path / "skills")])
+    assert skill_tools._resolve_skill("../etc") is None
+    assert skill_tools._resolve_skill("a/b") is None
+    assert skill_tools._resolve_skill("") is None
 
 @pytest.mark.parametrize(
     "env_key",
@@ -709,7 +711,7 @@ def test_create_slack_bot_tool_parses_json_string_manifest(monkeypatch):
         return "Success: app created"
 
     monkeypatch.setattr("agent.tools.slack_bot_deploy.create_slack_bot", fake_create_slack_bot)
-    result = agent_mod.create_slack_bot_tool(
+    result = slack_bots_tools.create_slack_bot_tool(
         _run_ctx(Mock()), manifest='{"display_information": {"name": "Test Bot"}}'
     )
     assert "Success" in result
@@ -722,7 +724,7 @@ def test_create_slack_bot_tool_rejects_malformed_json(monkeypatch):
         "agent.tools.slack_bot_deploy.create_slack_bot",
         lambda manifest: called.append(manifest) or "should not be called",
     )
-    result = agent_mod.create_slack_bot_tool(_run_ctx(Mock()), manifest="{not valid json")
+    result = slack_bots_tools.create_slack_bot_tool(_run_ctx(Mock()), manifest="{not valid json")
     assert "must be valid JSON" in result
     assert called == []
 
@@ -736,7 +738,7 @@ def test_update_slack_bot_manifest_tool_parses_json_string_manifest(monkeypatch)
         return "Manifest updated for app A123."
 
     monkeypatch.setattr("agent.tools.slack_bot_deploy.update_slack_bot_manifest", fake_update)
-    result = agent_mod.update_slack_bot_manifest_tool(
+    result = slack_bots_tools.update_slack_bot_manifest_tool(
         _run_ctx(Mock()), uuid="A123", manifest='{"display_information": {"name": "Test Bot"}}'
     )
     assert "Manifest updated" in result
@@ -750,7 +752,7 @@ def test_update_slack_bot_manifest_tool_rejects_a_json_array(monkeypatch):
         "agent.tools.slack_bot_deploy.update_slack_bot_manifest",
         lambda uuid, manifest: called.append(manifest) or "should not be called",
     )
-    result = agent_mod.update_slack_bot_manifest_tool(_run_ctx(Mock()), uuid="A123", manifest="[1, 2]")
+    result = slack_bots_tools.update_slack_bot_manifest_tool(_run_ctx(Mock()), uuid="A123", manifest="[1, 2]")
     assert "must be a JSON object" in result
     assert called == []
 
@@ -1730,7 +1732,7 @@ def _valid_skill_md(name="cool-skill"):
 def _maintainer_ctx():
     """install_skill applies immediately only for the maintainer; anyone
     else's install goes to review (see tests/test_skill_review.py)."""
-    from agent.admin_alerts import ADMIN_USER_ID
+    from agent.admin_alerts import MAINTAINER_ID as ADMIN_USER_ID
 
     ctx = _run_ctx(Mock())
     ctx.deps.user_id = ADMIN_USER_ID
@@ -1740,7 +1742,7 @@ def _maintainer_ctx():
 def test_install_skill_requires_e2b_api_key(monkeypatch):
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     ctx = _maintainer_ctx()
-    result = agent_mod.install_skill(ctx, "vercel-labs/agent-skills")
+    result = skill_tools.install_skill(ctx, "vercel-labs/agent-skills")
     assert "E2B_API_KEY" in result
 
 
@@ -1750,12 +1752,12 @@ def test_install_skill_never_runs_npx_on_the_host(monkeypatch, tmp_path):
     model-controlled, so that was unsandboxed code execution as the coolton service
     user. It must now go through get_or_create_sandbox instead."""
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(skill_tools, "_repo_root", lambda: str(tmp_path))
     fake_sandbox = _FakeSkillSandbox(entries=[], contents={})
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _maintainer_ctx()
-    agent_mod.install_skill(ctx, "vercel-labs/agent-skills")
+    skill_tools.install_skill(ctx, "vercel-labs/agent-skills")
 
     assert "npx" in fake_sandbox.last_cmd
     assert "vercel-labs/agent-skills" in fake_sandbox.last_cmd
@@ -1764,14 +1766,14 @@ def test_install_skill_never_runs_npx_on_the_host(monkeypatch, tmp_path):
 
 def test_install_skill_imports_only_validated_skill_md(monkeypatch, tmp_path):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(skill_tools, "_repo_root", lambda: str(tmp_path))
     entries = [_skill_entry("cool-skill")]
     contents = {"cool-skill": _valid_skill_md("cool-skill")}
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents)
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _maintainer_ctx()
-    result = agent_mod.install_skill(ctx, "someone/skills-repo")
+    result = skill_tools.install_skill(ctx, "someone/skills-repo")
 
     assert "Installed skill(s): cool-skill" in result
     written = tmp_path / ".agents" / "skills" / "cool-skill" / "SKILL.md"
@@ -1783,14 +1785,14 @@ def test_install_skill_rejects_malformed_skill_md_and_writes_nothing(monkeypatch
     frontmatter (or anything else) written to the host — only content that passes
     the exact same validation create_skill enforces is ever persisted."""
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(skill_tools, "_repo_root", lambda: str(tmp_path))
     entries = [_skill_entry("bad-skill")]
     contents = {"bad-skill": "not even frontmatter"}
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents)
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _maintainer_ctx()
-    result = agent_mod.install_skill(ctx, "someone/bad-repo")
+    result = skill_tools.install_skill(ctx, "someone/bad-repo")
 
     assert "No valid skill found" in result
     assert not (tmp_path / ".agents" / "skills").exists()
@@ -1804,7 +1806,7 @@ def test_install_skill_copies_reference_and_script_files_too(monkeypatch, tmp_pa
     model context, there's no reason to withhold those files from a skill
     install_skill fetches — only SKILL.md's frontmatter needs validating."""
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(skill_tools, "_repo_root", lambda: str(tmp_path))
     entries = [_skill_entry("cool-skill")]
     contents = {"cool-skill": _valid_skill_md("cool-skill")}
     file_entries = {
@@ -1814,10 +1816,10 @@ def test_install_skill_copies_reference_and_script_files_too(monkeypatch, tmp_pa
         ]
     }
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents, file_entries=file_entries)
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _maintainer_ctx()
-    result = agent_mod.install_skill(ctx, "someone/skills-repo")
+    result = skill_tools.install_skill(ctx, "someone/skills-repo")
 
     assert "Installed skill(s): cool-skill" in result
     skill_dir = tmp_path / ".agents" / "skills" / "cool-skill"
@@ -1830,15 +1832,15 @@ def test_install_skill_rejects_path_traversal_in_a_shipped_file(monkeypatch, tmp
     """A malicious package's file listing must not be able to write outside the
     skill's own directory on the host, e.g. via a `../../` relative path."""
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(skill_tools, "_repo_root", lambda: str(tmp_path))
     entries = [_skill_entry("cool-skill")]
     contents = {"cool-skill": _valid_skill_md("cool-skill")}
     file_entries = {"cool-skill": [("../../../etc/evil.conf", b"malicious")]}
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents, file_entries=file_entries)
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _maintainer_ctx()
-    result = agent_mod.install_skill(ctx, "someone/skills-repo")
+    result = skill_tools.install_skill(ctx, "someone/skills-repo")
 
     assert "Installed skill(s): cool-skill" in result
     assert "escapes skill directory" in result
@@ -1848,16 +1850,16 @@ def test_install_skill_rejects_path_traversal_in_a_shipped_file(monkeypatch, tmp
 
 def test_install_skill_rejects_an_oversized_file(monkeypatch, tmp_path):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(skill_tools, "_repo_root", lambda: str(tmp_path))
     entries = [_skill_entry("cool-skill")]
     contents = {"cool-skill": _valid_skill_md("cool-skill")}
-    huge = b"x" * (agent_mod._SKILL_INSTALL_MAX_FILE_BYTES + 1)
+    huge = b"x" * (skill_tools._SKILL_INSTALL_MAX_FILE_BYTES + 1)
     file_entries = {"cool-skill": [("data/huge.bin", huge)]}
     fake_sandbox = _FakeSkillSandbox(entries=entries, contents=contents, file_entries=file_entries)
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _maintainer_ctx()
-    result = agent_mod.install_skill(ctx, "someone/skills-repo")
+    result = skill_tools.install_skill(ctx, "someone/skills-repo")
 
     assert "exceeds" in result
     assert not (tmp_path / ".agents" / "skills" / "cool-skill" / "data" / "huge.bin").exists()
@@ -1865,12 +1867,12 @@ def test_install_skill_rejects_an_oversized_file(monkeypatch, tmp_path):
 
 def test_install_skill_reports_command_failure(monkeypatch, tmp_path):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
-    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(skill_tools, "_repo_root", lambda: str(tmp_path))
     fake_sandbox = _FakeSkillSandbox(entries=[], contents={}, exit_code=1)
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _maintainer_ctx()
-    result = agent_mod.install_skill(ctx, "someone/broken-repo")
+    result = skill_tools.install_skill(ctx, "someone/broken-repo")
 
     assert "Failed to install skill" in result
     assert fake_sandbox.paused == 1
@@ -2004,14 +2006,14 @@ def test_run_skill_script_in_sandbox_requires_e2b_api_key(monkeypatch, tmp_path)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     ctx = _run_ctx(Mock())
     script = _fake_skill_script(tmp_path)
-    result = agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
+    result = skill_tools._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
     assert "E2B_API_KEY" in result
 
 
 def test_run_skill_script_in_sandbox_requires_a_run_context():
     from types import SimpleNamespace
     script = SimpleNamespace(uri="/tmp/x.sh", name="x.sh")
-    result = agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=None)
+    result = skill_tools._run_skill_script_in_sandbox(script, args=None, ctx=None)
     assert "no run context" in result
 
 
@@ -2022,13 +2024,13 @@ def test_run_skill_script_in_sandbox_never_shells_out_on_the_host(monkeypatch, t
 
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     fake_sandbox = _FakeSkillScriptSandbox()
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
     host_subprocess_calls = []
     monkeypatch.setattr(real_subprocess, "Popen", lambda *a, **k: host_subprocess_calls.append((a, k)) or Mock())
 
     ctx = _run_ctx(Mock())
     script = _fake_skill_script(tmp_path)
-    result = agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
+    result = skill_tools._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
 
     assert host_subprocess_calls == []
     assert "script output" in result
@@ -2040,11 +2042,11 @@ def test_run_skill_script_in_sandbox_never_shells_out_on_the_host(monkeypatch, t
 def test_run_skill_script_in_sandbox_picks_interpreter_by_extension(monkeypatch, tmp_path):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     fake_sandbox = _FakeSkillScriptSandbox()
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _run_ctx(Mock())
     script = _fake_skill_script(tmp_path, name="analyze.py", content=b"print('hi')\n")
-    agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
+    skill_tools._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
 
     assert "python3" in fake_sandbox.last_cmd
     assert "skill_script_analyze.py" in fake_sandbox.last_cmd
@@ -2053,11 +2055,11 @@ def test_run_skill_script_in_sandbox_picks_interpreter_by_extension(monkeypatch,
 def test_run_skill_script_in_sandbox_builds_named_args(monkeypatch, tmp_path):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     fake_sandbox = _FakeSkillScriptSandbox()
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _run_ctx(Mock())
     script = _fake_skill_script(tmp_path)
-    agent_mod._run_skill_script_in_sandbox(
+    skill_tools._run_skill_script_in_sandbox(
         script, args={"verbose": True, "quiet": False, "tag": ["a", "b"], "name": "coolton"}, ctx=ctx,
     )
 
@@ -2077,11 +2079,11 @@ def test_run_skill_script_in_sandbox_rejects_an_unsafe_flag_name(monkeypatch, tm
     but an identifier; anything else must be dropped, not run."""
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     fake_sandbox = _FakeSkillScriptSandbox()
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _run_ctx(Mock())
     script = _fake_skill_script(tmp_path)
-    agent_mod._run_skill_script_in_sandbox(
+    skill_tools._run_skill_script_in_sandbox(
         script, args={"safe-name": "ok", "foo; rm -rf ~": "evil", "also bad": True}, ctx=ctx,
     )
 
@@ -2094,11 +2096,11 @@ def test_run_skill_script_in_sandbox_rejects_an_unsafe_flag_name(monkeypatch, tm
 def test_run_skill_script_in_sandbox_reports_exit_code(monkeypatch, tmp_path):
     monkeypatch.setenv("E2B_API_KEY", "e2b-test")
     fake_sandbox = _FakeSkillScriptSandbox(exit_code=1)
-    monkeypatch.setattr(agent_mod, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
+    monkeypatch.setattr(skill_tools, "get_or_create_sandbox", lambda c, t: (fake_sandbox, {}))
 
     ctx = _run_ctx(Mock())
     script = _fake_skill_script(tmp_path)
-    result = agent_mod._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
+    result = skill_tools._run_skill_script_in_sandbox(script, args=None, ctx=ctx)
 
     assert "Exit Code: 1" in result
     assert fake_sandbox.paused == 1

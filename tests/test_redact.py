@@ -81,3 +81,10 @@ def test_secrets_coolton_makes_or_decrypts_while_running_are_redacted(tmp_path, 
 
     out = redact.redact(f"env: COOLTON_GIT_TOKEN={token} OPENAI_API_KEY={key}")
     assert token not in out and key not in out and out.count("***") == 2
+
+
+def test_cooltonusers_browser_session_is_redacted(tmp_path):
+    """Its xoxc- token and d cookie together control cooltonUser's account, and neither
+    name says KEY or TOKEN."""
+    _write_env(tmp_path, "COOLTON_USER_XOXC=xoxc-1234-abcdefgh\nCOOLTON_USER_XOXD=xoxd-cookie%2Fvalue\n")
+    assert redact.redact("c=xoxc-1234-abcdefgh d=xoxd-cookie%2Fvalue") == "c=*** d=***"

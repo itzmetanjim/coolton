@@ -76,11 +76,12 @@ def _matches_tag(entry: dict, tag: str | None) -> bool:
 
 
 def _may_use(entry: dict, user_id: str | None) -> bool:
-    """An `owner_only` model is for COOLTON_OWNER_USER_ID alone; if that's unset, nobody."""
+    """An `owner_only` model is for coolton's admins alone (agent.admin_alerts)."""
     if not entry.get("owner_only"):
         return True
-    owner = os.environ.get("COOLTON_OWNER_USER_ID")
-    return bool(owner) and user_id == owner
+    from agent.admin_alerts import is_admin
+
+    return is_admin(user_id)
 
 
 def get_all_tags(user_id: str | None = None) -> list[str]:

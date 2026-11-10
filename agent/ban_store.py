@@ -4,7 +4,7 @@
 user's messages never start a run, on Slack or the web UI, since both funnel
 through that one pipeline. The `!ban`/`!unban` command syntax that manages
 this list lives here too: parsing and enforcement are two views of the same
-data, and only the maintainer (agent.admin_alerts.ADMIN_USER_ID) may issue either command
+data, and only an admin (agent.admin_alerts.ADMIN_USER_IDS) may issue either command
 (listeners.events.message / app_mentioned check that before calling ban_user/
 unban_user — this module doesn't enforce it itself, so it stays a pure store).
 """
@@ -15,7 +15,7 @@ import re
 import threading
 import time
 
-from agent.admin_alerts import ADMIN_USER_ID
+from agent.admin_alerts import is_admin
 from agent.json_file import load_json, save_json
 
 BAN_STORE_FILE = "ban_store.json"
@@ -44,7 +44,7 @@ def _save(data: dict) -> None:
 
 
 def is_authorized(user_id: str) -> bool:
-    return user_id == ADMIN_USER_ID
+    return is_admin(user_id)
 
 
 def ban_user(target_user_id: str, reason: str = "") -> None:

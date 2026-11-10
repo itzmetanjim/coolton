@@ -128,7 +128,7 @@ def test_unregistered_sandbox_token_no_longer_works():
 # ---------------------------------------------------------------------------
 # SANDBOX_MODULE_TEMPLATE / build_sandbox_module — the code written into the
 # sandbox itself. Every real tool parameter is now a plain string (see
-# agent.agent._parse_json_object_param), but code_mode's own docstring shows
+# agent.tool_args.parse_json_object_param), but code_mode's own docstring shows
 # calling agent_tools.slack_api_call_as_bot_tool(method, {"channel": "..."})
 # with a literal dict — that must still work, by JSON-encoding compound args
 # transparently before they go over the wire.

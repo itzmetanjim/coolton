@@ -158,7 +158,8 @@ def build_kevinton_agent() -> tuple[Agent[AgentDeps, str], list]:
     send_message, and the skill tools) so it can open PRs and DM KitKat when it detects a
     coolton bug — not just capture skills.
     """
-    from agent.agent import agent as _coolton_agent, _hooks, build_skills_capability
+    from agent.agent import agent as _coolton_agent, _hooks
+    from agent.tool_groups.skills import build_skills_capability
     kevinton_tools = list(_coolton_agent._function_toolset.tools.values())
     agent = Agent(
         deps_type=AgentDeps,

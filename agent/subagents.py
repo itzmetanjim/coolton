@@ -277,7 +277,7 @@ def run_subagent(target: str, task: str, deps: AgentDeps) -> str:
 
     capabilities = [_hooks, _subagent_hooks(sub), PrepareTools(disable_strict_for_all_tools)]
     if target == "general":
-        from agent.agent import build_skills_capability
+        from agent.tool_groups.skills import build_skills_capability
         from agent.image_cap import cap_images
 
         capabilities += [build_skills_capability(), ProcessHistory(cap_images)]

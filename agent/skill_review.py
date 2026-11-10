@@ -3,12 +3,12 @@
 Skills are global: every skill in skills/ and .agents/skills/ is offered to
 every user's turns, so one bad skill is a standing prompt injection for
 everyone. A skill change (create, install, rename, delete) therefore only
-takes effect immediately when the maintainer (agent.admin_alerts.ADMIN_USER_ID)
+takes effect immediately when an admin (agent.admin_alerts.ADMIN_USER_IDS)
 asks for it directly. Anyone else's request — and every change kevinton makes
 on its own, since it works from untrusted transcripts — becomes a proposal:
 stored here, DM'd to the maintainer with Approve/Reject buttons
 (listeners/actions/skill_review_actions.py), and only applied on approval
-(agent.agent.apply_skill_change).
+(agent.tool_groups.skills.apply_skill_change).
 
 A proposal's `spec` is exactly what apply_skill_change consumes. An install's
 fetched files are staged under <repo>/STAGING_DIR until approved or rejected.
@@ -22,7 +22,7 @@ import threading
 import time
 import uuid
 
-from agent.admin_alerts import ADMIN_USER_ID, notify_admin
+from agent.admin_alerts import is_admin, notify_admin
 from agent.json_file import load_json, save_json
 
 PROPOSALS_FILE = "skill_proposals.json"
@@ -41,7 +41,7 @@ def auto_accept_enabled() -> bool:
 
 
 def _review_policy_applies(deps) -> bool:
-    return bool(getattr(deps, "skill_review_required", False)) or getattr(deps, "user_id", "") != ADMIN_USER_ID
+    return bool(getattr(deps, "skill_review_required", False)) or not is_admin(getattr(deps, "user_id", ""))
 
 
 def needs_review(deps) -> bool:

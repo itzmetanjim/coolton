@@ -1063,12 +1063,14 @@
       }
       const button = el('button', `bk-button${element.style ? ` ${element.style}` : ''}`, label);
       button.type = 'button';
-      if (!element.value || !/^card_prompt_/.test(element.action_id || '')) {
+      if (!label || !/^card_prompt_/.test(element.action_id || '')) {
         button.disabled = true;
       } else {
+        // Asks the label the person sees, never a hidden prompt (listeners/actions/card_prompt_actions.py).
         button.addEventListener('click', () => {
           const state = cardState(card);
-          const text = `[clicked the "${label}" button on your card] ${element.value}` +
+          const text = `${label}\n[from a button click: they clicked the "${label}" button on your card. ` +
+            "This is the button's label, not a message they typed: do what the button offers.]" +
             (state.length ? `\nThe card's inputs at the time:\n${state.join('\n')}` : '');
           if (cardPromptSender) cardPromptSender(text);
         });
@@ -1118,6 +1120,16 @@
           card.appendChild(el('hr', 'bk-divider'));
           break;
         case 'image': {
+          // Same rule as images in replies (isLoadableImage): a card can be made at anyone's
+          // request, and loading its image from anywhere would send what's in the URL there.
+          if (!isLoadableImage(block.image_url)) {
+            const link = el('a', 'bk-link', block.alt_text || 'image');
+            link.href = safeUrl(block.image_url) || '#';
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            card.appendChild(link);
+            break;
+          }
           const img = el('img', 'bk-image');
           img.src = safeUrl(block.image_url);
           img.alt = block.alt_text || '';

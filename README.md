@@ -190,7 +190,8 @@ account or OAuth needed on the user's end. See the `slack-bot-deploy` and `cf-wr
 | `oauth_server.py` | small standalone service that handles single-workspace reinstall (token exchange, `.env` update, service restart). |
 | `coolton_web_helper.py` | file host, used for embeds and sandbox output; runs alongside `app.py`. |
 | `github_proxy.py` | host-side GitHub proxy. issues/revokes per-sandbox tokens, rewrites them to the real PAT for outbound requests. |
-| `agent/agent.py` | the pydantic-ai agent: system prompt, every `@agent.tool`, and provider/model selection. |
+| `agent/agent.py` | the pydantic-ai agent: system prompt, most `@agent.tool`s, and provider/model selection. |
+| `agent/tool_groups/` | the rest of the agent's tools, by what they work with (skills, code channels, Slack bots, AgentMail, huddles); `agent/agent.py` registers them in place. |
 | `agent/kevinton.py` | the silent skill-capture agent + the `spawn_kevinton()` daemon hook. |
 | `agent/deps.py` | `AgentDeps`, per-turn runtime context (Slack client, model used, plan state, sandbox flags). |
 | `agent/plan_block.py` | plan/thinking card + live status rendering, steering, tool-call-leakage guard. |
@@ -245,7 +246,6 @@ wins, falling through on failure.
 | `INCEPTION_API_KEY` | Inception Labs (Mercury) |
 | `KAVYANSH_AI_API_KEY` | Kavyansh AI proxy (tag-only `kavyansh-sonnet`, `kavyansh-haiku` and `kavyansh-opus`) |
 | `CANVAS_SHARE_CHANNEL_IDS` | Channels that can read every canvas coolton creates in a public channel, unless it's private (comma-separated) |
-| `COOLTON_OWNER_USER_ID` | The only Slack user who can pick `owner_only` models (`kavyansh-opus`) |
 | `OPENROUTER_API_KEY_FALLBACK` | OpenRouter (free models from hosts that don't collect data) |
 | `GROQ_API_KEY` | Groq |
 

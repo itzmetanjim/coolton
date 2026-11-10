@@ -98,6 +98,18 @@ def live_call_id(message: dict) -> str | None:
     return room.get("id") or None
 
 
+def huddle_participants(channel_id: str, huddle_ts: str) -> set[str]:
+    """Who's in the huddle whose thread is `huddle_ts`, right now. Empty when it has
+    ended or Slack can't say."""
+    replies = _call("conversations.replies", {
+        "channel": channel_id, "ts": huddle_ts, "limit": "1", "inclusive": "true",
+    })
+    root = next((m for m in replies.get("messages") or [] if m.get("ts") == huddle_ts), None)
+    if not root or not live_call_id(root):
+        return set()
+    return set(_participant_ids(root["room"].get("participants")))
+
+
 def find_live_huddle(channel_id: str, thread_ts: str | None) -> str | None:
     """The thread_ts of the live huddle for a request made in `thread_ts`: that thread
     when it's a huddle's own thread, otherwise the channel's latest live huddle."""

@@ -85,9 +85,14 @@ def request_join(client, *, channel_id: str, thread_ts: str | None, requester_id
         if busy:
             return "You're already in (or joining) that huddle."
         _expire_pending()
-        if any(p["channel_id"] == channel_id and p["huddle_ts"] == huddle_ts for p in _pending.values()):
-            return "You already asked that huddle; you join once someone there approves."
         pending_id = uuid.uuid4().hex
+        with _lock:  # held from the check to here, so two requests at once post one prompt
+            if any(p["channel_id"] == channel_id and p["huddle_ts"] == huddle_ts for p in _pending.values()):
+                return "You already asked that huddle; you join once someone there approves."
+            _pending[pending_id] = {
+                "channel_id": channel_id, "huddle_ts": huddle_ts, "requester_id": requester_id,
+                "request_text": request_text, "message_ts": None, "asked_at": time.time(),
+            }
         text = (f"<@{requester_id}> asked coolton to join this huddle. Everything said, typed or shown in it "
                 f"while coolton is there is processed under the <{POLICY_URL}|coolton policy>. Anyone can type "
                 "`!kick-coolton` in this thread to make coolton leave right away, and it has to ask again "
@@ -102,15 +107,15 @@ def request_join(client, *, channel_id: str, thread_ts: str | None, requester_id
             ]},
         ])
     except slack_api.HuddleUnavailable as e:
+        _drop_pending(pending_id)
         return f"Error: {e}."
     except Exception as e:
+        _drop_pending(pending_id)
         logger.exception("Couldn't ask to join the huddle in %s", channel_id)
         return f"Error: couldn't ask to join the huddle: {e}"
     with _lock:
-        _pending[pending_id] = {
-            "channel_id": channel_id, "huddle_ts": huddle_ts, "requester_id": requester_id,
-            "request_text": request_text, "message_ts": posted.get("ts"), "asked_at": time.time(),
-        }
+        if pending_id in _pending:
+            _pending[pending_id]["message_ts"] = posted.get("ts")
     return ("Asked the huddle (in its thread) to approve you joining; you join as soon as someone there "
             "approves. Tell the user that briefly.")
 
@@ -122,12 +127,37 @@ def _start(client, *, channel_id: str, requester_id: str, request_text: str) -> 
     if channel_id.startswith("D"):
         return ("Error: you can't start a huddle in a DM (cooltonUser isn't in it). Ask the user to ask "
                 "you in a channel, or to start the huddle themselves.")
+    error = _announce_start(client, channel_id, requester_id)
+    if error:
+        return f"Error: didn't start a huddle: {error}"
     error = _join(client, {"channel_id": channel_id, "huddle_ts": None, "requester_id": requester_id,
                            "request_text": request_text}, requester_id, start=True)
     if error:
         return f"Error: {error}"
     return ("There was no huddle going in this channel, so you started one and joined it. From now on the "
             "huddle's voice agent talks in the call and answers the huddle's thread; tell the user briefly.")
+
+
+def _announce_start(client, channel_id: str, requester_id: str) -> str | None:
+    """Say in the channel, as cooltonUser (who starts the huddle), who asked for it, so a
+    huddle never appears in a channel without anyone there knowing why. Returns what went
+    wrong: if cooltonUser can't join the channel or post there, no huddle is started."""
+    from slack_sdk import WebClient
+
+    from agent.ensure_coolton_user import ensure_coolton_user_in_channel
+
+    token = os.environ.get("SLACK_USER_TOKEN", "")
+    if not token:
+        return "cooltonUser's token (SLACK_USER_TOKEN) isn't configured"
+    ensure_coolton_user_in_channel(client, channel_id)
+    try:
+        WebClient(token=token).chat_postMessage(
+            channel=channel_id, text=f"<@{requester_id}> asked coolton to start a huddle",
+        )
+    except Exception as e:
+        error = getattr(getattr(e, "response", None), "get", lambda *_: None)("error") or str(e)
+        return f"cooltonUser couldn't post in this channel ({error})"
+    return None
 
 
 def leave(channel_id: str, thread_ts: str | None, user_id: str) -> str:
@@ -159,6 +189,30 @@ def _expire_pending() -> None:
             del _pending[pending_id]
 
 
+def _drop_pending(pending_id: str) -> None:
+    with _lock:
+        _pending.pop(pending_id, None)
+
+
+def _in_huddle(pending: dict, user_id: str) -> bool:
+    """Whether `user_id` is in the huddle right now. Fails closed."""
+    from agent.huddle import slack_api
+
+    try:
+        return user_id in slack_api.huddle_participants(pending["channel_id"], pending["huddle_ts"])
+    except Exception:
+        logger.exception("Couldn't check who's in the huddle in %s", pending["channel_id"])
+        return False
+
+
+def _tell(client, pending: dict, user_id: str, text: str) -> None:
+    try:
+        client.chat_postEphemeral(channel=pending["channel_id"], user=user_id, thread_ts=pending["huddle_ts"],
+                                  text=text)
+    except Exception as e:
+        logger.warning("Couldn't answer a huddle approval: %s", e)
+
+
 def _take_pending(pending_id: str) -> dict | None:
     _expire_pending()
     with _lock:
@@ -176,10 +230,20 @@ def _settle(client, pending: dict, text: str) -> None:
 
 
 def approve(client, pending_id: str, approver_id: str) -> None:
-    """Someone pressed "Let coolton join" (listeners.actions.huddle_actions)."""
+    """Someone pressed "Let coolton join" (listeners.actions.huddle_actions). Only someone
+    in the huddle can: it's their call that coolton would hear, and anyone else, the person
+    who asked from another channel included, could otherwise let it in on their own."""
     from agent.ban_store import is_banned
 
     if is_banned(approver_id):
+        return
+    _expire_pending()
+    with _lock:
+        waiting = _pending.get(pending_id)
+    if waiting is None:
+        return
+    if not _in_huddle(waiting, approver_id):
+        _tell(client, waiting, approver_id, "Only someone in the huddle can let coolton join it.")
         return
     pending = _take_pending(pending_id)
     if pending is None:
@@ -193,7 +257,10 @@ def approve(client, pending_id: str, approver_id: str) -> None:
                              "to make it leave.")
     error = _join(client, pending, approver_id)
     if error:
-        client.chat_postMessage(channel=pending["channel_id"], thread_ts=pending["huddle_ts"], text=error)
+        try:
+            client.chat_postMessage(channel=pending["channel_id"], thread_ts=pending["huddle_ts"], text=error)
+        except Exception as e:
+            logger.warning("Couldn't say why coolton didn't join the huddle: %s", e)
 
 
 def decline(client, pending_id: str, user_id: str) -> None:
@@ -215,6 +282,9 @@ def _join(client, pending: dict, approver_id: str, *, start: bool = False) -> st
     finally:
         with _lock:
             _joining.pop(key, None)
+            thread_key = pending.get("_thread_key")
+            if thread_key:
+                _joining.pop(thread_key, None)
 
 
 def _connect(client, pending: dict, key: tuple[str, str], start: bool) -> str | None:
@@ -231,6 +301,12 @@ def _connect(client, pending: dict, key: tuple[str, str], start: bool) -> str | 
             return "That huddle has ended, so coolton didn't join."
         ensure_coolton_user_in_channel(client, channel_id)
         joined = slack_api.join(channel_id)
+        if joined.thread_ts and (channel_id, joined.thread_ts) != key:
+            # A huddle coolton is starting gets its thread only now: from here a
+            # !kick-coolton there reaches it too.
+            with _lock:
+                _joining.setdefault((channel_id, joined.thread_ts), _joining.get(key, False))
+            pending["_thread_key"] = (channel_id, joined.thread_ts)
     except slack_api.HuddleUnavailable as e:
         return f"coolton couldn't join: {e}."
     except Exception as e:

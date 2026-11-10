@@ -67,7 +67,7 @@ def test_kevinton_runs_skill_scripts_in_the_sandbox_not_on_the_host():
     subprocesses with every secret in the environment."""
     from pydantic_ai_skills import CallableSkillScriptExecutor, LocalSkillScriptExecutor, SkillsCapability
 
-    from agent.agent import _run_skill_script_in_sandbox
+    from agent.tool_groups.skills import _run_skill_script_in_sandbox
 
     _agent, capabilities = kevinton.build_kevinton_agent()
     skills = [c for c in capabilities if isinstance(c, SkillsCapability)]

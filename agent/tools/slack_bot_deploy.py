@@ -90,7 +90,7 @@ def _owned_record(store: dict[str, Any], uuid: str, requester_id: str) -> tuple[
     manifest, or deploy it. Without this, anyone who learned an app id could
     rewrite someone else's app or deploy it with its real bot token and signing
     secret written into their own sandbox."""
-    from agent.admin_alerts import ADMIN_USER_ID
+    from agent.admin_alerts import is_admin
 
     record = store.get(uuid)
     if not record:
@@ -100,7 +100,7 @@ def _owned_record(store: dict[str, Any], uuid: str, requester_id: str) -> tuple[
     for key in ("bot_token", "app_token", "signing_secret"):
         add_runtime_secret(f"DEPLOYED_BOT_{key.upper()}", str(record.get(key) or ""))
     add_runtime_secret("DEPLOYED_BOT_SIGNING_SECRET", str((record.get("credentials") or {}).get("signing_secret") or ""))
-    if requester_id != ADMIN_USER_ID and (not requester_id or record.get("owner_id") != requester_id):
+    if not is_admin(requester_id) and (not requester_id or record.get("owner_id") != requester_id):
         return None, f"Error: bot {uuid} was created by someone else; only its creator can manage it."
     return record, None
 

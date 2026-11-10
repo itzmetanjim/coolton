@@ -3,8 +3,10 @@
 The model writes a spec with json-render's chat components (`@json-render/chat`'s
 standard catalog), and this turns it into Slack Block Kit the way Vercel's Chat SDK
 Slack adapter does: a header, KPI fields, a native data table, data_visualization
-charts, link buttons, and prompt buttons: a Button carries a prompt, and clicking it asks
-coolton that prompt in the thread (listeners.actions.card_prompt_actions). What Slack can't show natively (a second table, a third chart,
+charts, link buttons, and buttons: clicking a Button asks coolton its label, as a button
+click by whoever clicked, in the thread (listeners.actions.card_prompt_actions). A button
+has no hidden prompt: what it asks is what it says, so nobody clicks one thing and asks
+coolton another under their own name. What Slack can't show natively (a second table, a third chart,
 a chart over Slack's limits) becomes a plain-text table in a code block, as there.
 
 This is a Python port of that catalog and conversion, not the npm package: coolton
@@ -36,8 +38,7 @@ CHART_LABEL_MAX = 20
 CHART_MAX_SERIES = 12
 CHART_MAX_POINTS = 20
 MAX_ELEMENTS = 200
-PROMPT_MAX = 1900  # A button's value holds at most 2000 characters.
-# action_id of a prompt button; its value is the prompt.
+# action_id of a Button; what it asks is its label.
 PROMPT_ACTION_PREFIX = "card_prompt_"
 # action_id prefix of an input (select, checkboxes...); agent.block_state names it by its id.
 INPUT_ACTION_PREFIX = "card_input_"
@@ -204,10 +205,11 @@ def _check(node: dict, issues: list[str], parent: str | None = None) -> None:
     elif kind == "Button":
         if not _is_text(props.get("label")):
             issues.append(f"{where}: label is required")
-        if not _is_text(props.get("prompt")):
-            issues.append(f"{where}: prompt is required: what you'll be asked when someone clicks it")
-        elif len(props["prompt"]) > PROMPT_MAX:
-            issues.append(f"{where}: prompt is longer than {PROMPT_MAX} characters")
+        elif len(props["label"]) > BUTTON_TEXT_MAX:
+            issues.append(f"{where}: label is longer than {BUTTON_TEXT_MAX} characters")
+        if "prompt" in props:
+            issues.append(f"{where}: a Button has no prompt: clicking it asks you its label, so write "
+                          "the request as the label (\"Break Q3 down by region\")")
         if props.get("style") not in (None, "default", "primary", "danger"):
             issues.append(f"{where}: style must be default, primary or danger")
     elif kind in INPUT_KINDS:
@@ -398,7 +400,7 @@ def _button(node: dict, index: int) -> dict:
     button = {"type": "button", "text": {"type": "plain_text", "text": _truncate(props["label"], BUTTON_TEXT_MAX)}}
     if node["type"] == "LinkButton":
         return {**button, "url": props["url"], "action_id": f"link_{index}"}
-    button.update(action_id=f"{PROMPT_ACTION_PREFIX}{index}", value=props["prompt"])
+    button.update(action_id=f"{PROMPT_ACTION_PREFIX}{index}", value=button["text"]["text"])
     if props.get("style") in ("primary", "danger"):
         button["style"] = props["style"]
     return button
@@ -483,3 +485,17 @@ def to_blocks(spec: Any) -> tuple[list[dict], str]:
     if len(blocks) > MAX_BLOCKS:
         raise CardSpecError([f"the card makes {len(blocks)} Slack blocks; a message holds at most {MAX_BLOCKS}"])
     return blocks, _fallback_text(tree) or "card"
+
+
+def redacted(value: Any) -> Any:
+    """A card's blocks or text with every known secret masked (agent.redact), wherever
+    they're posted: Slack or the web UI."""
+    from agent.redact import redact
+
+    if isinstance(value, str):
+        return redact(value, context="send_card")
+    if isinstance(value, dict):
+        return {k: redacted(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redacted(v) for v in value]
+    return value

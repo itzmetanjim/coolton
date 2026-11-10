@@ -732,7 +732,7 @@ class SshSource:
         except subprocess.TimeoutExpired as e:
             raise SourceError(f"{self.host} didn't answer within {int(timeout)}s") from e
         self._interactive = False
-        line = next((l for l in reversed(done.stdout.splitlines()) if l.startswith(REMOTE_MARK)), None)
+        line = next((out for out in reversed(done.stdout.splitlines()) if out.startswith(REMOTE_MARK)), None)
         if line is None:
             detail = (done.stderr or done.stdout).strip().splitlines()
             raise SourceError(f"ssh {self.host} failed: {detail[-1] if detail else f'exit code {done.returncode}'}")

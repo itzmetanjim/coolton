@@ -97,7 +97,7 @@ def test_the_maintainer_is_never_reported_or_stopped(monkeypatch):
     from types import SimpleNamespace
 
     from agent import abuse_report
-    from agent.admin_alerts import ADMIN_USER_ID
+    from agent.admin_alerts import MAINTAINER_ID as ADMIN_USER_ID
 
     sent = []
     monkeypatch.setattr("agent.admin_alerts.notify_admin", lambda *a, **k: sent.append(a))

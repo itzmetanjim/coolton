@@ -40,12 +40,32 @@ def test_the_control_link_goes_only_to_the_requester_and_finished_turns_it_off(m
 
 
 def test_control_turns_itself_off_after_the_time_limit(monkeypatch):
+    import time
+
     calls = _fake_desktop(monkeypatch)
     monkeypatch.setattr(human_control, "CONTROL_SECONDS", 0.05)
     human_control.start("C2", "2.2")
-    import time
-    time.sleep(0.3)
+    deadline = time.monotonic() + 5  # however slow the machine, not a fixed sleep
+    while human_control.active("C2", "2.2") and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert calls == ["start", "stop"] and not human_control.active("C2", "2.2")
+
+
+def test_a_turn_woken_after_waiting_still_sends_the_link_to_the_person(monkeypatch):
+    """wait_tool resumes as an automated turn (user "AUTOMATED"): asking again from there
+    sent the link to "AUTOMATED", which Slack refuses, so the person never got it."""
+    agent_mod = importlib.import_module("agent.agent")
+    _fake_desktop(monkeypatch)
+    monkeypatch.setenv("E2B_API_KEY", "e2b-test")
+    monkeypatch.setattr(agent_mod.sandbox_keepalive, "arm", lambda *a: None)
+    monkeypatch.setattr(agent_mod, "_surface", lambda deps: SimpleNamespace())
+    monkeypatch.setattr(importlib.import_module("agent.tools.agent_browser_stream"), "headless_note", lambda c, t: "")
+    client = Mock()
+    deps = SimpleNamespace(client=client, channel_id="C6", thread_ts="6.6", user_id="AUTOMATED",
+                           on_behalf_of="U0PERSON1", sandbox_keepalive_seconds=0.0)
+    result = agent_mod.ask_human_for_challenge_tool(RunContext(model=None, usage=None, prompt="", deps=deps), "captcha")
+    assert client.chat_postEphemeral.call_args.kwargs["user"] == "U0PERSON1" and "<@U0PERSON1>" in result
+    human_control.stop("C6", "6.6")
 
 
 def test_control_survives_the_turn_ending_while_coolton_waits(monkeypatch):

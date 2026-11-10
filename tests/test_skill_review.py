@@ -10,17 +10,18 @@ import pytest
 from pydantic_ai import RunContext
 
 from agent import skill_review
-from agent.admin_alerts import ADMIN_USER_ID
+from agent.admin_alerts import MAINTAINER_ID as ADMIN_USER_ID
 from listeners.actions.skill_review_actions import handle_skill_review_approve, handle_skill_review_reject
 
 agent_mod = importlib.import_module("agent.agent")
+skill_tools = importlib.import_module("agent.tool_groups.skills")
 USER = "U0SOMEONE"
 
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent_mod, "_repo_root", lambda: str(tmp_path))
-    monkeypatch.setattr(agent_mod, "_skill_dirs", lambda: [str(tmp_path / "skills"), str(tmp_path / ".agents" / "skills")])
+    monkeypatch.setattr(skill_tools, "_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(skill_tools, "_skill_dirs", lambda: [str(tmp_path / "skills"), str(tmp_path / ".agents" / "skills")])
     monkeypatch.setattr(skill_review, "PROPOSALS_FILE", str(tmp_path / "skill_proposals.json"))
     monkeypatch.delenv("AUTO_ACCEPT_SKILLS", raising=False)
     dms = []
@@ -50,7 +51,7 @@ def _click(handler, proposal_id, user_id=ADMIN_USER_ID):
 
 
 def test_maintainer_creates_a_skill_immediately(repo):
-    result = agent_mod.create_skill(_ctx(ADMIN_USER_ID), "Cool Skill", "does a thing", "Steps.")
+    result = skill_tools.create_skill(_ctx(ADMIN_USER_ID), "Cool Skill", "does a thing", "Steps.")
     assert result.startswith("Created skill 'cool-skill'")
     assert (repo.root / "skills" / "cool-skill" / "SKILL.md").exists()
     assert repo.dms == []
@@ -59,7 +60,7 @@ def test_maintainer_creates_a_skill_immediately(repo):
 
 
 def test_anyone_else_proposes_instead_of_creating(repo):
-    result = agent_mod.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
+    result = skill_tools.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
     assert "Submitted for review" in result
     assert not (repo.root / "skills" / "cool-skill").exists()
     text, blocks = repo.dms[-1]
@@ -68,7 +69,7 @@ def test_anyone_else_proposes_instead_of_creating(repo):
 
 
 def test_kevinton_always_goes_through_review_even_on_the_maintainers_turn(repo):
-    result = agent_mod.create_skill(
+    result = skill_tools.create_skill(
         _ctx(ADMIN_USER_ID, skill_review_required=True), "Cool Skill", "does a thing", "Steps.",
     )
     assert "Submitted for review" in result
@@ -77,7 +78,7 @@ def test_kevinton_always_goes_through_review_even_on_the_maintainers_turn(repo):
 
 
 def test_approving_a_proposal_applies_it_and_tells_the_requester(repo):
-    agent_mod.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
+    skill_tools.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
     client = _click(handle_skill_review_approve, _proposal_id(repo.dms))
     assert (repo.root / "skills" / "cool-skill" / "SKILL.md").exists()
     assert "Created skill" in client.chat_update.call_args.kwargs["text"]
@@ -85,14 +86,14 @@ def test_approving_a_proposal_applies_it_and_tells_the_requester(repo):
 
 
 def test_rejecting_a_proposal_changes_nothing(repo):
-    agent_mod.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
+    skill_tools.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
     client = _click(handle_skill_review_reject, _proposal_id(repo.dms))
     assert not (repo.root / "skills" / "cool-skill").exists()
     assert "Rejected" in client.chat_update.call_args.kwargs["text"]
 
 
 def test_only_the_maintainer_can_approve(repo):
-    agent_mod.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
+    skill_tools.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
     proposal_id = _proposal_id(repo.dms)
     client = _click(handle_skill_review_approve, proposal_id, user_id=USER)
     assert not (repo.root / "skills" / "cool-skill").exists()
@@ -103,7 +104,7 @@ def test_only_the_maintainer_can_approve(repo):
 
 
 def test_a_proposal_cant_be_applied_twice(repo):
-    agent_mod.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
+    skill_tools.create_skill(_ctx(), "Cool Skill", "does a thing", "Steps.")
     proposal_id = _proposal_id(repo.dms)
     _click(handle_skill_review_approve, proposal_id)
     client = _click(handle_skill_review_approve, proposal_id)
@@ -115,8 +116,8 @@ def test_delete_and_rename_wait_for_review(repo):
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: old-skill\ndescription: x\n---\n")
 
-    assert "Submitted for review" in agent_mod.delete_skill(_ctx(), "old-skill")
-    assert "Submitted for review" in agent_mod.rename_skill(_ctx(), "old-skill", "new-skill")
+    assert "Submitted for review" in skill_tools.delete_skill(_ctx(), "old-skill")
+    assert "Submitted for review" in skill_tools.rename_skill(_ctx(), "old-skill", "new-skill")
     assert skill.exists()
 
 
@@ -124,7 +125,7 @@ def test_approved_rename_is_applied(repo):
     skill = repo.root / "skills" / "old-skill"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: old-skill\ndescription: x\n---\n")
-    agent_mod.rename_skill(_ctx(), "old-skill", "new-skill")
+    skill_tools.rename_skill(_ctx(), "old-skill", "new-skill")
     _click(handle_skill_review_approve, _proposal_id(repo.dms))
     assert "name: new-skill" in (repo.root / "skills" / "new-skill" / "SKILL.md").read_text()
 
@@ -181,7 +182,7 @@ def test_rejected_install_deletes_the_staged_files(repo):
 
 def test_auto_accept_applies_another_users_change_and_sends_an_fyi(repo, monkeypatch):
     monkeypatch.setenv("AUTO_ACCEPT_SKILLS", "true")
-    result = agent_mod.create_skill(_ctx(USER), "Cool Skill", "does a thing", "Steps.")
+    result = skill_tools.create_skill(_ctx(USER), "Cool Skill", "does a thing", "Steps.")
 
     assert (repo.root / "skills" / "cool-skill" / "SKILL.md").exists()
     assert "LIVE now" in result and "AUTO_ACCEPT_SKILLS is on" in result
@@ -194,20 +195,20 @@ def test_auto_accept_applies_another_users_change_and_sends_an_fyi(repo, monkeyp
 
 def test_auto_accept_covers_kevinton_too(repo, monkeypatch):
     monkeypatch.setenv("AUTO_ACCEPT_SKILLS", "1")
-    agent_mod.create_skill(_ctx(ADMIN_USER_ID, skill_review_required=True), "Kev Skill", "does a thing", "Steps.")
+    skill_tools.create_skill(_ctx(ADMIN_USER_ID, skill_review_required=True), "Kev Skill", "does a thing", "Steps.")
     assert (repo.root / "skills" / "kev-skill" / "SKILL.md").exists()
     assert "kevinton" in repo.dms[0][0]
 
 
 def test_maintainers_own_changes_send_no_fyi_even_with_auto_accept(repo, monkeypatch):
     monkeypatch.setenv("AUTO_ACCEPT_SKILLS", "true")
-    agent_mod.create_skill(_ctx(ADMIN_USER_ID), "Mine", "does a thing", "Steps.")
+    skill_tools.create_skill(_ctx(ADMIN_USER_ID), "Mine", "does a thing", "Steps.")
     assert repo.dms == []
 
 
 def test_a_falsy_auto_accept_still_reviews(repo, monkeypatch):
     monkeypatch.setenv("AUTO_ACCEPT_SKILLS", "false")
-    result = agent_mod.create_skill(_ctx(USER), "Cool Skill", "does a thing", "Steps.")
+    result = skill_tools.create_skill(_ctx(USER), "Cool Skill", "does a thing", "Steps.")
     assert result.startswith("Submitted for review")
     assert not (repo.root / "skills" / "cool-skill").exists()
 
@@ -218,13 +219,13 @@ def test_update_skill_changes_only_what_was_passed(repo):
     (skill / "SKILL.md").write_text(
         "---\nname: flaron-api\ndescription: 'other documented Flaron API data'\nlicense: MIT\n---\n\n# Flaron\n\nOld steps.\n"
     )
-    result = agent_mod.update_skill(_ctx(ADMIN_USER_ID), "flaron-api", description="Look up channels: names and ids.")
+    result = skill_tools.update_skill(_ctx(ADMIN_USER_ID), "flaron-api", description="Look up channels: names and ids.")
     assert "LIVE now" in result
     text = (skill / "SKILL.md").read_text()
     assert "Look up channels: names and ids." in text and "license: MIT" in text and "Old steps." in text
-    assert agent_mod._validate_skill_md(text) == (True, "")
+    assert skill_tools._validate_skill_md(text) == (True, "")
 
-    assert "Submitted for review" in agent_mod.update_skill(_ctx(), "flaron-api", body="New steps.")
+    assert "Submitted for review" in skill_tools.update_skill(_ctx(), "flaron-api", body="New steps.")
     assert "Old steps." in (skill / "SKILL.md").read_text()
     _click(handle_skill_review_approve, _proposal_id(repo.dms))
     text = (skill / "SKILL.md").read_text()

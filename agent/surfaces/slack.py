@@ -86,15 +86,7 @@ class SlackSurface:
 
     def post_card(self, blocks: list, text: str) -> str:
         from agent.mentions import defuse_args
-
-        def redacted(value):
-            if isinstance(value, str):
-                return _redact(value, context="send_card")
-            if isinstance(value, dict):
-                return {k: redacted(v) for k, v in value.items()}
-            if isinstance(value, list):
-                return [redacted(v) for v in value]
-            return value
+        from agent.tools.json_render_card import redacted
 
         try:
             resp = self.client.chat_postMessage(
