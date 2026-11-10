@@ -150,10 +150,14 @@ def test_probe_never_connects_to_a_local_or_private_address(tmp_store, monkeypat
     assert tried == []
 
 
-def test_every_request_to_a_users_mcp_server_is_rechecked_including_redirects():
+def test_every_request_to_a_users_mcp_server_is_rechecked_including_redirects(monkeypatch):
     """The URL is checked when it's saved, but the MCP client follows redirects by itself:
     a public server could otherwise send coolton to a service on its own host."""
     import asyncio
+
+    # httpx sends requests through a proxy set in the environment, past the mock transport.
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
 
     import httpx
 

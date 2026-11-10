@@ -4,8 +4,6 @@ import random
 import re
 import time
 import json
-import shlex
-import shutil
 import threading
 import requests
 from pydantic_ai import RunContext
@@ -39,6 +37,9 @@ from agent.sandbox_helpers import (
 from agent import sandbox_keepalive
 from agent.github_proxy_client import PUBLIC_PROXY_HOST
 from agent.keyed_locks import KeyedLocks
+from agent.tool_args import parse_json_object_param
+from agent import tool_groups
+from agent.tool_groups import agentmail, code_channels, huddles, skills, slack_bots  # noqa: F401  (tool_groups.*)
 from agent.tool_proxy import (
     build_sandbox_module,
     format_signatures,
@@ -274,6 +275,13 @@ from agent.deferred_tools import CALL_TOOL, HiddenToolset, call_tool, search_too
 
 agent.tool(search_tools)
 agent.tool(retries=2)(call_tool)
+
+
+def _register(*tools) -> None:
+    """Register tools that live in agent.tool_groups, at this point in the tool list."""
+    for tool in tools:
+        agent.tool(tool)
+
 
 @agent.tool
 def invite_coolton_user_to_channel(ctx: RunContext[AgentDeps]) -> str:
@@ -1032,14 +1040,19 @@ def ask_human_for_challenge_tool(ctx: RunContext[AgentDeps], reason: str = "", f
         reason: What they need to do, e.g. "Solve the CAPTCHA on the GitHub sign-up page".
         finished: True once the check is done (or you've given up): turns control off.
     """
+    from agent.attribution import attribution_user_id
     from agent.tools import human_control
 
     channel_id, thread_ts = ctx.deps.channel_id, ctx.deps.thread_ts
+    # A turn woken after wait_tool runs as "AUTOMATED": the link goes to the person it's for.
+    person = attribution_user_id(ctx.deps)
     if finished:
         was_on = human_control.stop(channel_id, thread_ts)
         return "Control link turned off." if was_on else "Control wasn't on; nothing to turn off."
     if not os.environ.get("E2B_API_KEY"):
         return "Error: E2B_API_KEY not configured."
+    if not person:
+        return "Error: there's no one in this turn to hand the check to."
     from agent.tools.agent_browser_stream import headless_note
 
     if headless_note(channel_id, thread_ts):  # they could only click an empty desktop
@@ -1068,7 +1081,7 @@ def ask_human_for_challenge_tool(ctx: RunContext[AgentDeps], reason: str = "", f
     else:
         try:
             ctx.deps.client.chat_postEphemeral(
-                channel=channel_id, user=ctx.deps.user_id, thread_ts=thread_ts or None, text=text,
+                channel=channel_id, user=person, thread_ts=thread_ts or None, text=text,
                 blocks=[
                     {"type": "section", "text": {"type": "mrkdwn", "text": text.replace(f": {url}", ".")}},
                     {"type": "actions", "elements": [
@@ -1082,7 +1095,7 @@ def ask_human_for_challenge_tool(ctx: RunContext[AgentDeps], reason: str = "", f
         except Exception as e:
             human_control.stop(channel_id, thread_ts)
             return f"Error sending the link: {e}"
-    return (f"Sent <@{ctx.deps.user_id}> a private link that controls your desktop for {minutes} minutes. "
+    return (f"Sent <@{person}> a private link that controls your desktop for {minutes} minutes. "
             "Tell them briefly in the thread too, then wait: wait_tool about 20-30 s at a time and a "
             "screenshot to check whether the page is past the check. If they say they're done, you're "
             "woken early. When it's past (or after about 5 minutes), call this tool with finished=true, "
@@ -1895,7 +1908,7 @@ def send_html_embed_tool(
 @agent.tool
 def send_card_tool(ctx: RunContext[AgentDeps], spec: str) -> str:
     """Post a rich card in the thread: a title, KPI fields, a table, up to 2 native charts,
-    images, link buttons and prompt buttons, built from a json-render spec (JSON text). Use it when numbers,
+    images, link buttons and buttons, built from a json-render spec (JSON text). Use it when numbers,
     comparisons or a dashboard read better as a card than as prose. Anything else you want
     to say goes in your normal reply.
 
@@ -1914,16 +1927,16 @@ def send_card_tool(ctx: RunContext[AgentDeps], spec: str) -> str:
       [one number per category]}], "xLabel"?, "yLabel"?}. Labels max 20 chars, max 20
       categories and 12 series. Only 2 charts per card are drawn; more become plain text.
     - Divider. Image: url (public https), alt.
-    - Actions: children are LinkButton (label, url) and Button (label, prompt, style? default |
-      primary | danger). Clicking a Button asks you its prompt in this thread, as the person who
-      clicked, so write the prompt as a complete request ("Break Q3 sales down by region and
-      chart it"). Offer the follow-ups someone is likely to want.
+    - Actions: children are LinkButton (label, url) and Button (label, style? default |
+      primary | danger). Clicking a Button asks you its label in this thread, marked as a
+      button click by the person who clicked, so make the label the request itself, short
+      ("Break Q3 down by region", max 75 chars). There's no hidden prompt. Offer the
+      follow-ups someone is likely to want.
     - Inputs, also children of Actions, each with its own id: Select (label?, options
       [{label, value?}], initial?), Checkboxes (options, initial? [values]), RadioButtons
       (options, initial?), DatePicker (label?, initial? "YYYY-MM-DD"). Using one asks you
-      nothing; when someone clicks a Button, what every input is set to comes with its prompt
-      (e.g. a Select "region" and a Button "Show sales" with prompt "Show sales for the chosen
-      region").
+      nothing; when someone clicks a Button, what every input is set to comes with its label
+      (e.g. a Select "region" and a Button "Show sales for the chosen region").
 
     Write literal values: $state, repeat and other json-render expressions aren't supported.
 
@@ -1939,39 +1952,8 @@ def send_card_tool(ctx: RunContext[AgentDeps], spec: str) -> str:
     return _surface(ctx.deps).post_card(blocks, text)
 
 
-def _parse_json_object_param(param_name: str, value: str, example: str = '{"key": "value"}') -> tuple[dict | None, str | None]:
-    """Parse `value` (a JSON-encoded object) into a dict. Returns (parsed, None) on
-    success, or (None, error_message) on failure.
-
-    Confirmed live: a schema-less nested `object` parameter (no defined properties,
-    just `{"type": "object"}`) gives the model nothing to anchor against, and at least
-    one model/provider combination reliably sent an empty `{}` for it even when it
-    could correctly state in plain English what the value should contain — renaming
-    the field alone didn't fix it, but switching to a plain string the model fills
-    with JSON text (an ordinary language-model-native task) did. Every tool that used
-    to take a schema-less `dict` parameter now takes a JSON-encoded string instead and
-    parses it here.
-    """
-    text = (value or "").strip()
-    if not text:
-        return {}, None
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as e:
-        return None, (
-            f"Error: {param_name} must be valid JSON (a plain object, e.g. "
-            f"'{example}') — got invalid JSON: {e}"
-        )
-    if not isinstance(parsed, dict):
-        return None, (
-            f"Error: {param_name} must be a JSON object (e.g. '{example}'), "
-            f"not a {type(parsed).__name__}."
-        )
-    return parsed, None
-
-
 def _parse_api_parameters(api_parameters: str) -> tuple[dict | None, str | None]:
-    return _parse_json_object_param("api_parameters", api_parameters, example='{"channel": "C0123456"}')
+    return parse_json_object_param("api_parameters", api_parameters, example='{"channel": "C0123456"}')
 
 
 
@@ -2101,110 +2083,13 @@ def slack_api_call_as_bot_tool(ctx: RunContext[AgentDeps], method: str, api_para
     )
 
 
-@agent.tool
-def create_slack_bot_tool(ctx: RunContext[AgentDeps], manifest: str) -> str:
-    """Create a Slack app from a manifest. Returns app_id and an OAuth install URL.
-
-    Uses the xoxe config token. The manifest must include display_information.name.
-    After creating, tell the user to visit the oauth_authorize_url to install the
-    app, the bot token is captured and registered AUTOMATICALLY once they do (no
-    one needs to dig it out of the Slack UI and hand it back). Poll
-    check_bot_install_status_tool with the returned app_id until it reports
-    "installed", then move on to wrangler_bot_deploy_tool. The app belongs to
-    the person who asked for it: only they (or the coolton maintainer) can check,
-    register tokens for, update, or deploy it afterwards.
-
-    Args:
-        manifest: JSON-encoded Slack app manifest object, as a plain STRING (with
-            display_information, features, etc.), not a nested object.
-    """
-    parsed_manifest, parse_error = _parse_json_object_param("manifest", manifest)
-    if parse_error:
-        return parse_error
-    from agent.tools.slack_bot_deploy import create_slack_bot
-    from agent.attribution import attribution_user_id
-    return create_slack_bot(parsed_manifest, owner_id=attribution_user_id(ctx.deps))
-
-
-@agent.tool
-def check_bot_install_status_tool(ctx: RunContext[AgentDeps], uuid: str) -> str:
-    """Check whether a human has finished installing a bot created with create_slack_bot_tool.
-
-    The install is captured automatically (see create_slack_bot_tool), call this
-    periodically after sharing the oauth_authorize_url instead of asking the user
-    to paste a token back. Once it reports "installed", the bot token is already
-    registered and you can go straight to wrangler_bot_deploy_tool.
-
-    Args:
-        uuid: The app_id returned by create_slack_bot.
-    """
-    from agent.tools.slack_bot_deploy import check_bot_install_status
-    from agent.attribution import attribution_user_id
-    return check_bot_install_status(uuid, requester_id=attribution_user_id(ctx.deps))
-
-
-@agent.tool
-def register_bot_tokens_tool(ctx: RunContext[AgentDeps], uuid: str, bot_token: str, app_token: str = "", signing_secret: str = "") -> str:
-    """Manually store bot tokens for a created Slack app. Only xoxb- bot tokens (and, if
-    given, xapp- app tokens) are accepted.
-
-    This is a FALLBACK, installs normally complete automatically (see
-    create_slack_bot_tool / check_bot_install_status_tool). Only use this if the
-    user says the automatic capture didn't work, or hands you a token unprompted.
-
-    Args:
-        uuid: The app_id returned by create_slack_bot.
-        bot_token: The xoxb- bot token from the installed app. Required.
-        app_token: The xapp- app-level token. Only needed for Socket Mode apps, it's
-            generated manually on the app's Basic Information page, not via OAuth
-            install, so most HTTP-mode Workers (deployed via wrangler_bot_deploy_tool)
-            never have one. Omit it entirely for those.
-        signing_secret: The signing secret from the app credentials (optional).
-    """
-    from agent.tools.slack_bot_deploy import register_bot_tokens
-    from agent.attribution import attribution_user_id
-    return register_bot_tokens(uuid, bot_token, app_token, signing_secret, requester_id=attribution_user_id(ctx.deps))
-
-
-@agent.tool
-def wrangler_bot_deploy_tool(ctx: RunContext[AgentDeps], uuid: str, working_dir: str, additional_flags: str = "") -> str:
-    """Deploy a Slack bot Worker using wrangler inside the sandbox. Injects stored tokens, runs deploy, then deletes the secrets file.
-
-    Args:
-        uuid: The app_id from create_slack_bot.
-        working_dir: Directory containing the bot code inside the sandbox.
-        additional_flags: Extra flags for wrangler deploy (e.g. "--minify").
-    """
-    from agent.tools.slack_bot_deploy import wrangler_bot_deploy
-    from agent.attribution import attribution_user_id
-    return wrangler_bot_deploy(
-        uuid, working_dir, ctx.deps.channel_id, ctx.deps.thread_ts, additional_flags,
-        requester_id=attribution_user_id(ctx.deps),
-    )
-
-
-@agent.tool
-def update_slack_bot_manifest_tool(ctx: RunContext[AgentDeps], uuid: str, manifest: str) -> str:
-    """Update an already-created Slack app's manifest (apps.manifest.update).
-
-    Use this once the Worker is deployed and its real URL is known, to point
-    slash_commands[].url / settings.event_subscriptions.request_url at it, Slack only
-    accepts an event-subscription request URL once it's live and answers the
-    verification challenge, so it can't be set correctly until after deploy. The
-    manifest passed here REPLACES the app's entire configuration: include every field
-    (scopes, bot_user, display_information, etc.), not just the URL you're changing.
-
-    Args:
-        uuid: The app_id from create_slack_bot.
-        manifest: JSON-encoded, FULL updated Slack app manifest object, as a plain
-            STRING, not a nested object.
-    """
-    parsed_manifest, parse_error = _parse_json_object_param("manifest", manifest)
-    if parse_error:
-        return parse_error
-    from agent.tools.slack_bot_deploy import update_slack_bot_manifest
-    from agent.attribution import attribution_user_id
-    return update_slack_bot_manifest(uuid, parsed_manifest, requester_id=attribution_user_id(ctx.deps))
+_register(
+    tool_groups.slack_bots.create_slack_bot_tool,
+    tool_groups.slack_bots.check_bot_install_status_tool,
+    tool_groups.slack_bots.register_bot_tokens_tool,
+    tool_groups.slack_bots.wrangler_bot_deploy_tool,
+    tool_groups.slack_bots.update_slack_bot_manifest_tool,
+)
 
 
 @agent.tool_plain
@@ -2271,249 +2156,19 @@ def join_thread_tool(ctx: RunContext[AgentDeps]) -> str:
     return _surface(ctx.deps).set_engaged(True)
 
 
-@agent.tool
-def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = "", private: bool = False) -> str:
-    """Create a Slack "code channel" and move this whole conversation into it as
-    its own single coolton conversation.
-
-    Use it when the user asks for a code channel, or offer one (and create it once they
-    agree) when a request grows into long, multi-step work that deserves its own space,
-    like a coding project or a big investigation.
-
-    `name` is a DISPLAY name, not a slug, write it like a sentence/title, e.g.
-    "Code audit and bug detection in Coolton", never
-    "code-audit-and-bug-detection-in-coolton". Spaces, uppercase letters, and
-    unicode are all fine, and duplicate names are fine too, don't invent
-    uniqueness suffixes.
-
-    Slack adds you and the person who asked to the new channel, and (outside DMs) puts a
-    join card on their message that people in this channel can join from. A few seconds after
-    this returns, you pick up `task` there on your own, with this conversation's
-    context carried over. Every message sent directly in that channel (not in a
-    thread inside it) is then addressed to you and answered at channel level, as if
-    the whole channel were one ongoing thread with you. A thread started inside the
-    channel behaves like a normal Slack thread instead, separate conversation,
-    mention required. So just tell the user you're moving the work over; don't keep
-    working on `task` in the current thread once you've called this.
-
-    Only usable on Slack, not available on the web UI.
-
-    Args:
-        name: The code channel's display name (see above, a real sentence,
-            not a slug).
-        task: What you'll be doing there, used to seed the handoff. Optional.
-        private: Make the channel private (people join from the card) when asked to.
-            Otherwise it gets this conversation's privacy: public from a public channel,
-            private from anything else. It can't be made public from a private one.
-    """
-    surface = _surface(ctx.deps)
-    if getattr(surface, "name", "slack") != "slack":
-        return "Error: code channels are a Slack-only feature, not available here."
-    from agent.tools.code_channel import create_code_channel
-    return create_code_channel(
-        ctx.deps.client, name, task, ctx.deps.user_id,
-        ctx.deps.channel_id, ctx.deps.thread_ts, ctx.deps.message_ts, private=private,
-    )
-
-
-@agent.tool
-def code_channel_create_view_tool(
-    ctx: RunContext[AgentDeps], view_type: str, view_key: str = "", name: str = "", content: str = "",
-    content_file: str = "", blocks: str = "", markdown: str = "", pr_url: str = "", base_branch: str = "",
-    head_branch: str = "", access_level: str = "comment", resource_domains: str = "",
-) -> str:
-    """CREATE a tab (an artifact) in this code channel, shown next to the chat. Calling it
-    again with the same view_key updates that tab in place (send the whole new content).
-    Up to 5 tabs per channel, at most one diff. To see what a tab holds, use
-    code_channel_read_view_tool; to delete one, code_channel_remove_view_tool.
-
-    view_type:
-    - "html": a full, self-contained HTML document (a report, a dashboard, a demo, a
-      rendered page). Needs view_key and content (or content_file). Allow outside https
-      origins for scripts/styles/images with resource_domains.
-    - "diff": the work's changes as a unified diff (`git diff` output). Needs content (or
-      content_file); base_branch and head_branch label it. One per channel.
-    - "block_kit": Block Kit blocks (a JSON array as a string). Buttons and selects work:
-      when someone uses one, you get a message saying what they did. Needs view_key.
-    - "canvas": a plan or document as markdown, which channel members can comment on
-      (access_level "comment", the default) while only you edit it. Updating an existing
-      canvas tab keeps comments on unchanged sections. Needs view_key and markdown. Read
-      its comments with code_channel_read_canvas_tool.
-    - "pull_request": a pull request, by pr_url.
-
-    Args:
-        view_type: One of "html", "diff", "block_kit", "canvas", "pull_request".
-        view_key: The tab's stable id (e.g. "plan", "reports/coverage.html"); reuse it to update.
-        name: The tab's label.
-        content: The HTML document or diff text.
-        content_file: A sandbox file holding the tab's content instead (a big page or diff, a
-            Block Kit JSON array, or canvas markdown), read for whichever of content, blocks
-            or markdown the view_type uses.
-        blocks: Block Kit blocks as a JSON array string, for block_kit.
-        markdown: The canvas content, for canvas.
-        pr_url: The pull request's https URL, for pull_request.
-        base_branch: Base branch label, for diff.
-        head_branch: Head branch label, for diff.
-        access_level: Canvas only: "comment" (default), "read" or "write".
-        resource_domains: HTML only: comma-separated https origins the page may load from.
-    """
-    from agent.tools.code_channel_tools import set_view
-
-    if content_file:
-        try:
-            with sandbox_use(ctx.deps.channel_id, ctx.deps.thread_ts) as use:
-                use.sandbox, _ = get_or_create_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
-                from_file = use.sandbox.files.read(content_file)
-        except Exception as e:
-            return f"Error: couldn't read {content_file} from the sandbox: {e}"
-        # The file holds whatever this view_type takes (seen live: a Block Kit tab made from a
-        # file came out empty, because the file only ever filled `content`).
-        if view_type.strip().lower() == "block_kit":
-            blocks = from_file
-        elif view_type.strip().lower() == "canvas":
-            markdown = from_file
-        else:
-            content = from_file
-    return set_view(ctx.deps.channel_id, view_type, view_key, name, content, blocks, markdown, pr_url,
-                    base_branch, head_branch, access_level, resource_domains)
-
-
-@agent.tool
-def block_kit_validate_tool(
-    ctx: RunContext[AgentDeps], blocks: str = "", blocks_file: str = "", surface: str = "message",
-) -> str:
-    """Check Block Kit blocks before posting them or putting them in a code channel tab:
-    Slack's own validation (each problem with a JSON pointer like /0/rows/1/1 = block 0,
-    row 1, cell 1) plus, for surface "tab", the rules code channel tabs add. Fix what it
-    points at and check again before using the blocks.
-
-    Args:
-        blocks: The blocks as a JSON array string.
-        blocks_file: A sandbox file holding the JSON array instead.
-        surface: "message" (chat.postMessage) or "tab" (a code channel Block Kit tab).
-    """
-    from agent.tools.block_kit import validate
-
-    if blocks_file:
-        try:
-            with sandbox_use(ctx.deps.channel_id, ctx.deps.thread_ts) as use:
-                use.sandbox, _ = get_or_create_sandbox(ctx.deps.channel_id, ctx.deps.thread_ts)
-                blocks = use.sandbox.files.read(blocks_file)
-        except Exception as e:
-            return f"Error: couldn't read {blocks_file} from the sandbox: {e}"
-    return validate(ctx.deps.client, blocks, surface)
-
-
-@agent.tool
-def code_channel_list_views_tool(ctx: RunContext[AgentDeps]) -> str:
-    """List every tab in this code channel (HTML, Block Kit, canvas and the diff, whoever
-    made them), with each one's view_key when known and its view_id."""
-    from agent.tools.code_channel_tools import list_views
-
-    return list_views(ctx.deps.client, ctx.deps.channel_id)
-
-
-@agent.tool
-def code_channel_remove_view_tool(ctx: RunContext[AgentDeps], view_key: str = "", view_id: str = "") -> str:
-    """DELETE one of this code channel's tabs, by view_key or view_id (from
-    code_channel_list_views_tool). Deleting a canvas tab deletes its canvas too.
-
-    Args:
-        view_key: The tab's view_key.
-        view_id: The tab's view_id, from code_channel_list_views_tool.
-    """
-    from agent.tools.code_channel_tools import remove_view
-
-    return remove_view(ctx.deps.client, ctx.deps.channel_id, view_key, view_id)
-
-
-@agent.tool
-def code_channel_read_view_tool(ctx: RunContext[AgentDeps], view_key: str = "", view_id: str = "") -> str:
-    """READ what one of this code channel's tabs currently holds: an HTML page's source, the
-    diff's text, a Block Kit tab's blocks (JSON), or a canvas's markdown and comments. Use
-    it before updating a tab you didn't just write, or when someone asks about a tab.
-
-    Args:
-        view_key: The tab's view_key (the diff tab's is "diff").
-        view_id: The tab's view_id, from code_channel_list_views_tool.
-    """
-    from agent.tools.code_channel_tools import read_view
-
-    return read_view(ctx.deps.client, ctx.deps.channel_id, view_key, view_id)
-
-
-@agent.tool
-def code_channel_read_canvas_tool(ctx: RunContext[AgentDeps], view_key: str, include_resolved: bool = False) -> str:
-    """Read a canvas tab in this code channel: its markdown and the comment threads people
-    left on it (with the text each is anchored to). Check it before revising a plan.
-
-    Args:
-        view_key: The canvas tab's view_key.
-        include_resolved: Also include resolved comment threads.
-    """
-    from agent.tools.code_channel_tools import read_canvas
-
-    return read_canvas(ctx.deps.channel_id, view_key, include_resolved)
-
-
-@agent.tool
-def code_channel_context_bar_tool(ctx: RunContext[AgentDeps], items: str) -> str:
-    """Set this code channel's context bar: up to 5 items pinned at the top (the repo, the
-    branch, the PR, CI status...). Each call replaces all of them, so send the full set,
-    and keep it current as things change ("PR #42 merged").
-
-    Args:
-        items: JSON array string of {"key", "label", "icon"?, "url"?}. key is a unique id
-            (max 64 chars), label the text (max 128); icon is one of branch, folder,
-            hierarchy, life-ring, link, globe, terminal, code, search, lock.
-    """
-    from agent.tools.code_channel_tools import set_context_bar
-
-    return set_context_bar(ctx.deps.channel_id, items)
-
-
-@agent.tool
-def code_channel_commands_tool(ctx: RunContext[AgentDeps], commands: str) -> str:
-    """Register slash commands for this code channel (like /run-tests or /create-pr), shown
-    when someone types / here. When someone runs one, you get a message saying so, with
-    its text. Each call replaces your whole set (max 10); send [] to clear them.
-
-    Args:
-        commands: JSON array string of {"name", "description", "argument_hint"?}. name has
-            no leading slash: 1-31 lowercase letters, digits, - or _, not a built-in Slack
-            command.
-    """
-    from agent.tools.code_channel_tools import set_commands
-
-    return set_commands(ctx.deps.channel_id, commands)
-
-
-@agent.tool
-def code_channel_rename_tool(ctx: RunContext[AgentDeps], title: str) -> str:
-    """Rename this code channel (its name and its session title), e.g. once the task is clearer.
-
-    Args:
-        title: The new name, a readable title (max 200 characters).
-    """
-    from agent.tools.code_channel_tools import rename
-
-    return rename(ctx.deps.channel_id, title)
-
-
-@agent.tool
-def code_channel_archive_tool(ctx: RunContext[AgentDeps], summary: str) -> str:
-    """Archive this code channel when the work is done: posts `summary` here, then archives
-    the channel with it as the summary (also shared on the message the work started from).
-    The history and tabs stay readable. ONLY when the person asks you to archive it or
-    agrees to your suggestion; never on your own.
-
-    Args:
-        summary: A wrap-up of what was done, with links (Markdown).
-    """
-    from agent.tools.code_channel_tools import archive
-
-    from agent.attribution import attribution_user_id
-    return archive(ctx.deps.client, ctx.deps.channel_id, summary, attribution_user_id(ctx.deps))
+_register(
+    tool_groups.code_channels.create_code_channel_tool,
+    tool_groups.code_channels.code_channel_create_view_tool,
+    tool_groups.code_channels.block_kit_validate_tool,
+    tool_groups.code_channels.code_channel_list_views_tool,
+    tool_groups.code_channels.code_channel_remove_view_tool,
+    tool_groups.code_channels.code_channel_read_view_tool,
+    tool_groups.code_channels.code_channel_read_canvas_tool,
+    tool_groups.code_channels.code_channel_context_bar_tool,
+    tool_groups.code_channels.code_channel_commands_tool,
+    tool_groups.code_channels.code_channel_rename_tool,
+    tool_groups.code_channels.code_channel_archive_tool,
+)
 
 
 @agent.tool
@@ -2715,332 +2370,24 @@ def wait_tool(ctx: RunContext[AgentDeps], seconds: int, reason: str) -> str:
     raise HaltRun("wait")
 
 
-_SKILL_INSTALL_MAX_DEPTH = 6
-_SKILL_INSTALL_MAX_FILE_BYTES = 2 * 1024 * 1024  # 2MB per file
-_SKILL_INSTALL_MAX_TOTAL_BYTES = 20 * 1024 * 1024  # 20MB per skill
+_register(tool_groups.skills.install_skill)
 
 
-@agent.tool
-def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> str:
-    """Install a new agent skill from the skills.sh marketplace (Vercel's Agent Skills CLI).
-
-    Run this when the user asks to "install a skill", "add a skill", or names a
-    skill package/repo they want (e.g. `vercel-labs/agent-skills`, or a GitHub URL).
-    After install, the skill is available immediately via load_skill / list_skills.
-
-    Args:
-        package: The skill package to install. Either `owner/repo` (e.g.
-            `vercel-labs/agent-skills`) or a full GitHub URL
-            (e.g. `https://github.com/vercel-labs/agent-skills`).
-        skill: Optional specific skill name inside a multi-skill repo. Leave empty
-            to install all skills in the package.
-    """
-    # `package` names an arbitrary npm-fetched CLI + package payload; running it
-    # directly on the host (the old behavior) would execute untrusted code as the
-    # coolton service user, right next to .env's Slack/GitHub/E2B secrets. It runs
-    # in the disposable sandbox instead, same as any other untrusted code coolton
-    # touches. Nothing that ran there is trusted merely for having run: SKILL.md
-    # must pass the exact same frontmatter validation create_skill enforces (see
-    # _validate_skill_md), and every other file the skill shipped (references,
-    # scripts, resources — most real skills have more than one file) is copied
-    # over too, bounded and guarded against path traversal, but never executed
-    # here — a script only ever runs later, inside a sandbox again, via
-    # run_skill_script (see _run_skill_script_in_sandbox), and a resource is only
-    # ever read as text into model context (read_skill_resource), never executed.
-    if not os.environ.get("E2B_API_KEY"):
-        return "Error: E2B_API_KEY not configured."
-    channel_id = ctx.deps.channel_id
-    thread_ts = ctx.deps.thread_ts
-    cmd = f"cd /home/user && rm -rf .agents_skills_install && mkdir -p .agents_skills_install && cd .agents_skills_install && npx -y skills@latest add {shlex.quote(package)} -y"
-    if skill:
-        cmd += f" -s {shlex.quote(skill)}"
-    try:
-        with sandbox_use(channel_id, thread_ts) as use:
-            sandbox, proxy_info = get_or_create_sandbox(channel_id, thread_ts)
-            use.sandbox = sandbox
-            result = run_command(sandbox, cmd, timeout=180, envs=_proxy_env(proxy_info))
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-    if result.exit_code != 0:
-        out = (result.stdout or "") + (result.stderr or "")
-        return f"Failed to install skill (exit {result.exit_code}):\n{out[-1500:]}"
-
-    from e2b import FileType
-
-    from agent import skill_review
-
-    # Everything is staged first and only lands in .agents/skills/ once the
-    # change is approved (immediately, for the maintainer — see agent.skill_review).
-    staging = skill_review.new_staging_dir(_repo_root())
-    imported, rejected = [], []
-    try:
-        entries = sandbox.files.list("/home/user/.agents_skills_install/.agents/skills")
-    except Exception:
-        entries = []
-    for entry in entries:
-        if entry.type != FileType.DIR:
-            continue
-        slug = _safe_name(entry.name)
-        if not slug or slug != entry.name:
-            rejected.append(entry.name)
-            continue
-        try:
-            content = sandbox.files.read(f"/home/user/.agents_skills_install/.agents/skills/{entry.name}/SKILL.md")
-        except Exception:
-            continue
-        ok, err = _validate_skill_md(content)
-        if not ok:
-            rejected.append(f"{entry.name} ({err})")
-            continue
-        target_dir = os.path.join(staging, slug)
-        if not _is_within(target_dir, staging):
-            rejected.append(entry.name)
-            continue
-        os.makedirs(target_dir, exist_ok=True)
-        with open(os.path.join(target_dir, "SKILL.md"), "w") as f:
-            f.write(content)
-
-        skill_root = f"/home/user/.agents_skills_install/.agents/skills/{entry.name}"
-        try:
-            file_entries = sandbox.files.list(skill_root, depth=_SKILL_INSTALL_MAX_DEPTH)
-        except Exception:
-            file_entries = []
-        copied_bytes = 0
-        for fe in file_entries:
-            if fe.type != FileType.FILE:
-                continue
-            rel = fe.path[len(skill_root):].lstrip("/")
-            if not rel or rel == "SKILL.md":
-                continue
-            dest = os.path.join(target_dir, *rel.split("/"))
-            if not _is_within(dest, target_dir):
-                rejected.append(f"{entry.name}/{rel} (path escapes skill directory)")
-                continue
-            if copied_bytes >= _SKILL_INSTALL_MAX_TOTAL_BYTES:
-                rejected.append(f"{entry.name}/{rel} (skill exceeds {_SKILL_INSTALL_MAX_TOTAL_BYTES}-byte total)")
-                continue
-            try:
-                data = bytes(sandbox.files.read(fe.path, format="bytes"))
-            except Exception:
-                continue
-            if len(data) > _SKILL_INSTALL_MAX_FILE_BYTES:
-                rejected.append(f"{entry.name}/{rel} (file exceeds {_SKILL_INSTALL_MAX_FILE_BYTES}-byte limit)")
-                continue
-            copied_bytes += len(data)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            with open(dest, "wb") as f:
-                f.write(data)
-
-        imported.append(slug)
-
-    if not imported:
-        shutil.rmtree(staging, ignore_errors=True)
-        detail = f" Rejected entries: {', '.join(rejected)}." if rejected else ""
-        return f"No valid skill found in '{package}' (the installer ran but produced nothing usable).{detail}"
-    spec = {"op": "install", "staged_dir": staging, "slugs": imported}
-    if skill_review.needs_review(ctx.deps):
-        preview = "\n\n".join(_staged_skill_preview(staging, slug) for slug in imported)
-        msg = skill_review.submit(spec, ctx.deps, f"install {', '.join(imported)} from `{package}`", preview)
-    else:
-        msg = _applied_directly(apply_skill_change(spec), ctx.deps, f"install {', '.join(imported)} from `{package}`")
-    if rejected:
-        msg += f" Skipped invalid entries: {', '.join(rejected)}."
-    return msg
+_register(
+    tool_groups.agentmail.agentmail_create_inbox,
+    tool_groups.agentmail.agentmail_list_inboxes,
+    tool_groups.agentmail.agentmail_list_messages,
+    tool_groups.agentmail.agentmail_read_message,
+    tool_groups.agentmail.agentmail_send_email,
+)
 
 
-@agent.tool
-def agentmail_create_inbox(ctx: RunContext[AgentDeps]) -> str:
-    """Create a new AgentMail inbox for coolton (gives coolton its own @agentmail.to address).
-
-    Use when you need a fresh email identity to send/receive mail autonomously.
-    """
-    from agent.tools.agentmail import create_inbox_tool
-
-    return create_inbox_tool()
-
-
-@agent.tool
-def agentmail_list_inboxes(ctx: RunContext[AgentDeps], limit: int = 20) -> str:
-    """List coolton's AgentMail inboxes (ids + @agentmail.to addresses)."""
-    from agent.tools.agentmail import list_inboxes_tool
-
-    return list_inboxes_tool(limit=limit)
-
-
-@agent.tool
-def agentmail_list_messages(ctx: RunContext[AgentDeps], inbox_id: str = "coolton@agentmail.to", limit: int = 20) -> str:
-    """List recent messages in a coolton AgentMail inbox.
-
-    Args:
-        inbox_id: The inbox id or @agentmail.to address (defaults to coolton@agentmail.to).
-        limit: Max messages to return (default 20).
-    """
-    from agent.tools.agentmail import list_messages_tool
-
-    return list_messages_tool(inbox_id, limit=limit)
-
-
-@agent.tool
-def agentmail_read_message(ctx: RunContext[AgentDeps], message_id: str, inbox_id: str = "coolton@agentmail.to") -> str:
-    """Read the full content of a specific AgentMail message.
-
-    Args:
-        message_id: The message id from agentmail_list_messages.
-        inbox_id: The inbox id or @agentmail.to address (defaults to coolton@agentmail.to).
-    """
-    from agent.tools.agentmail import read_message_tool
-
-    return read_message_tool(inbox_id, message_id)
-
-
-@agent.tool
-def agentmail_send_email(
-    ctx: RunContext[AgentDeps],
-    to: str,
-    subject: str,
-    text: str,
-    inbox_id: str = "coolton@agentmail.to",
-    cc: str = "",
-    html: str = "",
-) -> str:
-    """Send an email from a coolton AgentMail inbox.
-
-    Args:
-        to: Recipient email address (or comma-separated list).
-        subject: Email subject.
-        text: Plain-text body.
-        inbox_id: The inbox id or @agentmail.to address to send from (defaults to coolton@agentmail.to).
-        cc: Optional CC address(es), comma-separated.
-        html: Optional HTML body (used only if text is empty).
-    """
-    from agent.tools.agentmail import send_email_tool
-
-    return send_email_tool(to, subject, text, inbox_id=inbox_id, cc=cc, html=html)
-
-
-@agent.tool
-def huddlefm_request_control_tool(
-    ctx: RunContext[AgentDeps], channel: str, permissions: str, events: str = "",
-) -> str:
-    """Request DJ control of a HuddleFM listening session (music), by DMing HuddleFM
-    (coolton is allowlisted for this). This doesn't join the huddle: to join one yourself
-    and talk, use join_huddle_tool. Call this ONCE per session before using
-    huddlefm_command_tool, see the system prompt's HUDDLEFM DJ section for the
-    permission ids and full command reference.
-
-    There is no immediate success reply: the session host gets an approval
-    prompt in Slack and can take up to 5 minutes to respond (or never respond).
-    This call only reports an immediate error (e.g. an invalid channel); after
-    it returns with no error, tell the user you're waiting on the host and
-    only try huddlefm_command_tool again once they say it's approved.
-
-    Args:
-        channel: The huddle's source channel, controls channel, or companion
-            channel, required, and it must be one of those three.
-        permissions: Comma-separated permission ids, e.g. "add,skip,pause,volume".
-        events: Comma-separated event subscription names (optional, usually
-            leave empty; coolton polls with `status` instead of subscribing).
-    """
-    from agent.tools.huddlefm import request_control
-    return request_control(ctx.deps.client, channel, permissions, events)
-
-
-@agent.tool
-def huddlefm_command_tool(
-    ctx: RunContext[AgentDeps], command_type: str, channel: str = "", fields: str = "",
-) -> str:
-    """Send a HuddleFM DJ command (after huddlefm_request_control_tool has been
-    approved for the needed permission) and return its JSON reply.
-
-    Args:
-        command_type: One of: status, search, add, remove, move, clear, skip,
-            previous, toggle, pause, resume, seek, volume, settings, end,
-            release_control. See the system prompt's HUDDLEFM DJ section for
-            which permission each needs and its extra fields.
-        channel: The session's channel, only required if you hold grants on
-            more than one HuddleFM session at once.
-        fields: JSON object string of the command's extra fields, e.g.
-            '{"query": "phonk"}' for search, '{"reference": "..."}' for add,
-            '{"percent": 40}' for volume. Leave empty for commands that take
-            none (status, clear, skip, previous, toggle, pause, resume, end,
-            release_control).
-    """
-    parsed_fields, parse_error = _parse_json_object_param("fields", fields)
-    if parse_error:
-        return parse_error
-    from agent.tools.huddlefm import send_command
-    return send_command(ctx.deps.client, command_type, channel, parsed_fields)
-
-
-@agent.tool
-def join_huddle_tool(ctx: RunContext[AgentDeps], channel: str = "") -> str:
-    """Join a Slack huddle (a voice call) as a participant, or start one: coolton then
-    listens, talks back, answers the huddle's thread, and shows its desktop as its video
-    while using it.
-
-    Without `channel`, joins this conversation's huddle: the one this thread belongs to, or
-    else the channel's ongoing one; if no huddle is going here, it starts one and joins it
-    (not in DMs). With `channel`, joins the ongoing huddle of that other channel (a public
-    one; it never starts one there). Use it when someone asks you to join, hop on, come to,
-    start or open a huddle or call to talk. Not for music: playing songs is HuddleFM
-    (huddlefm_* tools), which this has nothing to do with. Joining a huddle that's already
-    going first asks the huddle (in its thread) to approve; coolton joins once someone there
-    does. Either way a separate voice agent then handles the huddle and its thread, so just
-    tell the user briefly.
-
-    Args:
-        channel: Another channel whose huddle to join: its id, <#C...> mention or #name.
-            Leave empty for this conversation's huddle.
-    """
-    from agent import huddle
-
-    target = _other_huddle_channel(ctx, channel)
-    if target.startswith("Error"):
-        return target
-    here = target == ctx.deps.channel_id
-    return huddle.request_join(
-        ctx.deps.client, channel_id=target, thread_ts=ctx.deps.thread_ts if here else None,
-        requester_id=ctx.deps.user_id, request_text=ctx.deps.request_text, may_start=here,
-    )
-
-
-def _other_huddle_channel(ctx: RunContext[AgentDeps], channel: str) -> str:
-    """The channel a huddle tool acts on: this conversation's, or another one named. Another
-    channel's huddle must be in a public channel, which anyone in the workspace may join, so
-    nobody can use coolton to get into a private call. Returns the id or an "Error: ..." line."""
-    if not (channel or "").strip():
-        return ctx.deps.channel_id
-    from agent.tools.slack_info import _resolve_channel_id
-    from agent.tools.slack_search import assert_readable_channel
-
-    target = _resolve_channel_id(channel.strip())
-    if not re.match(r"^[CDG][A-Z0-9]+$", target):
-        return f"Error: couldn't find the channel {channel!r}."
-    refused = assert_readable_channel(target, ctx.deps.channel_id)
-    if refused:
-        return f"Error: you only join huddles in public channels (or this conversation's): {refused}"
-    return target
-
-
-@agent.tool
-def leave_huddle_tool(ctx: RunContext[AgentDeps], channel: str = "") -> str:
-    """Leave the Slack huddle coolton is in in this channel (this thread's, or else the
-    channel's), or in another channel named, or cancel a request to join one that's still
-    waiting. Use it when someone asks you to leave, hang up or get off the huddle or call.
-    Nothing to do with HuddleFM.
-
-    Args:
-        channel: Another channel whose huddle to leave: its id, <#C...> mention or #name.
-            Leave empty for this conversation's.
-    """
-    from agent import huddle
-
-    if not (channel or "").strip():
-        return huddle.leave(ctx.deps.channel_id, ctx.deps.thread_ts, ctx.deps.user_id)
-    from agent.tools.slack_info import _resolve_channel_id
-
-    return huddle.leave(_resolve_channel_id(channel.strip()), None, ctx.deps.user_id)
+_register(
+    tool_groups.huddles.huddlefm_request_control_tool,
+    tool_groups.huddles.huddlefm_command_tool,
+    tool_groups.huddles.join_huddle_tool,
+    tool_groups.huddles.leave_huddle_tool,
+)
 
 
 @agent.tool
@@ -3092,460 +2439,12 @@ def delegate_to_subagents(ctx: RunContext[AgentDeps], tasks: str) -> str:
     return delegate_many(parsed, ctx.deps)
 
 
-def _repo_root() -> str:
-    return os.path.abspath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
-def _skill_dirs() -> list[str]:
-    root = _repo_root()
-    return [os.path.join(root, "skills"), os.path.join(root, ".agents", "skills")]
-
-
-def _run_skill_script_in_sandbox(script, args=None, ctx=None) -> str:
-    """Execute a skill's bundled script (the `run_skill_script` tool) inside the
-    thread's E2B sandbox instead of as a host subprocess.
-
-    pydantic_ai_skills' default executor (LocalSkillScriptExecutor) runs every
-    skill script as a real subprocess ON THIS HOST, with the full host
-    environment merged in — every secret in os.environ (SLACK_BOT_TOKEN,
-    COOLTON_GH_TOKEN, E2B_API_KEY, BYOK/MCP encryption keys, all of it).
-    Scripts ship with skills from anywhere — install_skill fetches them from
-    arbitrary npm packages, and several skills already checked into this repo
-    (deploy-to-vercel, marimo-pair, ...) carry their own — so `run_skill_script`
-    was a direct, always-available host-RCE-with-secrets primitive regardless
-    of how a given skill's script got there. Route it through the same
-    disposable sandbox every other untrusted-code path already uses
-    (run_linux_command, code_mode, install_skill) instead.
-    """
-    if ctx is None or getattr(ctx, "deps", None) is None:
-        return "Error: no run context available to route this into a sandbox."
-    deps = ctx.deps
-    if not os.environ.get("E2B_API_KEY"):
-        return "Error: E2B_API_KEY not configured."
-    if not script.uri:
-        return f"Error: script '{script.name}' has no file to execute."
-    try:
-        with open(script.uri, "rb") as f:
-            content = f.read()
-    except OSError as e:
-        return f"Error reading script '{script.name}': {e}"
-
-    remote_name = os.path.basename(script.uri)
-    remote_path = f"/home/user/skill_script_{remote_name}"
-
-    # Mirrors pydantic_ai_skills' own LocalSkillScriptExecutor._build_args: every
-    # script takes named (--flag value) arguments, never positional ones.
-    #
-    # Values are shlex-quoted below, but a flag NAME was interpolated as
-    # f"--{key}" completely unquoted — args comes from the model's own
-    # run_skill_script tool call, so a key like "foo; rm -rf ~" would inject
-    # extra shell syntax into run_cmd. This only runs inside the disposable
-    # sandbox (no host exposure, and the model already has unrestricted
-    # sandbox code execution via other tools), but there's no reason for a
-    # flag name to be anything other than an identifier — reject anything
-    # else rather than let it become part of the shell command.
-    _FLAG_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-    cmd_args: list[str] = []
-    for key, value in (args or {}).items():
-        if not _FLAG_NAME_RE.match(key):
-            logger.warning("Skipping skill script arg with an unsafe flag name: %r", key)
-            continue
-        if isinstance(value, bool):
-            if value:
-                cmd_args.append(f"--{key}")
-        elif isinstance(value, list):
-            for item in value:
-                cmd_args += [f"--{key}", shlex.quote(str(item))]
-        elif value is not None:
-            cmd_args += [f"--{key}", shlex.quote(str(value))]
-
-    suffix = os.path.splitext(remote_name)[1].lower()
-    interpreter = {".py": "python3", ".sh": "sh", ".bash": "bash"}.get(suffix)
-    quoted_path = shlex.quote(remote_path)
-    run_cmd = f"chmod +x {quoted_path} && "
-    run_cmd += f"{interpreter} {quoted_path}" if interpreter else quoted_path
-    if cmd_args:
-        run_cmd += " " + " ".join(cmd_args)
-
-    try:
-        with sandbox_use(deps.channel_id, deps.thread_ts) as use:
-            sandbox, proxy_info = get_or_create_sandbox(deps.channel_id, deps.thread_ts)
-            use.sandbox = sandbox
-            sandbox.files.write(remote_path, content)
-            result = run_command(sandbox, run_cmd, envs=_proxy_env(proxy_info), timeout=120)
-    except Exception as e:
-        return f"Error running skill script in sandbox: {e}"
-
-    output = []
-    if result.stdout:
-        output.append(f"STDOUT:\n{result.stdout}")
-    if result.stderr:
-        output.append(f"STDERR:\n{result.stderr}")
-    output.append(f"Exit Code: {result.exit_code}")
-    return "\n\n".join(output)
-
-
-def build_skills_capability():
-    """The skills capability every agent that loads skills uses (the main
-    agent, kevinton). Always wires run_skill_script to the sandbox executor —
-    pydantic_ai_skills' default (LocalSkillScriptExecutor) would run skill
-    scripts as host subprocesses with every secret in the environment."""
-    from pydantic_ai_skills import CallableSkillScriptExecutor, SkillsCapability, SkillsDirectory
-
-    skill_script_executor = CallableSkillScriptExecutor(func=_run_skill_script_in_sandbox)
-    return SkillsCapability(
-        directories=[SkillsDirectory(path=d, script_executor=skill_script_executor) for d in _skill_dirs()],
-        auto_reload=True,
-    )
-
-
-def _is_within(path: str, parent: str) -> bool:
-    """True only if `path` is the same as or nested under `parent` (no traversal)."""
-    path = os.path.abspath(path)
-    parent = os.path.abspath(parent)
-    return path == parent or path.startswith(parent + os.sep)
-
-
-def _build_skill_md(slug: str, description: str, body: str) -> str:
-    """Build a SKILL.md string with valid YAML frontmatter.
-
-    The description is single-quoted so embedded colons (the exact thing that
-    broke the catalog before) can't terminate the YAML mapping early.
-    """
-    desc = description.replace("'", "''")
-    return (
-        "---\n"
-        f"name: {slug}\n"
-        f"description: '{desc}'\n"
-        "---\n\n"
-        f"# {slug.replace('-', ' ').title()}\n\n"
-        f"{body}\n"
-    )
-
-
-def _validate_skill_md(content: str) -> tuple[bool, str]:
-    """Return (ok, error) for a SKILL.md's frontmatter.
-
-    Parses the leading YAML block so a malformed skill is caught before it can
-    enter the catalog and break every model's skill scan.
-    """
-    try:
-        import yaml
-    except ImportError:
-        return True, ""  # yaml unavailable — skip validation rather than block
-    if not content.startswith("---"):
-        return False, "missing frontmatter delimiters"
-    end = content.find("\n---", 3)
-    if end == -1:
-        return False, "unterminated frontmatter"
-    block = content[3:end].strip()
-    try:
-        data = yaml.safe_load(block)
-    except yaml.YAMLError as e:
-        return False, f"invalid YAML: {e}"
-    if not isinstance(data, dict):
-        return False, "frontmatter is not a mapping"
-    if not data.get("name") or not data.get("description"):
-        return False, "name and description are required"
-    return True, ""
-
-
-def _resolve_skill(name: str) -> str | None:
-    """Find the on-disk folder for a skill by name across known skill dirs.
-
-    Only direct children of a known skill dir are matched; names containing path
-    separators or traversal sequences are rejected (returns None).
-    """
-    if not name or "/" in name or "\\" in name or name in (".", ".."):
-        return None
-    for base in _skill_dirs():
-        cand = os.path.join(base, name)
-        # cand must be a direct child of a known skill dir
-        if os.path.dirname(os.path.abspath(cand)) != os.path.abspath(base):
-            continue
-        if os.path.isdir(cand) and os.path.exists(os.path.join(cand, "SKILL.md")):
-            return cand
-    return None
-
-
-def _safe_name(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_-]", "-", name.strip().lower())
-
-
-def _staged_skill_preview(staging: str, slug: str) -> str:
-    """What the reviewer sees for one staged skill: its SKILL.md and file list."""
-    skill_dir = os.path.join(staging, slug)
-    try:
-        with open(os.path.join(skill_dir, "SKILL.md")) as f:
-            skill_md = f.read()
-    except OSError:
-        skill_md = "(no SKILL.md)"
-    files = sorted(
-        os.path.relpath(os.path.join(root, name), skill_dir)
-        for root, _dirs, names in os.walk(skill_dir) for name in names
-    )
-    return f"--- {slug} ---\nfiles: {', '.join(files)}\n\n{skill_md}"
-
-
-def apply_skill_change(spec: dict) -> str:
-    """Carry out a skill change — straight away for the maintainer, or once a
-    proposal is approved (agent.skill_review). Re-checks everything, since a
-    proposal can sit for a while and the skill dirs may have changed since."""
-    op = spec.get("op")
-    if op == "create":
-        slug = spec["slug"]
-        target = os.path.join(_repo_root(), "skills", slug)
-        if not _is_within(target, os.path.join(_repo_root(), "skills")):
-            return "Error: invalid skill name (must not escape the skills directory)."
-        if os.path.exists(target):
-            return f"Error: a skill named '{slug}' already exists at {target}."
-        try:
-            os.makedirs(target)
-            with open(os.path.join(target, "SKILL.md"), "w") as f:
-                f.write(spec["content"])
-        except OSError as e:
-            return f"Error creating skill: {e}"
-        return f"Created skill '{slug}' at skills/{slug}/SKILL.md. It is now available via list_skills / load_skill."
-
-    if op == "install":
-        from agent import skill_review
-
-        staging = spec["staged_dir"]
-        skills_dir = os.path.join(_repo_root(), ".agents", "skills")
-        installed = []
-        try:
-            for slug in spec["slugs"]:
-                src, dst = os.path.join(staging, slug), os.path.join(skills_dir, slug)
-                if not _is_within(dst, skills_dir) or not os.path.isdir(src):
-                    continue
-                if os.path.exists(dst):
-                    shutil.rmtree(dst)
-                os.makedirs(skills_dir, exist_ok=True)
-                shutil.move(src, dst)
-                installed.append(slug)
-        except OSError as e:
-            return f"Error installing skill(s): {e}"
-        finally:
-            skill_review.discard({"spec": spec})
-        if not installed:
-            return "Error: the staged skill files are gone; nothing was installed."
-        return f"Installed skill(s): {', '.join(installed)}. Available now via list_skills / load_skill."
-
-    if op == "rename":
-        src = _resolve_skill(spec["old_name"])
-        if not src:
-            return f"Error: skill '{spec['old_name']}' not found in any skill directory."
-        new_slug = spec["new_slug"]
-        dst = os.path.join(os.path.dirname(src), new_slug)
-        if os.path.exists(dst):
-            return f"Error: a skill named '{new_slug}' already exists."
-        try:
-            os.rename(src, dst)
-            sk_md = os.path.join(dst, "SKILL.md")
-            if os.path.exists(sk_md):
-                with open(sk_md, "r") as f:
-                    txt = f.read()
-                txt = re.sub(r"(?m)^name:\s*.*$", f"name: {new_slug}", txt, count=1)
-                with open(sk_md, "w") as f:
-                    f.write(txt)
-        except OSError as e:
-            return f"Error renaming skill: {e}"
-        return f"Renamed skill '{spec['old_name']}' -> '{new_slug}'."
-
-    if op == "update":
-        src = _resolve_skill(spec["name"])
-        if not src:
-            return f"Error: skill '{spec['name']}' not found in any skill directory."
-        try:
-            with open(os.path.join(src, "SKILL.md"), "w") as f:
-                f.write(spec["content"])
-        except OSError as e:
-            return f"Error updating skill: {e}"
-        return f"Updated skill '{spec['name']}'. The new version is what load_skill returns from now on."
-
-    if op == "delete":
-        src = _resolve_skill(spec["name"])
-        if not src:
-            return f"Error: skill '{spec['name']}' not found in any skill directory."
-        try:
-            shutil.rmtree(src)
-        except OSError as e:
-            return f"Error deleting skill: {e}"
-        return f"Deleted skill '{spec['name']}' from {src}."
-
-    return f"Error: unknown skill change {op!r}."
-
-
-def _apply_or_submit_skill_change(ctx: RunContext[AgentDeps], spec: dict, description: str, preview: str = "") -> str:
-    from agent import skill_review
-
-    if skill_review.needs_review(ctx.deps):
-        return skill_review.submit(spec, ctx.deps, description, preview)
-    return _applied_directly(apply_skill_change(spec), ctx.deps, description)
-
-
-def _applied_directly(result: str, deps, description: str) -> str:
-    """Say outright that a change skipped review — without this the model,
-    primed by every "goes to review unless the maintainer asked" note, told the
-    maintainer their already-live skill was pending review. Also sends the
-    maintainer an FYI when AUTO_ACCEPT_SKILLS is what let it through."""
-    from agent import skill_review
-
-    if result.startswith("Error"):
-        return result
-    skill_review.note_auto_accepted(deps, description)
-    return f"{result} This is LIVE now — it did NOT go to review ({skill_review.skip_reason(deps)})."
-
-
-@agent.tool
-def create_skill(ctx: RunContext[AgentDeps], name: str, description: str, body: str = "") -> str:
-    """Create a new custom agent skill in the repo's `skills/` directory.
-
-    Use this when the user wants to "make a skill", "create a skill for X",
-    "turn this workflow into a skill", or save a reusable playbook. This writes
-    a proper SKILL.md (frontmatter + instructions) so the skill is discoverable
-    via list_skills / load_skill. Unless the coolton maintainer asked for it, the
-    new skill goes to the maintainer for review first and only goes live once
-    approved. The result says which happened, relay that, don't guess. Do NOT use shell/CLI commands
-    in the sandbox to create skills, they have no effect on the agent.
-
-    Args:
-        name: Skill name (will be slugified, e.g. "My Cool Skill" -> "my-cool-skill").
-        description: One-line description; used for skill discovery. It's all a future turn
-            sees before loading the skill, so name the situations and requests it's for, in
-            terms that make sense without knowing the skill (say what a named service is; no
-            "and other X tasks" catch-alls, no how-to).
-        body: The skill's instructions/body (Markdown). If empty, a minimal
-            template is created for you to fill in later.
-    """
-    slug = _safe_name(name)
-    if not slug:
-        return "Error: invalid skill name."
-    target = os.path.join(_repo_root(), "skills", slug)
-    if not _is_within(target, os.path.join(_repo_root(), "skills")):
-        return "Error: invalid skill name (must not escape the skills directory)."
-    if os.path.exists(target):
-        return f"Error: a skill named '{slug}' already exists at {target}."
-    if not body.strip():
-        body = (
-            "# " + slug.replace("-", " ").title() + "\n\n"
-            "Describe the workflow, steps, and guidance for this skill here.\n"
-        )
-    content = _build_skill_md(slug, description.strip(), body.strip())
-    # Validate before writing: a malformed SKILL.md would break the whole skill
-    # catalog load (every model that scans skills chokes on bad frontmatter).
-    # If invalid, reject and do NOT create the skill.
-    ok, err = _validate_skill_md(content)
-    if not ok:
-        return (
-            f"Error: generated SKILL.md failed validation ({err}). The skill was "
-            "NOT created. Fix the description/body (avoid unquoted colons in the "
-            "description) and try again."
-        )
-    return _apply_or_submit_skill_change(
-        ctx, {"op": "create", "slug": slug, "content": content}, f"create skill `{slug}`", content,
-    )
-
-
-@agent.tool
-def rename_skill(ctx: RunContext[AgentDeps], old_name: str, new_name: str) -> str:
-    """Rename an existing agent skill (moves its folder and updates frontmatter name).
-
-    Use this when the user wants to rename a skill. Operates on skills found in
-    the repo's `skills/` or `.agents/skills/` directories. Unless the coolton
-    maintainer asked for it, the rename waits for maintainer review (the result says
-    which happened, relay that, don't guess). Do NOT use
-    sandbox shell commands, they have no effect on the agent.
-
-    Args:
-        old_name: Current skill name/folder.
-        new_name: Desired new skill name (will be slugified).
-    """
-    src = _resolve_skill(old_name)
-    if not src:
-        return f"Error: skill '{old_name}' not found in any skill directory."
-    new_slug = _safe_name(new_name)
-    if not new_slug:
-        return "Error: invalid new skill name."
-    if os.path.exists(os.path.join(os.path.dirname(src), new_slug)):
-        return f"Error: a skill named '{new_slug}' already exists."
-    return _apply_or_submit_skill_change(
-        ctx, {"op": "rename", "old_name": old_name, "new_slug": new_slug},
-        f"rename skill `{old_name}` -> `{new_slug}`",
-    )
-
-
-def _updated_skill_md(current: str, description: str, body: str) -> str:
-    """`current` SKILL.md with a new description and/or body (empty keeps the old one);
-    the rest of the frontmatter stays as it was."""
-    import yaml
-
-    end = current.find("\n---", 3)
-    data = yaml.safe_load(current[3:end]) if current.startswith("---") and end != -1 else None
-    if not isinstance(data, dict):
-        raise ValueError("its SKILL.md has no readable frontmatter")
-    old_body = current[end + 4:].lstrip("\n")
-    if description:
-        data["description"] = description
-    frontmatter = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=1_000_000)
-    return f"---\n{frontmatter}---\n\n{body or old_body.rstrip()}\n"
-
-
-@agent.tool
-def update_skill(ctx: RunContext[AgentDeps], name: str, description: str = "", body: str = "") -> str:
-    """Edit an existing agent skill: its description (what it's for and when to use it), its
-    instructions, or both. Its name and any other files stay as they are.
-
-    Use this when the user wants to change, reword, fix or extend a skill. `body` replaces the
-    whole instructions, so to change part of them, load_skill first and pass the full new text.
-    Unless the coolton maintainer asked for it, the edit waits for maintainer review (the result
-    says which happened, relay that, don't guess). Do NOT use sandbox shell commands, they have
-    no effect on the agent.
-
-    Args:
-        name: The skill's name/folder.
-        description: New description; leave empty to keep the current one. Same rules as
-            create_skill's: when to use it, understandable before loading the skill.
-        body: New instructions (Markdown, without frontmatter); leave empty to keep the current ones.
-    """
-    src = _resolve_skill(name)
-    if not src:
-        return f"Error: skill '{name}' not found in any skill directory."
-    description, body = description.strip(), body.strip()
-    if not description and not body:
-        return "Error: pass a new description, a new body, or both."
-    try:
-        with open(os.path.join(src, "SKILL.md")) as f:
-            content = _updated_skill_md(f.read(), description, body)
-    except (OSError, ValueError, ImportError) as e:
-        return f"Error reading skill '{name}': {e}"
-    ok, err = _validate_skill_md(content)
-    if not ok:
-        return f"Error: the updated SKILL.md failed validation ({err}). The skill was NOT changed."
-    return _apply_or_submit_skill_change(
-        ctx, {"op": "update", "name": name, "content": content}, f"update skill `{name}`", content,
-    )
-
-
-@agent.tool
-def delete_skill(ctx: RunContext[AgentDeps], name: str) -> str:
-    """Delete an agent skill folder entirely from disk.
-
-    Use this when the user wants to remove/uninstall a skill. This is permanent.
-    Operates on skills in the repo's `skills/` or `.agents/skills/` directories.
-    Unless the coolton maintainer asked for it (the result says which happened, relay
-    that, don't guess), the deletion waits for maintainer
-    review. Do NOT use sandbox shell commands, they have no effect on the agent.
-
-    Args:
-        name: Skill name/folder to delete.
-    """
-    src = _resolve_skill(name)
-    if not src:
-        return f"Error: skill '{name}' not found in any skill directory."
-    return _apply_or_submit_skill_change(
-        ctx, {"op": "delete", "name": name}, f"delete skill `{name}` ({os.path.relpath(src, _repo_root())})",
-    )
+_register(
+    tool_groups.skills.create_skill,
+    tool_groups.skills.rename_skill,
+    tool_groups.skills.update_skill,
+    tool_groups.skills.delete_skill,
+)
 
 
 class _SkipResult:
@@ -3645,7 +2544,7 @@ def run_agent(text, deps, message_history=None, images=None, resume_from=None):
     if surface_hooks is not None:
         capabilities.append(surface_hooks)
 
-    capabilities.append(build_skills_capability())
+    capabilities.append(tool_groups.skills.build_skills_capability())
     from agent.image_cap import cap_images
     capabilities.append(ProcessHistory(cap_images))
     capabilities.append(_checkpoint_hooks(deps))
@@ -3946,9 +2845,9 @@ def _abuse_check_note(flags: set[str], user_id: str = "") -> str:
     """A turn-context line for abuse categories Jev flagged on this message (agent.tool_preload).
     None for the maintainer's own messages: they can't be reported (agent.abuse_report)."""
     from agent.abuse_report import CATEGORIES
-    from agent.admin_alerts import ADMIN_USER_ID
+    from agent.admin_alerts import is_admin
 
-    if user_id == ADMIN_USER_ID:
+    if is_admin(user_id):
         return ""
 
     names = [CATEGORIES[f] for f in sorted(flags) if f in CATEGORIES]

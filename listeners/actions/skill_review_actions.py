@@ -9,12 +9,12 @@ from logging import Logger
 
 from slack_sdk import WebClient
 
-from agent.admin_alerts import ADMIN_USER_ID
+from agent.admin_alerts import is_admin
 
 
 def _resolve(ack, body: dict, client: WebClient, logger: Logger, approve: bool) -> None:
     ack()
-    if (body.get("user") or {}).get("id") != ADMIN_USER_ID:
+    if not is_admin((body.get("user") or {}).get("id")):
         return
     from agent import skill_review
 
@@ -23,7 +23,7 @@ def _resolve(ack, body: dict, client: WebClient, logger: Logger, approve: bool) 
     if proposal is None:
         outcome = f"Proposal `{proposal_id}` was already handled."
     elif approve:
-        from agent.agent import apply_skill_change
+        from agent.tool_groups.skills import apply_skill_change
 
         try:
             outcome = apply_skill_change(proposal["spec"])
@@ -47,7 +47,7 @@ def _resolve(ack, body: dict, client: WebClient, logger: Logger, approve: bool) 
         logger.exception("Couldn't update the review DM for skill proposal %s", proposal_id)
 
     requester = (proposal or {}).get("requested_by")
-    if proposal and requester and not proposal.get("from_kevinton") and requester != ADMIN_USER_ID:
+    if proposal and requester and not proposal.get("from_kevinton") and not is_admin(requester):
         try:
             client.chat_postMessage(
                 channel=requester,

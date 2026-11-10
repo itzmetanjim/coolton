@@ -1,4 +1,4 @@
-"""DM the admin (lily, U0B2VTYER33) about things that need a human's eyes:
+"""DM the maintainer (lily, MAINTAINER_ID) about things that need a human's eyes:
 secret leaks (see agent/redact.py's separate notifier), the Slack MCP Server
 going down (agent/mcp_health.py), and human feedback on responses
 (listeners/views/feedback_views.py).
@@ -16,7 +16,15 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-ADMIN_USER_ID = "U0B2VTYER33"
+# coolton's admins, the one list every admin check uses: banning, approving skills, other
+# people's bots and scheduled tasks, owner_only models, the admin App Home. The first is
+# the maintainer, who gets coolton's alert DMs.
+ADMIN_USER_IDS = ("U0B2VTYER33", "U09ASUK57K8", "U0BFB1AEY3D", "U0BDCU34308")
+MAINTAINER_ID = ADMIN_USER_IDS[0]
+
+
+def is_admin(user_id: str | None) -> bool:
+    return bool(user_id) and user_id in ADMIN_USER_IDS
 
 _alert_lock = threading.Lock()
 _last_alert_at: dict[str, float] = {}
@@ -26,7 +34,7 @@ def notify_admin(
     text: str, *, blocks: list[dict] | None = None,
     dedupe_key: str | None = None, min_interval_seconds: float = 0.0,
 ) -> None:
-    """DM ADMIN_USER_ID with `text` (and optional Block Kit `blocks`, e.g.
+    """DM MAINTAINER_ID with `text` (and optional Block Kit `blocks`, e.g.
     buttons — `text` is then the notification fallback).
 
     By default every call sends (feedback DMs should never be dropped). Pass
@@ -51,7 +59,7 @@ def notify_admin(
             resp = requests.post(
                 "https://slack.com/api/chat.postMessage",
                 headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
-                json={"channel": ADMIN_USER_ID, "text": text, **({"blocks": blocks} if blocks else {})},
+                json={"channel": MAINTAINER_ID, "text": text, **({"blocks": blocks} if blocks else {})},
                 timeout=10,
             )
             res_json = resp.json()

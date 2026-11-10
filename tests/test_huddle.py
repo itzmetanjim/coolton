@@ -23,6 +23,7 @@ from agent.huddle.media import DesktopTrack, SpeakerTrack
 from agent.huddle.session import HuddleSession
 from agent.huddle.slack_api import JoinedHuddle
 from agent.huddle.voice_agent import ReplyParser
+from agent.tool_groups import huddles as huddles_tools
 
 _REAL_REQUEST_JOIN = huddle.request_join
 
@@ -443,9 +444,12 @@ def test_stream_tools_share_the_desktop_as_huddle_video_instead_of_a_link(monkey
 
 
 def test_coolton_joins_only_once_someone_in_the_huddle_approves(monkeypatch):
+    """Approving is for the people whose call coolton would hear: anyone else pressing the
+    button (the person who asked from another channel, say) is told so and changes nothing."""
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
     monkeypatch.setattr(slack_api, "workspace_url", lambda: "https://x.slack.com")
     monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: "50.5")
+    monkeypatch.setattr(slack_api, "huddle_participants", lambda channel, ts: {"U2", "U3"})
     joins = []
     monkeypatch.setattr(huddle, "_join", lambda client, pending, approver: joins.append((pending["huddle_ts"], approver)))
     client = Mock()
@@ -457,6 +461,8 @@ def test_coolton_joins_only_once_someone_in_the_huddle_approves(monkeypatch):
     assert posted["thread_ts"] == "50.5" and "!kick-coolton" in posted["text"]
     pending_id = posted["blocks"][1]["elements"][0]["value"]
 
+    huddle.approve(client, pending_id, "U1")  # asked for it, but isn't in the call
+    assert joins == [] and "Only someone in the huddle" in client.chat_postEphemeral.call_args.kwargs["text"]
     huddle.approve(client, pending_id, "U2")
     huddle.approve(client, pending_id, "U3")  # a second click does nothing
     assert joins == [("50.5", "U2")]
@@ -480,6 +486,7 @@ def test_with_no_huddle_going_coolton_starts_one_and_can_leave_it(monkeypatch):
     monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: None)
     started = []
     monkeypatch.setattr(huddle, "_join", lambda client, pending, approver, start=False: started.append((pending["channel_id"], start)))
+    monkeypatch.setattr(huddle, "_announce_start", lambda client, channel, requester: None)
     client = Mock()
 
     assert "started one" in huddle.request_join(client, channel_id="C123", thread_ts="1.1", requester_id="U1", request_text="start a huddle")
@@ -603,7 +610,6 @@ async def _the_reply_to_an_interruption_knows_what_it_interrupted():
 
 
 def test_joining_another_channels_huddle_needs_a_public_channel_and_never_starts_one(monkeypatch):
-    agent_mod = importlib.import_module("agent.agent")
     from pydantic_ai import RunContext
 
     monkeypatch.setattr("agent.tools.slack_info._resolve_channel_id", lambda c: {"#lounge": "CPUB", "#secret": "GPRIV"}.get(c, c))
@@ -614,10 +620,10 @@ def test_joining_another_channels_huddle_needs_a_public_channel_and_never_starts
     deps = SimpleNamespace(client=Mock(), channel_id="CHERE", thread_ts="1.1", user_id="U1", request_text="join #lounge")
     ctx = RunContext(model=None, usage=None, prompt="", deps=deps)
 
-    assert agent_mod.join_huddle_tool(ctx, "#lounge") == "asked"
+    assert huddles_tools.join_huddle_tool(ctx, "#lounge") == "asked"
     assert asked[-1]["channel_id"] == "CPUB" and asked[-1]["thread_ts"] is None and asked[-1]["may_start"] is False
-    assert agent_mod.join_huddle_tool(ctx, "#secret").startswith("Error: you only join huddles in public channels")
-    agent_mod.join_huddle_tool(ctx)
+    assert huddles_tools.join_huddle_tool(ctx, "#secret").startswith("Error: you only join huddles in public channels")
+    huddles_tools.join_huddle_tool(ctx)
     assert asked[-1]["channel_id"] == "CHERE" and asked[-1]["thread_ts"] == "1.1" and asked[-1]["may_start"] is True
 
     # And in the huddle module: no live huddle in that other channel means an error, not a new huddle.
@@ -638,6 +644,7 @@ def test_only_one_coolton_joins_a_huddle_and_a_kick_while_joining_counts(monkeyp
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
     monkeypatch.setattr(slack_api, "workspace_url", lambda: "https://x.slack.com")
     monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: "50.5")
+    monkeypatch.setattr(slack_api, "huddle_participants", lambda channel, ts: {"U2"})
     connecting, release = threading.Event(), threading.Event()
     connects = []
 
@@ -665,3 +672,147 @@ def test_only_one_coolton_joins_a_huddle_and_a_kick_while_joining_counts(monkeyp
     release.set()
     joiner.join(5)
     assert connects == [("C9", "50.5")] and ("C9", "50.5") not in huddle._joining
+
+
+def test_a_huddle_coolton_starts_is_announced_by_cooltonuser_first(monkeypatch):
+    """Anyone who can talk to coolton in a channel could otherwise make a huddle appear
+    there; if cooltonUser can't post in the channel, no huddle is started."""
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-coolton-user")
+    monkeypatch.setattr(slack_api, "workspace_url", lambda: "https://x.slack.com")
+    monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: None)
+    monkeypatch.setattr("agent.ensure_coolton_user.ensure_coolton_user_in_channel", lambda client, channel: None)
+    started = []
+    monkeypatch.setattr(huddle, "_join", lambda client, pending, approver, start=False: started.append(start))
+    posts = []
+
+    class UserClient:
+        fail = False
+
+        def __init__(self, token):
+            assert token == "xoxp-coolton-user"
+
+        def chat_postMessage(self, **kwargs):
+            if UserClient.fail:
+                from slack_sdk.errors import SlackApiError
+                raise SlackApiError("no", {"ok": False, "error": "not_in_channel"})
+            posts.append(kwargs)
+
+    monkeypatch.setattr("slack_sdk.WebClient", UserClient)
+    assert "started one" in _REAL_REQUEST_JOIN(Mock(), channel_id="C7", thread_ts="1.1", requester_id="U1",
+                                               request_text="start a huddle")
+    assert posts == [{"channel": "C7", "text": "<@U1> asked coolton to start a huddle"}] and started == [True]
+
+    UserClient.fail = True
+    status = _REAL_REQUEST_JOIN(Mock(), channel_id="C7", thread_ts="1.1", requester_id="U1", request_text="again")
+    assert status.startswith("Error: didn't start a huddle") and "not_in_channel" in status and started == [True]
+
+
+def test_two_requests_at_once_post_one_approval_prompt(monkeypatch):
+    import threading
+
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setattr(slack_api, "workspace_url", lambda: "https://x.slack.com")
+    monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: "70.7")
+    posting, release = threading.Event(), threading.Event()
+    client = Mock()
+
+    def slow_post(**kwargs):
+        posting.set()
+        release.wait(5)
+        return {"ts": "71.1"}
+
+    client.chat_postMessage.side_effect = slow_post
+    results = []
+    first = threading.Thread(target=lambda: results.append(_REAL_REQUEST_JOIN(
+        client, channel_id="C8", thread_ts=None, requester_id="U1", request_text="join")))
+    first.start()
+    assert posting.wait(5)
+    second = _REAL_REQUEST_JOIN(client, channel_id="C8", thread_ts=None, requester_id="U2", request_text="join")
+    release.set()
+    first.join(5)
+    assert "already asked" in second and "approve" in results[0] and client.chat_postMessage.call_count == 1
+    huddle._pending.clear()
+
+
+def test_a_kick_reaches_a_huddle_coolton_is_still_starting(monkeypatch):
+    """A huddle coolton starts gets its thread only once rooms.join answers; a kick typed
+    there while coolton connects used to be dropped."""
+    import threading
+
+    monkeypatch.setattr(slack_api, "find_live_huddle", lambda channel, thread: None)
+    monkeypatch.setattr("agent.ensure_coolton_user.ensure_coolton_user_in_channel", lambda client, channel: None)
+    joined = JoinedHuddle(call_id="R1", channel_id="C9", thread_ts="80.8", participant_ids=[], meeting={}, attendee={})
+    monkeypatch.setattr(slack_api, "join", lambda channel: joined)
+    connecting, release = threading.Event(), threading.Event()
+
+    class Session:
+        def __init__(self, joined, **kw):
+            self.channel_id, self.thread_ts, self.loop = joined.channel_id, joined.thread_ts, None
+            connecting.set()
+            release.wait(5)
+
+    stopped = []
+    monkeypatch.setattr("agent.huddle.session.HuddleSession", Session)
+    monkeypatch.setattr(huddle, "_event_loop", lambda: None)
+
+    class Done:
+        def result(self, timeout=None):
+            return None
+
+    monkeypatch.setattr(huddle.asyncio, "run_coroutine_threadsafe",
+                        lambda coro, loop: (stopped.append(coro), coro.close() if hasattr(coro, "close") else None, Done())[2])
+    Session.start = lambda self: _noop()
+    Session.stop = lambda self, reason: _noop(reason)
+    joiner = threading.Thread(target=huddle._join, args=(Mock(), {"channel_id": "C9", "huddle_ts": None,
+                                                                   "requester_id": "U1", "request_text": ""}, "U1"),
+                              kwargs={"start": True})
+    joiner.start()
+    assert connecting.wait(5)
+    assert huddle.kick(Mock(), "C9", "80.8", "U4", "!kick-coolton")
+    release.set()
+    joiner.join(5)
+    assert len(stopped) == 2  # started, then stopped because of the kick
+    assert not any(key[0] == "C9" for key in huddle._joining)
+    huddle._sessions.pop(("C9", "80.8"), None)
+
+
+async def _noop(*args):
+    return None
+
+
+def test_who_is_in_a_huddle_comes_from_its_live_thread_root(monkeypatch):
+    roots = {
+        "50.5": {"ts": "50.5", "subtype": "huddle_thread",
+                 "room": {"id": "R1", "date_end": 0, "participants": ["U1", {"user_id": "U2"}]}},
+        "40.4": {"ts": "40.4", "subtype": "huddle_thread", "room": {"id": "R0", "has_ended": True, "participants": ["U9"]}},
+    }
+    monkeypatch.setattr(slack_api, "_call", lambda method, fields: {"messages": [roots[fields["ts"]]]})
+    assert slack_api.huddle_participants("C1", "50.5") == {"U1", "U2"}
+    assert slack_api.huddle_participants("C1", "40.4") == set()  # ended: nobody can approve
+
+
+def test_huddle_replies_never_use_the_requesters_own_endpoint(monkeypatch):
+    """Everything said in the call goes to the voice model: never a server the person who
+    invited coolton picked (BYOK)."""
+    from agent.huddle import session as session_mod
+
+    agent_mod = importlib.import_module("agent.agent")
+    asked = []
+    monkeypatch.setattr(agent_mod, "_resolve_provider_order", lambda user_id, tag=None: asked.append(user_id) or
+                        [("hcai_0", {"model": "m"})])
+    monkeypatch.setattr(agent_mod, "chain_model", lambda config: "model")
+    assert session_mod.voice_models() == [("hcai_0", "model")] and asked == [None]
+
+
+def test_leaving_a_huddle_is_only_this_channels(monkeypatch):
+    import inspect
+
+    from pydantic_ai import RunContext
+
+    assert list(inspect.signature(huddles_tools.leave_huddle_tool).parameters) == ["ctx"]
+    left = []
+    monkeypatch.setattr(huddle, "leave", lambda channel, thread, user: left.append((channel, thread, user)) or "Left")
+    deps = SimpleNamespace(channel_id="CHERE", thread_ts="1.1", user_id="U1")
+    assert huddles_tools.leave_huddle_tool(RunContext(model=None, usage=None, prompt="", deps=deps)) == "Left"
+    assert left == [("CHERE", "1.1", "U1")]

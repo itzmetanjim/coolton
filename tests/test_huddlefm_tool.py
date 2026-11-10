@@ -1,16 +1,16 @@
-"""agent.agent.huddlefm_request_control_tool / huddlefm_command_tool — the
-@agent.tool wrappers around agent.tools.huddlefm. Only concerned with the
+"""agent.tool_groups.huddles.huddlefm_request_control_tool / huddlefm_command_tool —
+the tool wrappers around agent.tools.huddlefm. Only concerned with the
 wrappers' own plumbing (argument passthrough, fields JSON parsing) —
 agent.tools.huddlefm itself is covered by tests/test_huddlefm.py.
 """
 
-import importlib
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 from pydantic_ai import RunContext
 
-agent_mod = importlib.import_module("agent.agent")
+from agent.tool_groups import huddles as huddles_tools
+
 
 
 def _ctx():
@@ -27,7 +27,7 @@ def test_request_control_tool_delegates(monkeypatch):
         ) or "Requested control of C1 (add).",
     )
     ctx = _ctx()
-    result = agent_mod.huddlefm_request_control_tool(ctx, channel="C1", permissions="add,skip", events="track")
+    result = huddles_tools.huddlefm_request_control_tool(ctx, channel="C1", permissions="add,skip", events="track")
     assert result == "Requested control of C1 (add)."
     assert called["client"] is ctx.deps.client
     assert called["channel"] == "C1"
@@ -44,7 +44,7 @@ def test_command_tool_parses_fields_and_delegates(monkeypatch):
         ) or '{"ok":true}',
     )
     ctx = _ctx()
-    result = agent_mod.huddlefm_command_tool(ctx, command_type="volume", channel="C1", fields='{"percent": 40}')
+    result = huddles_tools.huddlefm_command_tool(ctx, command_type="volume", channel="C1", fields='{"percent": 40}')
     assert result == '{"ok":true}'
     assert called["command_type"] == "volume"
     assert called["channel"] == "C1"
@@ -53,7 +53,7 @@ def test_command_tool_parses_fields_and_delegates(monkeypatch):
 
 def test_command_tool_rejects_invalid_fields_json():
     ctx = _ctx()
-    result = agent_mod.huddlefm_command_tool(ctx, command_type="volume", fields="not json")
+    result = huddles_tools.huddlefm_command_tool(ctx, command_type="volume", fields="not json")
     assert "Error" in result
     assert "fields" in result
 
@@ -65,5 +65,5 @@ def test_command_tool_defaults_to_no_fields(monkeypatch):
         lambda client, command_type, channel, fields: called.update(fields=fields) or "ok",
     )
     ctx = _ctx()
-    agent_mod.huddlefm_command_tool(ctx, command_type="status")
+    huddles_tools.huddlefm_command_tool(ctx, command_type="status")
     assert called["fields"] == {}

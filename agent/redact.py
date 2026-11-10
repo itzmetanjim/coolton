@@ -11,6 +11,10 @@ _SECRET_NAME_HINTS = (
     "PASS",
     "CREDENTIAL",
     "SIGNING",
+    # cooltonUser's browser session (COOLTON_USER_XOXC / _XOXD): full control of that account.
+    "XOXC",
+    "XOXD",
+    "COOKIE",
 )
 
 _CANARY_VALUE = "COOLTON-CANARY-c7e6f357-5197-4d5e-8682-9e0758561d8f"

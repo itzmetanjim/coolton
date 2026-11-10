@@ -1,16 +1,16 @@
-"""agent.agent.create_code_channel_tool — the @agent.tool wrapper around
+"""agent.tool_groups.code_channels.create_code_channel_tool — the tool wrapper around
 agent.tools.code_channel.create_code_channel. Only concerned with the wrapper's
 own logic (Slack-only gate, argument passthrough) — agent.tools.code_channel
 itself is covered by tests/test_code_channel_tool.py.
 """
 
-import importlib
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 from pydantic_ai import RunContext
 
-agent_mod = importlib.import_module("agent.agent")
+from agent.tool_groups import code_channels as code_channels_tools
+
 
 
 def _ctx(surface):
@@ -22,7 +22,7 @@ def _ctx(surface):
 
 def test_blocked_on_web_surface():
     web_surface = SimpleNamespace(name="web")
-    result = agent_mod.create_code_channel_tool(_ctx(web_surface), name="My Code Channel")
+    result = code_channels_tools.create_code_channel_tool(_ctx(web_surface), name="My Code Channel")
     assert "Slack-only" in result or "not available" in result.lower()
 
 
@@ -37,7 +37,7 @@ def test_allowed_with_no_surface_set_default_slack(monkeypatch):
             source_thread_ts=source_thread_ts, source_message_ts=source_message_ts,
         ) or "Created code channel <#C1>.",
     )
-    result = agent_mod.create_code_channel_tool(_ctx(None), name="Code audit and bug detection", task="fix it")
+    result = code_channels_tools.create_code_channel_tool(_ctx(None), name="Code audit and bug detection", task="fix it")
     assert "Created code channel" in result
     assert called["name"] == "Code audit and bug detection"
     assert called["task"] == "fix it"

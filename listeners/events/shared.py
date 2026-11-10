@@ -113,7 +113,7 @@ def stop_thread(say, channel_id: str, thread_ts: str) -> None:
 
 def handled_ban_command(client, logger, text: str, bot_id: str, user_id: str, channel_id: str, message_ts: str) -> bool:
     """Apply a !ban / !unban, and say whether `text` was one. Silently ignored (not even a
-    "not authorized" reply) for anyone but admin_alerts.ADMIN_USER_ID, so the mechanism
+    "not authorized" reply) for anyone but coolton's admins (admin_alerts.ADMIN_USER_IDS), so the mechanism
     isn't exposed to random users typing the syntax."""
     ban_command = parse_ban_command(text, bot_id)
     if not ban_command:

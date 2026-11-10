@@ -58,7 +58,9 @@ class WebSurface:
 
     def post_card(self, blocks: list, text: str) -> str:
         # web/static/app.js draws the same blocks (charts and tables included).
-        self._append({"type": "agent_message", "variant": "card", "blocks": blocks, "text": text})
+        from agent.tools.json_render_card import redacted
+
+        self._append({"type": "agent_message", "variant": "card", "blocks": redacted(blocks), "text": redacted(text)})
         return f"Success: card posted to conversation {self.conversation_id}"
 
     def react(self, emoji_name: str) -> str:

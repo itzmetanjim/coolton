@@ -1,11 +1,13 @@
-"""A prompt button on one of coolton's cards (agent.tools.json_render_card) was clicked:
-coolton posts in the thread who clicked what, then answers it as that person's mention,
+"""A button on one of coolton's cards (agent.tools.json_render_card) was clicked: coolton
+posts in the thread who clicked what, then answers the button's label, marked as a button
+click, as that person's mention,
 through her own mention handler, the way the code channels app hands over clicks in its
 tabs (listeners.code_channel_app). The card's other inputs (selects, checkboxes...) never
 ask anything themselves; their state goes along with the button's prompt.
 
-Slack only sends coolton the clicks on messages coolton itself posted, and nobody else
-can edit those messages, so the prompt in the button's value is the one coolton wrote.
+What's asked is the label the person saw and clicked, never a hidden prompt: a card can be
+made at anyone's request, and a button that says one thing and asks another would run that
+other thing as whoever clicks it.
 """
 
 from __future__ import annotations
@@ -32,6 +34,12 @@ def handle_card_prompt(ack, body: dict, client) -> None:
     threading.Thread(target=hand_click_to_coolton, args=(body, client), daemon=True, name="card-prompt").start()
 
 
+def button_click_text(label: str) -> str:
+    """What coolton is asked when someone clicks a card button labelled `label`."""
+    return (f"{label}\n[from a button click: they clicked the \"{label}\" button on your card. "
+            "This is the button's label, not a message they typed: do what the button offers.]")
+
+
 def hand_click_to_coolton(body: dict, client) -> None:
     from agent.ban_store import is_banned
     from agent.block_state import with_state
@@ -39,19 +47,17 @@ def hand_click_to_coolton(body: dict, client) -> None:
     from listeners.events.app_mentioned import handle_app_mentioned
 
     action = (body.get("actions") or [{}])[0]
-    prompt = (action.get("value") or "").strip()
-    label = ((action.get("text") or {}).get("text") or "a button").strip()
+    label = ((action.get("text") or {}).get("text") or "").strip()
     user_id = (body.get("user") or {}).get("id", "")
     channel_id, thread_ts = _thread_of(body)
-    if not prompt or not user_id or not channel_id or is_banned(user_id):
+    if not label or not user_id or not channel_id or is_banned(user_id):
         return
 
     from agent.block_state import describe_state
 
     inputs = describe_state(body)
-    text = with_state(f'[clicked the "{label}" button on your card] {prompt}', body, "The card's")
-    quoted = prompt.replace("\n", "\n> ")
-    notice = f"<@{user_id}> clicked *{label}*:\n> {quoted}" + "".join(f"\n> • {line}" for line in inputs)
+    text = with_state(button_click_text(label), body, "The card's")
+    notice = f"<@{user_id}> clicked *{label}*" + "".join(f"\n> • {line}" for line in inputs)
     try:
         posted = client.chat_postMessage(channel=channel_id, thread_ts=thread_ts or None,
                                          text=defuse_mass_mentions(notice))

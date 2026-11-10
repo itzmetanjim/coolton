@@ -22,7 +22,7 @@ def test_notify_admin_sends_dm_to_admin_user(monkeypatch):
     _wait_for(post_mock)
     post_mock.assert_called_once()
     _, kwargs = post_mock.call_args
-    assert kwargs["json"]["channel"] == admin_alerts.ADMIN_USER_ID
+    assert kwargs["json"]["channel"] == admin_alerts.MAINTAINER_ID
     assert kwargs["json"]["text"] == "hello lily"
 
 

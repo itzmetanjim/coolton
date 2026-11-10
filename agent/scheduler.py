@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 # datetime used for typing if needed
 
 from slack_sdk import WebClient
+from agent.admin_alerts import is_admin
 from agent.json_file import load_json, save_json
 
 logger = logging.getLogger(__name__)
@@ -131,7 +132,6 @@ MIN_SCHEDULE_INTERVAL_SECONDS = 30 * 60
 # agent turn, an unbounded pile of tasks is an unbounded pile of autonomous
 # turns; cap it per user.
 MAX_TASKS_PER_USER = 20
-ADMIN_USER_IDS = {"U0B2VTYER33", "U09ASUK57K8", "U0BFB1AEY3D", "U0BDCU34308"}
 
 
 def _load_tasks() -> dict:
@@ -362,7 +362,7 @@ def list_scheduled_tasks(user_id: str, view_all: bool = False) -> str:
     """List scheduled tasks. Non-admins only see their own."""
     with scheduled_tasks_lock:
         data = _load_tasks()
-        if view_all and user_id in ADMIN_USER_IDS:
+        if view_all and is_admin(user_id):
             tasks = data["tasks"]
         else:
             tasks = [t for t in data["tasks"] if t["user_id"] == user_id]
@@ -388,7 +388,7 @@ def _get_owned_task(user_id: str, task_id: str) -> tuple[dict | None, str]:
         task = next((t for t in data["tasks"] if t["id"] == task_id), None)
     if not task:
         return None, f"Error: No scheduled task with id '{task_id}'."
-    if task["user_id"] != user_id and user_id not in ADMIN_USER_IDS:
+    if task["user_id"] != user_id and not is_admin(user_id):
         return None, "Error: You can only manage tasks you created."
     return task, ""
 

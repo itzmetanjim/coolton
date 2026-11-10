@@ -53,9 +53,12 @@ def test_persists_to_disk(tmp_store):
     assert data["U1"]["reason"] == "spamming"
 
 
-def test_is_authorized_only_the_hardcoded_admin():
-    assert store.is_authorized(store.ADMIN_USER_ID) is True
+def test_is_authorized_only_coolton_admins():
+    from agent.admin_alerts import ADMIN_USER_IDS
+
+    assert all(store.is_authorized(admin) for admin in ADMIN_USER_IDS)
     assert store.is_authorized("U_SOMEONE_ELSE") is False
+    assert store.is_authorized("") is False
 
 
 class TestParseBanCommand:

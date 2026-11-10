@@ -438,7 +438,7 @@ def test_someone_elses_bot_is_off_limits(monkeypatch, call):
 
 
 def test_bots_created_before_ownership_existed_are_maintainer_only(monkeypatch):
-    from agent.admin_alerts import ADMIN_USER_ID
+    from agent.admin_alerts import MAINTAINER_ID as ADMIN_USER_ID
 
     monkeypatch.setattr(sbd, "_load", lambda: {"app123": {"app_id": "app123", "bot_token": "xoxb-1"}})
     assert "created by someone else" in sbd.check_bot_install_status("app123", requester_id=OWNER)

@@ -371,7 +371,7 @@ def test_provider_family_leaves_an_unindexed_name_alone():
 
 def _tag_only_config(isolated_config, monkeypatch):
     monkeypatch.setenv("P1_KEY", "k")
-    monkeypatch.setenv("COOLTON_OWNER_USER_ID", "UOWNER")
+    monkeypatch.setattr("agent.admin_alerts.ADMIN_USER_IDS", ("UOWNER", "UADMIN2"))
     isolated_config({
         "providers": [{"id": "p1", "api_url": "https://p1.test/v1", "api_key_env_var_name": "P1_KEY"}],
         "models": [
@@ -414,11 +414,12 @@ def test_owner_only_model_is_refused_and_hidden_from_everyone_else(isolated_conf
     assert "`private`" not in error.split("Current tags are:")[1].split(". Use")[0]
 
 
-def test_owner_only_model_is_nobodys_when_the_owner_is_not_configured(isolated_config, monkeypatch):
+def test_owner_only_models_are_for_every_admin_and_nobody_unknown(isolated_config, monkeypatch):
+    """One list of admins (agent.admin_alerts) decides it, not a separate owner setting."""
     _tag_only_config(isolated_config, monkeypatch)
-    monkeypatch.delenv("COOLTON_OWNER_USER_ID")
+    assert _models("UADMIN2", "private") == ["private"]
     assert _models(None, "private") == []
-    assert _models("UOWNER", "private") == []
+    assert _models("", "private") == []
 
 
 def test_a_models_output_limit_reaches_its_run(isolated_config, monkeypatch):

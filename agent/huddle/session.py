@@ -96,12 +96,13 @@ def _text_delta(event) -> str:
     return ""
 
 
-def voice_models(user_id: str | None) -> list:
+def voice_models() -> list:
     """The models a huddle reply tries, in coolton's own fallback order: its default chat
-    model first (agent.agent._resolve_provider_order)."""
+    model first (agent.agent._resolve_provider_order). Never anyone's own endpoint (BYOK):
+    everything said in the call would go to a server the person who invited coolton picked."""
     from agent.agent import _resolve_provider_order, chain_model
 
-    return [(name, chain_model(config)) for name, config in _resolve_provider_order(user_id)[:3]]
+    return [(name, chain_model(config)) for name, config in _resolve_provider_order(None)[:3]]
 
 
 class _Reply:
@@ -183,7 +184,7 @@ class HuddleSession:
         self.loop = asyncio.get_running_loop()
         api_key = os.environ["DEEPGRAM_API_KEY"]
         if not self.models:
-            self.models = await self.loop.run_in_executor(None, voice_models, self.requester_id)
+            self.models = await self.loop.run_in_executor(None, voice_models)
         self.voice = Voice(api_key, self._on_tts_audio, self._on_tts_flushed)
         self.listener = Listener(api_key, self.on_turn)
         mic = MicResampler()
