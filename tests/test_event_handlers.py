@@ -4,6 +4,7 @@ import pytest
 
 from listeners.events.app_mentioned import handle_app_mentioned
 from listeners.events.message import handle_message
+from agent.admin_alerts import MAINTAINER_ID as ADMIN_ID
 
 
 @pytest.fixture
@@ -645,7 +646,7 @@ def test_message_dm_ban_by_admin_applies_and_reacts(monkeypatch):
          patch("listeners.events.shared.apply_ban_command") as apply_ban:
         client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
         context.channel_id = "D123"
-        context.user_id = "U0B2VTYER33"
+        context.user_id = ADMIN_ID
         event = {
             "type": "message", "text": "!ban <@U999> being annoying",
             "ts": "111.111", "channel_type": "im",
@@ -682,7 +683,7 @@ def test_message_dm_unban_by_admin_applies(monkeypatch):
          patch("listeners.events.shared.apply_ban_command") as apply_ban:
         client, context, say, say_stream, logger = Mock(), Mock(), Mock(), Mock(), Mock()
         context.channel_id = "D123"
-        context.user_id = "U0B2VTYER33"
+        context.user_id = ADMIN_ID
         event = {
             "type": "message", "text": "!unban <@U999>",
             "ts": "111.111", "channel_type": "im",
@@ -697,7 +698,7 @@ def test_app_mentioned_ban_by_admin_applies_and_reacts(ctx):
 
     with patch("listeners.events.app_mentioned.run_agent_turn") as run_turn, \
          patch("listeners.events.shared.apply_ban_command") as apply_ban:
-        ctx.context.user_id = "U0B2VTYER33"
+        ctx.context.user_id = ADMIN_ID
         _mention(ctx, text="!ban <@U999> spamming")
         apply_ban.assert_called_once_with(ctx.client, "ban", "U999", "spamming")
         ctx.client.reactions_add.assert_called_once_with(channel="C123", timestamp="111.111", name="white_check_mark")

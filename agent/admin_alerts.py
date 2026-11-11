@@ -16,11 +16,14 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# coolton's admins, the one list every admin check uses: banning, approving skills, other
-# people's bots and scheduled tasks, owner_only models, the admin App Home. The first is
-# the maintainer, who gets coolton's alert DMs.
-ADMIN_USER_IDS = ("U0B2VTYER33", "U09ASUK57K8", "U0BFB1AEY3D", "U0BDCU34308")
-MAINTAINER_ID = ADMIN_USER_IDS[0]
+# coolton's admins, the one list every admin check uses: banning, !threadrip, approving
+# skills, other people's bots and scheduled tasks, owner_only models, the admin App Home.
+# Set in COOLTON_ADMIN_USER_IDS (comma-separated Slack user ids), never hardcoded; unset,
+# nobody is an admin. The first is the maintainer, who gets coolton's alert DMs.
+ADMIN_USER_IDS = tuple(
+    u.strip() for u in os.environ.get("COOLTON_ADMIN_USER_IDS", "").split(",") if u.strip()
+)
+MAINTAINER_ID = ADMIN_USER_IDS[0] if ADMIN_USER_IDS else ""
 
 
 def is_admin(user_id: str | None) -> bool:
@@ -52,6 +55,9 @@ def notify_admin(
 
     def _send():
         bot_token = os.environ.get("SLACK_BOT_TOKEN")
+        if not MAINTAINER_ID:
+            logger.warning("Cannot send admin alert, COOLTON_ADMIN_USER_IDS not configured: %s", text)
+            return
         if not bot_token:
             logger.warning("Cannot send admin alert, SLACK_BOT_TOKEN not configured: %s", text)
             return

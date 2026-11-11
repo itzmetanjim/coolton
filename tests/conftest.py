@@ -30,6 +30,9 @@ import socket
 
 import pytest
 
+# agent.admin_alerts reads its admin list once, at import: give the tests one.
+os.environ.setdefault("COOLTON_ADMIN_USER_IDS", "UADMIN1,UADMIN2")
+
 
 def _free_port() -> int:
     with socket.socket() as s:

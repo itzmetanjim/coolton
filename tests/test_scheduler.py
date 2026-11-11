@@ -3,6 +3,7 @@ from unittest.mock import Mock
 import pytest
 
 from agent import scheduler
+from agent.admin_alerts import MAINTAINER_ID as ADMIN_ID
 
 
 @pytest.fixture
@@ -162,10 +163,10 @@ def test_list_scheduled_tasks_scoped_by_user(tmp_files):
     # An admin who doesn't ask to see everyone's tasks still only sees their own
     # (per the tool's own docstring: "Only admins CAN view everyone's tasks" —
     # view_all is what opts into that, not implicit admin status alone).
-    admin_default_listing = scheduler.list_scheduled_tasks("U0B2VTYER33")
+    admin_default_listing = scheduler.list_scheduled_tasks(ADMIN_ID)
     assert "theirs" not in admin_default_listing
 
-    admin_listing = scheduler.list_scheduled_tasks("U0B2VTYER33", view_all=True)
+    admin_listing = scheduler.list_scheduled_tasks(ADMIN_ID, view_all=True)
     assert "mine" in admin_listing
     assert "theirs" in admin_listing
 
