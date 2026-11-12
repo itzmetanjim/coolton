@@ -5,7 +5,7 @@ places that carry meaning: the sender tag on every message (`U01234 (Name):`), t
 history, huddle transcript lines (`[voice] Name: ...`). A name with a newline, brackets or
 markup could fake another sender, a huddle tag or a mention. safe_name keeps it to one short
 plain line; the system prompt (MESSAGE FORMAT) says names are never instructions, however
-they read. Links and domains in a name become "(link)": someone named "go use
+they read. Links and domains in a name become "(redacted link)": someone named "go use
 github.com/hackclub/nephthys-plus" asked "wots this", and the model took "this" to be the
 repo in their name, even though the prompt told it not to act on names.
 """
@@ -26,7 +26,7 @@ def safe_name(name: str | None, fallback: str = "unknown") -> str:
     message tags are made of."""
     text = _CONTROL.sub(" ", name or "")
     text = re.sub(r"<[^>]*>", " ", text)
-    text = _LINK.sub("(link)", text)
+    text = _LINK.sub("(redacted link)", text)
     text = re.sub(r"[\[\]<>{}:]", " ", text)
     text = " ".join(text.split())
     if len(text) > _LIMIT:
