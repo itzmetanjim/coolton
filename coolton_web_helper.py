@@ -1,7 +1,11 @@
-"""coolton web helper — file host.
+"""coolton web helper — file host, and coolton's anti-bot check for other tools.
 
 Serves files coolton uploads (HTML embeds, screenshots) at /f/<name>. Uploading
 needs the Bearer token; there's no way to host anything else here.
+
+POST /antibot/check runs coolton's anti-bot check on one Slack message and answers
+"flag", "watch" or "none", never why. It needs a token from ANTIBOT_API_TOKENS (in
+the server's .env, comma-separated so each tool can have its own).
 """
 
 import hashlib
@@ -9,7 +13,10 @@ import hmac
 import logging
 import mimetypes
 import os
+import re
 import time
+
+import requests
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -46,6 +53,73 @@ def _authorized(request: Request) -> bool:
     return hmac.compare_digest(auth[len("Bearer "):], key)
 
 
+def _antibot_authorized(request: Request) -> bool:
+    """A Bearer token from ANTIBOT_API_TOKENS. None configured: nobody gets in."""
+    tokens = [t.strip() for t in os.environ.get("ANTIBOT_API_TOKENS", "").split(",") if t.strip()]
+    auth = request.headers.get("Authorization", "")
+    if not tokens or not auth.startswith("Bearer "):
+        return False
+    given = auth[len("Bearer "):]
+    return any(hmac.compare_digest(given, token) for token in tokens)
+
+
+_PERMALINK_RE = re.compile(r"https://[^/\s]+/archives/([A-Z0-9]+)/p(\d{10})(\d{6})")
+
+
+def _message_from_permalink(link: str) -> dict:
+    """The message a Slack permalink points to, read as cooltonUser."""
+    match = _PERMALINK_RE.search(link or "")
+    if not match:
+        raise HTTPException(status_code=400, detail="Not a Slack message permalink")
+    channel, ts = match.group(1), f"{match.group(2)}.{match.group(3)}"
+    thread = re.search(r"[?&]thread_ts=(\d+\.\d+)", link)
+    token = os.environ.get("SLACK_USER_TOKEN") or os.environ.get("SLACK_BOT_TOKEN", "")
+    params = {"channel": channel, "ts": thread.group(1) if thread else ts,
+              "oldest": ts, "latest": ts, "inclusive": "true", "limit": 1}
+    try:
+        data = requests.get("https://slack.com/api/conversations.replies", params=params,
+                            headers={"Authorization": f"Bearer {token}"}, timeout=15).json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail="Couldn't reach Slack") from e
+    message = next((m for m in data.get("messages") or [] if m.get("ts") == ts), None)
+    if not data.get("ok") or not message:
+        raise HTTPException(status_code=404, detail="Couldn't read that message")
+    return {**message, "channel": channel}
+
+
+def _antibot_verdict(event: dict) -> str:
+    """"flag", "watch" or "none" from coolton's private anti-bot check."""
+    try:
+        from private_hooks import verdict
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail="The anti-bot check isn't installed here") from e
+    return verdict(event)
+
+
+@app.post("/antibot/check")
+async def antibot_check(request: Request):
+    """Body: {"permalink": "<Slack message link>"} or {"message": {<Slack message>}, "channel"?:
+    "<its channel id>"}. Answers {"verdict": "flag" | "watch" | "none"}."""
+    if not _antibot_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        body = await request.json()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Body must be JSON") from e
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    if isinstance(body.get("permalink"), str):
+        event = _message_from_permalink(body["permalink"])
+    elif isinstance(body.get("message"), dict):
+        event = dict(body["message"])
+        if isinstance(body.get("channel"), str) and not event.get("channel"):
+            event["channel"] = body["channel"]
+    else:
+        raise HTTPException(status_code=400, detail='Send "permalink" or "message"')
+    event.setdefault("type", "message")
+    return {"verdict": _antibot_verdict(event)}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     return """
@@ -53,6 +127,8 @@ async def root():
         <body>
             <h1>coolton web helper</h1>
             <p>POST /upload with an <code>Authorization: Bearer &lt;token&gt;</code> header to host files.</p>
+            <p>POST /antibot/check with an anti-bot API token and a Slack message (or its permalink)
+            to get coolton's anti-bot verdict: flag, watch or none.</p>
         </body>
     </html>
     """

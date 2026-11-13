@@ -91,3 +91,63 @@ def test_nothing_but_uploaded_files_is_served(client):
 
     encoded = base64.urlsafe_b64encode(b"<h1>hi</h1>").decode().rstrip("=")
     assert client.get(f"/{encoded}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# /antibot/check
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def antibot(helper, monkeypatch):
+    """The check route with two tokens configured and the private check stubbed out."""
+    monkeypatch.setenv("ANTIBOT_API_TOKENS", "tok-a, tok-b")
+    seen = []
+    monkeypatch.setattr(helper, "_antibot_verdict", lambda event: seen.append(event) or "watch")
+    return TestClient(helper.app), seen
+
+
+MESSAGE = {"user": "U1", "ts": "1731510123.456789", "text": "hi", "blocks": []}
+
+
+def test_antibot_needs_one_of_the_configured_tokens(antibot):
+    client, seen = antibot
+    assert client.post("/antibot/check", json={"message": MESSAGE}).status_code == 401
+    assert client.post("/antibot/check", json={"message": MESSAGE},
+                       headers={"Authorization": "Bearer wrong"}).status_code == 401
+    resp = client.post("/antibot/check", json={"message": MESSAGE}, headers={"Authorization": "Bearer tok-b"})
+    assert resp.status_code == 200
+    assert resp.json() == {"verdict": "watch"}
+    assert seen[0]["type"] == "message"
+
+
+def test_antibot_is_closed_when_no_token_is_configured(antibot, monkeypatch):
+    client, _ = antibot
+    monkeypatch.delenv("ANTIBOT_API_TOKENS")
+    resp = client.post("/antibot/check", json={"message": MESSAGE}, headers={"Authorization": "Bearer "})
+    assert resp.status_code == 401
+
+
+def test_antibot_reads_a_permalinks_message_from_slack(antibot, helper, monkeypatch):
+    client, seen = antibot
+    asked = {}
+
+    class Resp:
+        def json(self):
+            return {"ok": True, "messages": [{"type": "message", "ts": "1794054500.000001", "user": "U2"}]}
+
+    monkeypatch.setattr(helper.requests, "get", lambda url, params, headers, timeout: asked.update(params) or Resp())
+    link = "https://x.slack.com/archives/C1/p1794054500000001?thread_ts=1794054476.315909&cid=C1"
+    resp = client.post("/antibot/check", json={"permalink": link}, headers={"Authorization": "Bearer tok-a"})
+
+    assert resp.json() == {"verdict": "watch"}
+    assert (asked["channel"], asked["ts"], asked["oldest"]) == ("C1", "1794054476.315909", "1794054500.000001")
+    assert seen[0]["channel"] == "C1" and seen[0]["user"] == "U2"
+
+
+def test_antibot_rejects_a_body_without_a_message(antibot):
+    client, _ = antibot
+    headers = {"Authorization": "Bearer tok-a"}
+    assert client.post("/antibot/check", json={"text": "hi"}, headers=headers).status_code == 400
+    assert client.post("/antibot/check", json={"permalink": "nope"}, headers=headers).status_code == 400
+
