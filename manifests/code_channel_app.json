@@ -27,8 +27,14 @@
         "canvases:write",
         "channels:write.invites",
         "groups:write.invites"
+      ],
+      "user": [
+        "openid"
       ]
-    }
+    },
+    "redirect_urls": [
+      "https://2390.proxy.tanjim.org/verify/callback"
+    ]
   },
   "settings": {
     "org_deploy_enabled": true,
