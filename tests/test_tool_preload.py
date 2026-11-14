@@ -243,6 +243,7 @@ def test_every_turn_preloads_the_slack_tools_but_lists_and_canvases():
     queries = set(response.parts[0].args["queries"])
     assert queries == ALWAYS_PRELOADED_MCP_TOOLS
     assert not any(q.endswith(("_list", "_list_record", "_canvas")) for q in queries)
+    assert "slack_schedule_message" not in queries  # a slack_extras tool, loaded only when needed
     assert agent_mod._preload_search_call(set(), slack_mcp=False) is None  # no Slack MCP this turn
 
     [response] = agent_mod._preload_search_call({"library_docs"})

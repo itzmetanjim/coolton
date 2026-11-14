@@ -3,8 +3,7 @@
     {"id": "hcai", "api_url": "https://ai.hackclub.com/proxy/v1", "api_key_env_var_name": "HCAI_API_KEY", "fallback_api_key_env_var_names": ["HCAI_API_KEY_2"], "displayname": "Hack Club AI", "max_retries": 5},
     {"id": "groq", "api_url": null, "api_key_env_var_name": "GROQ_API_KEY", "displayname": "Groq"},
     {"id": "openrouter_fb", "api_url": null, "api_key_env_var_name": "OPENROUTER_API_KEY_FALLBACK", "pydantic_ai_env_var": "OPENROUTER_API_KEY", "displayname": "OpenRouter Fallback", "max_retries": 5},
-    {"id": "inception", "api_url": "https://api.inceptionlabs.ai/v1", "api_key_env_var_name": "INCEPTION_API_KEY", "displayname": "Inception Labs"},
-    {"id": "kavyansh", "api_url": "https://ai.kavyansh.org", "api_style": "anthropic", "api_key_env_var_name": "KAVYANSH_AI_API_KEY", "displayname": "Kavyansh AI"}
+    {"id": "inception", "api_url": "https://api.inceptionlabs.ai/v1", "api_key_env_var_name": "INCEPTION_API_KEY", "displayname": "Inception Labs"}
   ],
   "models": [
     {"provider": "hcai", "model": "deepseek/deepseek-v4.1-flash-1017", "display": "HCAI DeepSeek V4.1 Flash", "tags": ["deepseek-v4.1-flash", "dsv4.1", "vision"], "context_window": 1048576},
@@ -20,9 +19,6 @@
     {"provider": "openrouter_fb", "model": "openrouter:cohere/north-mini-code:free", "display": "OpenRouter Cohere North Mini Code (free)", "tags": ["north-mini-code", "free"], "context_window": 256000},
     {"provider": "groq", "model": "groq:openai/gpt-oss-120b", "display": "Groq GPT-OSS-120B", "tags": ["gpt-oss-120b"], "context_window": 131072},
     {"provider": "groq", "model": "groq:openai/gpt-oss-20b", "display": "Groq GPT-OSS-20B", "tags": ["gpt-oss-20b"], "context_window": 131072},
-    {"provider": "kavyansh", "model": "claude-sonnet-5-5", "display": "Kavyansh Claude Sonnet 5.5", "tags": ["kavyansh-sonnet", "vision"], "context_window": 1000000, "max_output_tokens": 32000, "tag_only": true},
-    {"provider": "kavyansh", "model": "claude-haiku-5-5", "display": "Kavyansh Claude Haiku 5.5", "tags": ["kavyansh-haiku", "vision"], "context_window": 1000000, "max_output_tokens": 32000, "tag_only": true},
-    {"provider": "kavyansh", "model": "claude-opus-5-5", "display": "Kavyansh Claude Opus 5.5", "tags": ["kavyansh-opus", "vision"], "context_window": 1000000, "max_output_tokens": 32000, "tag_only": true, "owner_only": true},
     {"provider": "hcai", "model": "google/gemini-3-pro-image-preview", "display": "HCAI Gemini 3 Pro Image (high)", "tags": ["image-high"], "kind": "image"},
     {"provider": "hcai", "model": "google/gemini-2.5-flash-image", "display": "HCAI Gemini 2.5 Flash Image (low)", "tags": ["image-low"], "kind": "image"},
     {"provider": "hcai", "model": "jev-latest", "display": "HCAI Jev", "tags": ["jev"], "kind": "jev", "api_path": "/jev/systemone"}

@@ -244,7 +244,6 @@ wins, falling through on failure.
 | --- | --- |
 | `HCAI_API_KEY` | HCAI gateway |
 | `INCEPTION_API_KEY` | Inception Labs (Mercury) |
-| `KAVYANSH_AI_API_KEY` | Kavyansh AI proxy (tag-only `kavyansh-sonnet`, `kavyansh-haiku` and `kavyansh-opus`) |
 | `ANTIBOT_API_TOKENS` | Tokens for the web helper's `POST /antibot/check` (comma-separated); unset, the route refuses everyone |
 | `COOLTON_ADMIN_USER_IDS` | coolton's admins, comma-separated; the first gets alert DMs. Unset: no admins |
 | `CANVAS_SHARE_CHANNEL_IDS` | Channels that can read every canvas coolton creates in a public channel, unless it's private (comma-separated) |

@@ -17,7 +17,7 @@ def huddlefm_request_control_tool(
     """Request DJ control of a HuddleFM listening session (music), by DMing HuddleFM
     (coolton is allowlisted for this). This doesn't join the huddle: to join one yourself
     and talk, use join_huddle_tool. Call this ONCE per session before using
-    huddlefm_command_tool, see the system prompt's HUDDLEFM DJ section for the
+    huddlefm_command_tool; load the `huddlefm-dj` skill first for the
     permission ids and full command reference.
 
     There is no immediate success reply: the session host gets an approval
@@ -46,8 +46,8 @@ def huddlefm_command_tool(
     Args:
         command_type: One of: status, search, add, remove, move, clear, skip,
             previous, toggle, pause, resume, seek, volume, settings, end,
-            release_control. See the system prompt's HUDDLEFM DJ section for
-            which permission each needs and its extra fields.
+            release_control. The `huddlefm-dj` skill says which permission each
+            needs and its extra fields.
         channel: The session's channel, only required if you hold grants on
             more than one HuddleFM session at once.
         fields: JSON object string of the command's extra fields, e.g.

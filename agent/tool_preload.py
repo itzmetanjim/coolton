@@ -83,6 +83,9 @@ TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
     # (ALWAYS_PRELOADED_MCP_TOOLS). Any message with a Slack file id or file, canvas or
     # list link loads this group too, whatever Jev says (groups_from_text).
     "slack_lists_canvases_files": ("Does the message contain a Slack file ID (an ID starting with F, like F0123ABC4D5) or a link to a Slack file, canvas or list, or does it involve Slack canvases or Slack lists (Slack's spreadsheet-like lists, not a bullet list) in any way: creating, reading, viewing, summarizing, editing, or their items?", frozenset()),
+    # Slack MCP tools few turns need, loaded only when one might (they were preloaded on
+    # every turn, about 3.5k tokens of definitions most threads never used).
+    "slack_extras": ("Does this involve scheduling a Slack message for later, drafting a message without sending it, opening a DM or group DM, uploading a file into Slack, looking up a custom emoji by name, or listing which channels coolton or someone is in?", frozenset()),
     "library_docs": ("Is this about using a programming library, framework, SDK, CLI or API: how to call it, its docs or versions, or code that uses it?", frozenset()),
 }
 LIBRARY_DOCS_GROUP = "library_docs"
@@ -105,17 +108,20 @@ MCP_GROUP_TOOLS: dict[str, frozenset[str]] = {
         "slack_create_list", "slack_read_list", "slack_update_list",
         "slack_add_list_record", "slack_update_list_record"}),
     LIBRARY_DOCS_GROUP: frozenset({"resolve-library-id", "query-docs"}),
+    "slack_extras": frozenset({
+        "slack_send_message_draft", "slack_schedule_message", "slack_create_conversation",
+        "slack_get_file_upload_url", "slack_complete_file_upload", "slack_list_user_channels",
+        "slack_search_emojis"}),
 }
 
-# Slack MCP tools preloaded on every turn, Jev or not (~7.8k tokens, once per thread:
-# agent.agent._preload_search_call skips tools the thread already has): every Slack MCP
-# tool except the list and canvas ones (slack_lists_canvases_files).
+# Slack MCP tools preloaded on every turn, Jev or not (once per thread:
+# agent.agent._preload_search_call skips tools the thread already has): the reading and
+# looking-up ones most Slack questions need. Lists and canvases (slack_lists_canvases_files)
+# and the rarer ones (slack_extras) load only when a message might need them.
 ALWAYS_PRELOADED_MCP_TOOLS = frozenset({
     "slack_read_channel", "slack_read_thread", "slack_read_file", "slack_read_user_profile",
-    "slack_list_channel_members", "slack_list_user_channels", "slack_get_reactions",
-    "slack_search_channels", "slack_search_users", "slack_search_emojis",
-    "slack_send_message_draft", "slack_schedule_message", "slack_create_conversation",
-    "slack_add_reaction", "slack_get_file_upload_url", "slack_complete_file_upload",
+    "slack_list_channel_members", "slack_get_reactions", "slack_search_channels",
+    "slack_search_users", "slack_add_reaction",
 })
 
 # A Slack file id (canvases and lists are files too), or a link to a file, canvas or list.

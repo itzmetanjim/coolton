@@ -16,7 +16,8 @@ def create_code_channel_tool(ctx: RunContext[AgentDeps], name: str, task: str = 
 
     Use it when the user asks for a code channel, or offer one (and create it once they
     agree) when a request grows into long, multi-step work that deserves its own space,
-    like a coding project or a big investigation.
+    like a coding project or a big investigation. Load the `code-channels` skill first,
+    and in a code channel before using its tools. Not available on the web UI.
 
     `name` is a DISPLAY name, not a slug, write it like a sentence/title, e.g.
     "Code audit and bug detection in Coolton", never

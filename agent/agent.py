@@ -1347,7 +1347,12 @@ def list_channel_threads_tool(ctx: RunContext[AgentDeps], channel_id: str = "", 
 @agent.tool
 def schedule_reminder_tool(ctx: RunContext[AgentDeps], text: str, delay_seconds: int) -> str:
     """Schedule a one-time reminder that will be DM'd to you.
-    
+
+    `delay_seconds` must be a positive number of seconds from NOW: compute it as
+    target_timestamp - current_time (call get_datetime first if unsure of the time).
+    For something recurring use create_scheduled_task_tool; to keep reasoning after a
+    delay, wait_tool.
+
     Args:
         text: Reminder message text.
         delay_seconds: Seconds from now until reminder fires (max ~120 days).
@@ -1366,7 +1371,9 @@ def schedule_reminder_tool(ctx: RunContext[AgentDeps], text: str, delay_seconds:
 def create_scheduled_task_tool(ctx: RunContext[AgentDeps], prompt: str, cron: str, timezone: str = "UTC") -> str:
     """Create a recurring scheduled task that posts `prompt` to this thread/channel on a cron schedule.
 
-    The task fires in the exact Slack thread (or channel) where it was created.
+    The task fires in the exact Slack thread (or channel) where it was created. Only its
+    creator (or an admin) can list, pause, resume or delete it, with the *_scheduled_task_tool
+    tools; confirm with the user before deleting one.
     Cron expressions must run at least 30 minutes apart (no more often than every 30 min).
 
     Args:
@@ -1881,7 +1888,9 @@ def send_html_embed_tool(
     ctx: RunContext[AgentDeps], html: str, text: str = "html embed",
     title: str = "html embed",
 ) -> str:
-    """Send custom HTML as a live embed in the current thread.
+    """Send custom HTML as a live embed in the current thread: a quick inline preview or demo
+    (a mini app, game, calculator or form). NOT a real hosted website: for a site people can
+    keep visiting or share, deploy with the cf-wrangler skill. Never put base64 HTML in a URL.
 
     Your HTML is hosted on the coolton file server (2390.proxy.tanjim.org) as a
     short URL and sent as a live embed (same mechanism as the whiteboard embed).
@@ -2120,7 +2129,8 @@ def report_abuse_tool(
       through you. Never for: issues or pull requests on public repos, public websites or
       third-party tools and APIs (Slack-related ones included), metadata like whether a
       channel exists or its name or ID, security research, or anything the maintainer asks.
-      If unsure, don't report.
+      If unsure, don't report. Someone pasting their own secret by mistake isn't abuse:
+      just tell them not to.
     For nsfw, spam and other, the request is stopped: after this, decline briefly and end your
     turn (other tool calls are refused). For vulnerability, report once and carry on with the task.
 
@@ -2748,7 +2758,7 @@ def anthropic_gateway_settings(settings: dict, fast: bool = False) -> dict:
     """`settings` for a Claude model behind an Anthropic-compatible gateway. A gateway may
     not support Anthropic's automatic top-level caching, so the cache breakpoint goes on
     the last message block instead (plus the instructions and tool definitions, already
-    set), which the Kavyansh proxy honors. A non-streaming request with a large max_tokens
+    set), which a proxy is more likely to honor. A non-streaming request with a large max_tokens
     needs an explicit timeout, or Anthropic's SDK refuses it outright."""
     settings = {k: v for k, v in settings.items() if k != "anthropic_cache"}
     settings.update(anthropic_cache_instructions=True, anthropic_cache_tool_definitions=True,
@@ -2767,9 +2777,9 @@ def chain_model(prov_config: dict, http_client=None):
     if not prov_config.get("base_url"):
         return provider_config.build_model(model_name, prov_config.get("api_key"))
     if prov_config.get("api_style") == "anthropic":
-        # An Anthropic-compatible endpoint (the Kavyansh proxy): its /v1/messages honors
-        # Claude's cache markers, which its OpenAI-compatible route ignored (0 cached
-        # tokens on every request, checked live 2026-11-08).
+        # An Anthropic-compatible endpoint (providers.json `"api_style": "anthropic"`): a
+        # proxy's /v1/messages may honor Claude's cache markers where its OpenAI-compatible
+        # route ignores them (one did: 0 cached tokens on every request, 2026-11-08).
         from pydantic_ai.models.anthropic import AnthropicModel
         from pydantic_ai.providers.anthropic import AnthropicProvider
 
@@ -3147,8 +3157,8 @@ def _run_provider_chain(agent_dynamic, run_kwargs, deps, run_label: str | None =
                 if model_name.lower().startswith("anthropic/"):
                     settings = {**settings, "extra_body": {**(settings.get("extra_body") or {}),
                                                            "cache_control": {"type": "ephemeral"}}}
-                # Without its own limit, a gateway picks one: the Kavyansh proxy stops every
-                # reply at 4,096 tokens, which cut long answers off mid-sentence.
+                # Without its own limit, a gateway picks one: one stopped every reply at 4,096
+                # tokens, which cut long answers off mid-sentence.
                 if prov_config.get("max_output_tokens"):
                     settings = {**settings, "max_tokens": prov_config["max_output_tokens"]}
                 if prov_config.get("api_style") == "anthropic":
