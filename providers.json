@@ -7,6 +7,7 @@
     {"id": "kavyansh", "api_url": "https://ai.kavyansh.org", "api_style": "anthropic", "api_key_env_var_name": "KAVYANSH_AI_API_KEY", "displayname": "Kavyansh AI"}
   ],
   "models": [
+    {"provider": "hcai", "model": "deepseek/deepseek-v4.1-flash-1017", "display": "HCAI DeepSeek V4.1 Flash", "tags": ["deepseek-v4.1-flash", "dsv4.1", "vision"], "context_window": 1048576},
     {"provider": "hcai", "model": "openai/gpt-6-luna", "display": "HCAI GPT-6 Luna", "tags": ["luna", "vision"], "context_window": 1050000},
     {"provider": "hcai", "model": "anthropic/claude-haiku-5.5", "display": "HCAI Claude Haiku 5.5", "tags": ["haiku", "vision"], "context_window": 1000000, "compact_at": 95000},
     {"provider": "inception", "model": "mercury-3", "display": "Inception Mercury 3", "tags": ["mercury"], "context_window": 1000000},
