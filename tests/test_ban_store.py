@@ -110,13 +110,14 @@ def test_format_announcement_ban_with_reason():
     assert text == (
         "*A user has been banned from Coolton.*\n\n"
         "*User:* <@U123>\n"
-        "*Reason:* being annoying"
+        "*Reason:* being annoying\n"
+        "*Duration:* permanent"
     )
 
 
 def test_format_announcement_ban_without_reason_omits_reason_line():
     text = store.format_announcement("ban", "U123", "")
-    assert text == "*A user has been banned from Coolton.*\n\n*User:* <@U123>"
+    assert text == "*A user has been banned from Coolton.*\n\n*User:* <@U123>\n*Duration:* permanent"
     assert "Reason" not in text
 
 
@@ -147,3 +148,39 @@ def test_apply_ban_command_unbans_and_announces(tmp_store):
     assert store.is_banned("U123") is False
     kwargs = client.chat_postMessage.call_args.kwargs
     assert "unbanned" in kwargs["text"]
+
+
+@pytest.mark.parametrize("reason,expected", [
+    ("spamming !duration 7d", ("spamming", 7 * 86400, "7 days")),
+    ("spamming [!duration 12h]", ("spamming", 12 * 3600, "12 hours")),
+    ("!duration 1w", ("", 604800, "1 week")),
+    ("spamming", ("spamming", None, "")),
+    ("spamming !duration forever", ("spamming !duration forever", None, "")),
+])
+def test_a_ban_reason_can_end_with_its_duration(reason, expected):
+    assert store.split_duration(reason) == expected
+
+
+def test_a_timed_ban_ends_by_itself(tmp_store, monkeypatch):
+    now = [1_000_000.0]
+    monkeypatch.setattr(store.time, "time", lambda: now[0])
+    sent = []
+    client = type("C", (), {"chat_postMessage": lambda self, **kw: sent.append(kw)})()
+
+    store.apply_ban_command(client, "ban", "U1", "spamming [!duration 2d]")
+
+    assert store.is_banned("U1")
+    entry = json.loads((tmp_store / "ban_store.json").read_text())["U1"]
+    assert entry["reason"] == "spamming" and entry["until"] == 1_000_000 + 2 * 86400
+    assert "*Duration:* 2 days, until <!date^1172800^" in sent[0]["text"]
+    now[0] += 2 * 86400 + 1
+    assert not store.is_banned("U1")
+
+
+def test_a_ban_without_a_duration_is_permanent(tmp_store):
+    sent = []
+    client = type("C", (), {"chat_postMessage": lambda self, **kw: sent.append(kw)})()
+    store.apply_ban_command(client, "ban", "U1", "spamming")
+    assert store.is_banned("U1")
+    assert "*Duration:* permanent" in sent[0]["text"]
+

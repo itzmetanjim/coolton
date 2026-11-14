@@ -34,6 +34,23 @@ ANNOUNCE_CHANNEL_ID = "C0BCNM6SQA0"
 # trimmed; DOTALL so a multi-line reason is captured whole.
 _BAN_COMMAND_RE = re.compile(r"^!(ban|unban)\s+<@([A-Z0-9]+)(?:\|[^>]*)?>\s*(.*)$", re.IGNORECASE | re.DOTALL)
 
+# A ban's length, at the end of its reason: `!duration 7d` (s, m, h, d or w), with or
+# without the [brackets] the help shows it in.
+_DURATION_RE = re.compile(r"\s*\[?\s*!duration\s+(\d+(?:\.\d+)?)\s*([smhdw])\s*\]?\s*$", re.IGNORECASE)
+_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+_UNIT_NAMES = {"s": "second", "m": "minute", "h": "hour", "d": "day", "w": "week"}
+
+
+def split_duration(reason: str) -> tuple[str, float | None, str]:
+    """(reason without the `!duration`, its length in seconds or None, a readable length
+    like "7 days" or "")."""
+    match = _DURATION_RE.search(reason or "")
+    if not match:
+        return (reason or "").strip(), None, ""
+    amount, unit = float(match.group(1)), match.group(2).lower()
+    shown = f"{amount:g} {_UNIT_NAMES[unit]}{'' if amount == 1 else 's'}"
+    return reason[:match.start()].strip(), amount * _UNIT_SECONDS[unit], shown
+
 
 def _load() -> dict:
     return load_json(BAN_STORE_FILE)
@@ -47,10 +64,14 @@ def is_authorized(user_id: str) -> bool:
     return is_admin(user_id)
 
 
-def ban_user(target_user_id: str, reason: str = "") -> None:
+def ban_user(target_user_id: str, reason: str = "", until: float | None = None) -> None:
+    """Ban `target_user_id`, until the `until` timestamp when one is given, else for good."""
     with _lock:
         data = _load()
-        data[target_user_id] = {"banned": True, "reason": reason, "updated_at": time.time()}
+        entry = {"banned": True, "reason": reason, "updated_at": time.time()}
+        if until is not None:
+            entry["until"] = until
+        data[target_user_id] = entry
         _save(data)
 
 
@@ -64,13 +85,14 @@ def unban_user(target_user_id: str, reason: str = "") -> None:
 def is_banned(user_id: str) -> bool:
     with _lock:
         entry = _load().get(user_id)
-    if not isinstance(entry, dict):
+    if not isinstance(entry, dict) or not entry.get("banned"):
         return False
-    return bool(entry.get("banned"))
+    until = entry.get("until")
+    return not isinstance(until, (int, float)) or until > time.time()
 
 
 def parse_ban_command(text: str, bot_id: str = "") -> tuple[str, str, str] | None:
-    """Parse a `!ban <@U...> [reason]` / `!unban <@U...> [reason]` command,
+    """Parse a `!ban <@U...> [reason] [!duration 7d]` / `!unban <@U...> [reason]` command,
     optionally preceded by an @-mention of the bot. Returns
     (action, target_user_id, reason) — action is "ban" or "unban", reason is
     "" if none was given — or None if `text` isn't one of these commands at
@@ -89,11 +111,18 @@ def parse_ban_command(text: str, bot_id: str = "") -> tuple[str, str, str] | Non
     return action.lower(), target_user_id, reason.strip()
 
 
-def format_announcement(action: str, target_user_id: str, reason: str) -> str:
+def format_announcement(action: str, target_user_id: str, reason: str,
+                        until: float | None = None, length: str = "") -> str:
     verb = "banned" if action == "ban" else "unbanned"
     lines = [f"*A user has been {verb} from Coolton.*", "", f"*User:* <@{target_user_id}>"]
     if reason:
         lines.append(f"*Reason:* {reason}")
+    if action == "ban":
+        if until is None:
+            lines.append("*Duration:* permanent")
+        else:
+            ends = int(until)
+            lines.append(f"*Duration:* {length}, until <!date^{ends}^{{date_short_pretty}} at {{time}}|{length} from now>")
     return "\n".join(lines)
 
 
@@ -101,11 +130,13 @@ def apply_ban_command(client, action: str, target_user_id: str, reason: str) -> 
     """Apply an already-parsed, already-authorized !ban/!unban and announce it
     in ANNOUNCE_CHANNEL_ID — the one place both listeners.events.message and
     listeners.events.app_mentioned land after checking is_authorized."""
+    reason, seconds, length = split_duration(reason)
+    until = time.time() + seconds if action == "ban" and seconds else None
     if action == "ban":
-        ban_user(target_user_id, reason)
+        ban_user(target_user_id, reason, until)
     else:
         unban_user(target_user_id, reason)
     client.chat_postMessage(
         channel=ANNOUNCE_CHANNEL_ID,
-        text=format_announcement(action, target_user_id, reason),
+        text=format_announcement(action, target_user_id, reason, until, length),
     )
