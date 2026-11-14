@@ -33,6 +33,7 @@ def help_text() -> str:
         "• `[!WITH:tag]`: force a class of model for that turn, e.g. `[!WITH:vision]`",
         "• `[!DEBUG]`: after the reply, get a breakdown of where the time went",
         "• `[!FAST]`: answer quickly instead of researching carefully",
+        "• `[!FLAGTHIS]`: try coolton's \"are you a person\" check on yourself",
         "• start a message with `##` and i'll ignore it",
         "",
         "custom instructions, your own models (BYOK) and MCP servers are in my *Home* tab.",
