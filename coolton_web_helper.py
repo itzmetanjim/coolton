@@ -124,6 +124,15 @@ async def antibot_check(request: Request):
     return {"verdict": result["verdict"], "categories": list(result.get("categories") or [])}
 
 
+# Routes kept out of the public repo, served when their module is deployed alongside.
+try:
+    from private_hooks_web import router as _private_router
+except ImportError:
+    _private_router = None
+if _private_router is not None:
+    app.include_router(_private_router)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     return """
