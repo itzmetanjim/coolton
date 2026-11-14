@@ -4,7 +4,8 @@ Serves files coolton uploads (HTML embeds, screenshots) at /f/<name>. Uploading
 needs the Bearer token; there's no way to host anything else here.
 
 POST /antibot/check runs coolton's anti-bot check on one Slack message and answers
-"flag", "watch" or "none", never why. It needs a token from ANTIBOT_API_TOKENS (in
+"flag", "watch" or "none", with the client categories behind it (like "mobile": a kind
+of real client known to trip the check), never the reasons. It needs a token from ANTIBOT_API_TOKENS (in
 the server's .env, comma-separated so each tool can have its own).
 """
 
@@ -87,8 +88,9 @@ def _message_from_permalink(link: str) -> dict:
     return {**message, "channel": channel}
 
 
-def _antibot_verdict(event: dict) -> str:
-    """"flag", "watch" or "none" from coolton's private anti-bot check."""
+def _antibot_verdict(event: dict) -> dict:
+    """{"verdict": "flag" | "watch" | "none", "categories": [...]} from coolton's private
+    anti-bot check."""
     try:
         from private_hooks import verdict
     except ImportError as e:
@@ -99,7 +101,8 @@ def _antibot_verdict(event: dict) -> str:
 @app.post("/antibot/check")
 async def antibot_check(request: Request):
     """Body: {"permalink": "<Slack message link>"} or {"message": {<Slack message>}, "channel"?:
-    "<its channel id>"}. Answers {"verdict": "flag" | "watch" | "none"}."""
+    "<its channel id>"}. Answers {"verdict": "flag" | "watch" | "none", "categories": [...]}:
+    the client categories behind the verdict, empty when none applies."""
     if not _antibot_authorized(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
     try:
@@ -117,7 +120,8 @@ async def antibot_check(request: Request):
     else:
         raise HTTPException(status_code=400, detail='Send "permalink" or "message"')
     event.setdefault("type", "message")
-    return {"verdict": _antibot_verdict(event)}
+    result = _antibot_verdict(event)
+    return {"verdict": result["verdict"], "categories": list(result.get("categories") or [])}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -128,7 +132,7 @@ async def root():
             <h1>coolton web helper</h1>
             <p>POST /upload with an <code>Authorization: Bearer &lt;token&gt;</code> header to host files.</p>
             <p>POST /antibot/check with an anti-bot API token and a Slack message (or its permalink)
-            to get coolton's anti-bot verdict: flag, watch or none.</p>
+            to get coolton's anti-bot verdict (flag, watch or none) and the client categories behind it.</p>
         </body>
     </html>
     """
