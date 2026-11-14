@@ -26,7 +26,8 @@ async def add_emoji_reaction(
     - Network/connectivity: satellite, signal_strength
     - Agreement/acknowledgment: thumbsup, ok_hand, saluting_face, +1
 
-    Call this AT MOST ONCE per turn. Whatever it returns, "Reacted with ...",
+    Call it in your first step, in parallel with the first other tools the work needs,
+    never as a step of its own. Call this AT MOST ONCE per turn. Whatever it returns, "Reacted with ...",
     "Already reacted with ...", or "Skipped ...", that's a completed call either
     way; do not call it again to retry, try a different emoji, or "fix" the result.
     Move straight on to the actual task.
