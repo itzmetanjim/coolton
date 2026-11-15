@@ -26,7 +26,8 @@
         "canvases:read",
         "canvases:write",
         "channels:write.invites",
-        "groups:write.invites"
+        "groups:write.invites",
+        "groups:history"
       ],
       "user": [
         "openid"

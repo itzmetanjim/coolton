@@ -36,7 +36,7 @@ _MAX_WAIT_FOR_ORIGIN_TURN_SECONDS = 10 * 60
 # Errors meaning the origin message can't be linked; the channel is created without it.
 _NO_ORIGIN_ERRORS = {"origin_channel_externally_shared", "invalid_origin_link", "origin_channel_is_file_channel"}
 _ERROR_HELP = {
-    "missing_scope": "the code channel app is missing a scope (code_channels:manage, or the invite scopes); its "
+    "missing_scope": "the code channel app is missing a scope (code_channels:manage, the invite scopes, or groups:history to link a private channel's message); its "
                      "maintainer needs to fix that app's install.",
     "feature_disabled": "Slack hasn't enabled code channels for the code channel app on this workspace.",
     "user_not_enabled": "you don't have Slack's code channels feature enabled.",
