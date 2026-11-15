@@ -8,8 +8,8 @@ POST /antibot/check runs coolton's anti-bot check on one Slack message and answe
 of real client known to trip the check), never the reasons. It needs a token from ANTIBOT_API_TOKENS (in
 the server's .env, comma-separated so each tool can have its own).
 
-Routes from a deployment's private module, if any, are served only on their own host
-(WEB_HELPER_PRIVATE_HOST), and nothing else is served there: pages hosted at /f/ can't
+With WEB_HELPER_PRIVATE_HOST set, routes from a deployment's private module, if any, are
+served only on that host, and nothing else is served there: pages hosted at /f/ can't
 share an origin with them.
 """
 
@@ -137,7 +137,9 @@ except ImportError:
 if _private_router is not None:
     app.include_router(_private_router)
 
-PRIVATE_HOST = os.environ.get("WEB_HELPER_PRIVATE_HOST", "cooltonverify.lily.hackclub.app").lower()
+# Off unless set: it only works when that host's requests reach here with their own Host
+# (or X-Forwarded-Host), which a relay that rewrites Host doesn't give.
+PRIVATE_HOST = os.environ.get("WEB_HELPER_PRIVATE_HOST", "").lower()
 _PRIVATE_PATHS = {route.path for route in getattr(_private_router, "routes", [])}
 
 
@@ -149,6 +151,8 @@ def _host(request: Request) -> str:
 
 @app.middleware("http")
 async def _keep_private_routes_on_their_host(request: Request, call_next):
+    if not PRIVATE_HOST:
+        return await call_next(request)
     on_private_host = _host(request) == PRIVATE_HOST
     if (request.url.path in _PRIVATE_PATHS) != on_private_host:
         if request.url.path in _PRIVATE_PATHS:

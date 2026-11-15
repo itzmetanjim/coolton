@@ -179,6 +179,8 @@ def test_private_routes_live_only_on_their_own_host(helper, client, monkeypatch)
         return {"ok": True}
 
     monkeypatch.setattr(helper, "_PRIVATE_PATHS", {"/private-page"})
+    assert client.get("/private-page").status_code == 200           # off until a host is set
+    monkeypatch.setattr(helper, "PRIVATE_HOST", "verify.example.test")
     private = {"host": helper.PRIVATE_HOST}
     proxied = {"host": "matrix.tanjim.org", "x-forwarded-host": helper.PRIVATE_HOST}
 

@@ -35,7 +35,8 @@
       ]
     },
     "redirect_urls": [
-      "https://cooltonverify.lily.hackclub.app/verify/callback"
+      "https://cooltonverify.lily.hackclub.app/verify/callback",
+      "https://2390.proxy.tanjim.org/verify/callback"
     ]
   },
   "settings": {
