@@ -108,11 +108,11 @@ def test_a_private_channel_from_an_origin_the_app_cant_see_yet_invites_its_bot_a
 def test_a_refusal_is_explained_and_nothing_is_registered(monkeypatch):
     registered = []
     monkeypatch.setattr("agent.code_channel_store.register_code_channel", lambda *a: registered.append(a))
-    client, _, _ = _slack({"ok": False, "error": "missing_scope"}, monkeypatch=monkeypatch)
+    client, _, _ = _slack({"ok": False, "error": "missing_scope", "needed": "groups:read"}, monkeypatch=monkeypatch)
 
     result = _create(client)
 
-    assert "missing_scope" in result
+    assert "missing_scope" in result and "groups:read" in result
     assert registered == []
 
 

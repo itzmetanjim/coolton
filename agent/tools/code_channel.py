@@ -127,7 +127,9 @@ def create_code_channel(
 
     if not response.get("ok"):
         error = response.get("error") or "unknown_error"
-        return f"Could not create the code channel ({error}): {_ERROR_HELP.get(error, 'Slack refused it.')}"
+        logger.warning("agents.conversations.create failed: %s", {k: v for k, v in response.items() if k != "ok"})
+        detail = f"; Slack wants {response['needed']}" if response.get("needed") else ""
+        return f"Could not create the code channel ({error}{detail}): {_ERROR_HELP.get(error, 'Slack refused it.')}"
     channel_id = response.get("channel_id") or ""
     if not channel_id:
         return "Error: Slack reported success but returned no channel id."
