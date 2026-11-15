@@ -25,9 +25,10 @@
         "chat:write",
         "canvases:read",
         "canvases:write",
+        "channels:history",
+        "groups:history",
         "channels:write.invites",
-        "groups:write.invites",
-        "groups:history"
+        "groups:write.invites"
       ],
       "user": [
         "openid"

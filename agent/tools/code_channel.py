@@ -14,7 +14,11 @@ put a join card ("Started a session with ... in #channel") on that message, whic
 the origin channel's members can join a private channel from. Slack also posts a
 "Context from #origin" message in the new channel. Slack only accepts an origin the
 code channel app's bot can see, so the first time coolton links one in a channel,
-her bot invites that bot in. Slack refuses an origin in a DM, a group DM or a Slack
+her bot invites that bot in. "Can see" includes reading the origin message, so the
+app needs channels:history and groups:history too (public and private origins); with
+either missing, Slack refuses with missing_scope and creating from that kind of
+channel fails until the app's manifest is re-applied and the app reinstalled. Slack
+refuses an origin in a DM, a group DM or a Slack
 Connect channel, and bots can't post the join card themselves, so there the channel
 is created without one (its workspace given explicitly, since coolton is an org-wide
 install, and private when the conversation is), and the requester is invited too.
@@ -36,8 +40,9 @@ _MAX_WAIT_FOR_ORIGIN_TURN_SECONDS = 10 * 60
 # Errors meaning the origin message can't be linked; the channel is created without it.
 _NO_ORIGIN_ERRORS = {"origin_channel_externally_shared", "invalid_origin_link", "origin_channel_is_file_channel"}
 _ERROR_HELP = {
-    "missing_scope": "the code channel app is missing a scope (code_channels:manage, the invite scopes, or groups:history to link a private channel's message); its "
-                     "maintainer needs to fix that app's install.",
+    "missing_scope": "the code channel app is missing a scope (code_channels:manage, the invite scopes, "
+                     "or channels:history/groups:history to link the request's message as the origin); its "
+                     "maintainer needs to re-apply manifests/code_channel_app.json and reinstall the app.",
     "feature_disabled": "Slack hasn't enabled code channels for the code channel app on this workspace.",
     "user_not_enabled": "you don't have Slack's code channels feature enabled.",
     "restricted_action": "you're not allowed to create this kind of channel in this workspace.",
