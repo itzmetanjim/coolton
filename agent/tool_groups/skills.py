@@ -153,7 +153,8 @@ def install_skill(ctx: RunContext[AgentDeps], package: str, skill: str = "") -> 
 
 
 def _repo_root() -> str:
-    return os.path.abspath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # This file is agent/tool_groups/skills.py: the repo is three levels up.
+    return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 
 def _skill_dirs() -> list[str]:
