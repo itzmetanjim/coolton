@@ -7,6 +7,10 @@ POST /antibot/check runs coolton's anti-bot check on one Slack message and answe
 "flag", "watch" or "none", with the client categories behind it (like "mobile": a kind
 of real client known to trip the check), never the reasons. It needs a token from ANTIBOT_API_TOKENS (in
 the server's .env, comma-separated so each tool can have its own).
+
+Routes from a deployment's private module, if any, are served only on their own host
+(WEB_HELPER_PRIVATE_HOST), and nothing else is served there: pages hosted at /f/ can't
+share an origin with them.
 """
 
 import hashlib
@@ -20,7 +24,7 @@ import time
 import requests
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 import uvicorn
 
 logger = logging.getLogger("coolton_web_helper")
@@ -29,6 +33,7 @@ app = FastAPI(title="coolton web helper")
 
 BASE_URL = os.environ.get("WEB_HELPER_BASE_URL", "https://2390.proxy.tanjim.org")
 FILES_DIR = os.environ.get("WEB_HELPER_FILES_DIR", "/home/tanjim/web64_files")
+MAX_UPLOAD_BYTES = 10 * 1024**3  # 10 GB; bigger files go to bucky
 TOKEN_FILE = os.environ.get("WEB_HELPER_TOKEN_FILE", os.environ.get("WEB64_TOKEN_FILE", "/home/tanjim/web64_token"))
 
 
@@ -132,6 +137,26 @@ except ImportError:
 if _private_router is not None:
     app.include_router(_private_router)
 
+PRIVATE_HOST = os.environ.get("WEB_HELPER_PRIVATE_HOST", "cooltonverify.lily.hackclub.app").lower()
+_PRIVATE_PATHS = {route.path for route in getattr(_private_router, "routes", [])}
+
+
+def _host(request: Request) -> str:
+    """The host the browser asked for: a proxy's X-Forwarded-Host, else Host."""
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    return host.split(",")[0].strip().lower().split(":")[0]
+
+
+@app.middleware("http")
+async def _keep_private_routes_on_their_host(request: Request, call_next):
+    on_private_host = _host(request) == PRIVATE_HOST
+    if (request.url.path in _PRIVATE_PATHS) != on_private_host:
+        if request.url.path in _PRIVATE_PATHS:
+            logger.info("Private route %s refused on host %r (Host %r)", request.url.path, _host(request),
+                        request.headers.get("host"))
+        return PlainTextResponse("Not found", status_code=404)
+    return await call_next(request)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -152,25 +177,38 @@ async def upload(request: Request, filename: str = ""):
     if not _authorized(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    content = await request.body()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty body")
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large")
 
     os.makedirs(FILES_DIR, exist_ok=True)
+    # Streamed to disk, never held in memory whole.
+    partial = os.path.join(FILES_DIR, f".upload-{os.getpid()}-{time.time_ns()}")
+    hasher, size = hashlib.sha256(), 0
+    try:
+        with open(partial, "wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="File too large")
+                hasher.update(chunk)
+                f.write(chunk)
+        if not size:
+            raise HTTPException(status_code=400, detail="Empty body")
 
-    digest = hashlib.sha256(content).hexdigest()[:16]
-    ts = int(time.time())
-    _, ext = os.path.splitext(filename)
-    if ext and len(ext) <= 12:
-        name = f"{digest}_{ts}{ext.lower()}"
-    else:
-        name = f"{digest}_{ts}"
+        digest = hasher.hexdigest()[:16]
+        ts = int(time.time())
+        _, ext = os.path.splitext(filename)
+        if ext and len(ext) <= 12:
+            name = f"{digest}_{ts}{ext.lower()}"
+        else:
+            name = f"{digest}_{ts}"
+        os.replace(partial, os.path.join(FILES_DIR, name))
+    finally:
+        if os.path.exists(partial):
+            os.remove(partial)
 
-    path = os.path.join(FILES_DIR, name)
-    with open(path, "wb") as f:
-        f.write(content)
-
-    logger.info("Uploaded %s (%d bytes)", name, len(content))
+    logger.info("Uploaded %s (%d bytes)", name, size)
     return {"url": f"{BASE_URL}/f/{name}", "path": f"/f/{name}"}
 
 

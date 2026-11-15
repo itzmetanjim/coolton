@@ -152,3 +152,39 @@ def test_antibot_rejects_a_body_without_a_message(antibot):
     assert client.post("/antibot/check", json={"text": "hi"}, headers=headers).status_code == 400
     assert client.post("/antibot/check", json={"permalink": "nope"}, headers=headers).status_code == 400
 
+
+
+def test_upload_over_the_limit_is_refused_and_leaves_nothing(helper, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(helper, "MAX_UPLOAD_BYTES", 4)
+    resp = client.post("/upload?filename=x.bin", content=b"12345", headers={"Authorization": "Bearer s3cr3t-token"})
+    assert resp.status_code == 413
+    files = tmp_path / "files"
+    assert not files.exists() or not list(files.iterdir())
+
+    # A body bigger than its Content-Length says is cut off as it streams in.
+    def chunks():
+        yield b"123"
+        yield b"45"
+    streamed = client.post("/upload?filename=x.bin", content=chunks(), headers={"Authorization": "Bearer s3cr3t-token"})
+    assert streamed.status_code == 413
+    assert not files.exists() or not list(files.iterdir())
+    ok = client.post("/upload?filename=x.bin", content=b"1234", headers={"Authorization": "Bearer s3cr3t-token"})
+    assert ok.status_code == 200 and len(list((tmp_path / "files").iterdir())) == 1
+
+
+def test_private_routes_live_only_on_their_own_host(helper, client, monkeypatch):
+    """Hosted /f/ pages must never share an origin with the private module's pages."""
+    @helper.app.get("/private-page")
+    async def private_page():
+        return {"ok": True}
+
+    monkeypatch.setattr(helper, "_PRIVATE_PATHS", {"/private-page"})
+    private = {"host": helper.PRIVATE_HOST}
+    proxied = {"host": "matrix.tanjim.org", "x-forwarded-host": helper.PRIVATE_HOST}
+
+    assert client.get("/private-page").status_code == 404           # the file host
+    assert client.get("/private-page", headers=private).status_code == 200
+    assert client.get("/private-page", headers=proxied).status_code == 200
+    assert client.get("/f/anything", headers=private).status_code == 404
+    assert client.get("/", headers=private).status_code == 404
+    assert client.get("/").status_code == 200
