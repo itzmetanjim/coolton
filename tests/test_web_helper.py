@@ -104,7 +104,7 @@ def antibot(helper, monkeypatch):
     monkeypatch.setenv("ANTIBOT_API_TOKENS", "tok-a, tok-b")
     seen = []
     monkeypatch.setattr(helper, "_antibot_verdict",
-                        lambda event: seen.append(event) or {"verdict": "watch", "categories": ["mobile"]})
+                        lambda event: seen.append(event) or {"verdict": "watch", "categories": ["ios"]})
     return TestClient(helper.app), seen
 
 
@@ -118,7 +118,7 @@ def test_antibot_needs_one_of_the_configured_tokens(antibot):
                        headers={"Authorization": "Bearer wrong"}).status_code == 401
     resp = client.post("/antibot/check", json={"message": MESSAGE}, headers={"Authorization": "Bearer tok-b"})
     assert resp.status_code == 200
-    assert resp.json() == {"verdict": "watch", "categories": ["mobile"]}
+    assert resp.json() == {"verdict": "watch", "categories": ["ios"]}
     assert seen[0]["type"] == "message"
 
 
@@ -141,7 +141,7 @@ def test_antibot_reads_a_permalinks_message_from_slack(antibot, helper, monkeypa
     link = "https://x.slack.com/archives/C1/p1794054500000001?thread_ts=1794054476.315909&cid=C1"
     resp = client.post("/antibot/check", json={"permalink": link}, headers={"Authorization": "Bearer tok-a"})
 
-    assert resp.json() == {"verdict": "watch", "categories": ["mobile"]}
+    assert resp.json() == {"verdict": "watch", "categories": ["ios"]}
     assert (asked["channel"], asked["ts"], asked["oldest"]) == ("C1", "1794054476.315909", "1794054500.000001")
     assert seen[0]["channel"] == "C1" and seen[0]["user"] == "U2"
 

@@ -4,7 +4,7 @@ Serves files coolton uploads (HTML embeds, screenshots) at /f/<name>. Uploading
 needs the Bearer token; there's no way to host anything else here.
 
 POST /antibot/check runs coolton's anti-bot check on one Slack message and answers
-"flag", "watch" or "none", with the client categories behind it (like "mobile": a kind
+"flag", "watch" or "none", with the client categories behind it (like "ios": a kind
 of real client known to trip the check), never the reasons. It needs a token from ANTIBOT_API_TOKENS (in
 the server's .env, comma-separated so each tool can have its own).
 
