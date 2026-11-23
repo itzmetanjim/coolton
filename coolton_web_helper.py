@@ -13,6 +13,7 @@ served only on that host, and nothing else is served there: pages hosted at /f/ 
 share an origin with them.
 """
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -122,6 +123,21 @@ def _antibot_response(call: dict) -> dict:
     return {"verdict": result["verdict"], "categories": list(result.get("categories") or [])}
 
 
+_ANTIBOT_BATCH_CONCURRENCY = 20
+
+
+async def _antibot_batch_response(calls: list) -> dict:
+    """Resolve/check batch items concurrently, preserving caller-visible order."""
+    semaphore = asyncio.Semaphore(_ANTIBOT_BATCH_CONCURRENCY)
+
+    async def run(call: dict) -> dict:
+        async with semaphore:
+            return await asyncio.to_thread(_antibot_response, call)
+
+    responses = await asyncio.gather(*(run(call) for call in calls))
+    return {"responses": responses}
+
+
 @app.post("/antibot/check")
 async def antibot_check(request: Request):
     """Check one call or a batch. A call is a {"permalink": ...} or
@@ -142,7 +158,7 @@ async def antibot_check(request: Request):
             raise HTTPException(status_code=400, detail='"calls" must be a JSON array')
         if any(not isinstance(call, dict) for call in calls):
             raise HTTPException(status_code=400, detail='Every item in "calls" must be a JSON object')
-        return {"responses": [_antibot_response(call) for call in calls]}
+        return await _antibot_batch_response(calls)
 
     return _antibot_response(body)
 

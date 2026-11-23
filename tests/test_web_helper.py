@@ -182,6 +182,35 @@ def test_antibot_accepts_an_empty_batch(antibot):
     assert resp.json() == {"responses": []}
 
 
+def test_antibot_batch_runs_calls_in_parallel(antibot, helper, monkeypatch):
+    client, seen = antibot
+    import threading
+    import time
+
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def slow_response(call):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.1)
+        with lock:
+            active -= 1
+        return {"verdict": "none", "categories": []}
+
+    monkeypatch.setattr(helper, "_antibot_response", slow_response)
+    resp = client.post("/antibot/check", json={"calls": [
+        {"message": MESSAGE} for _ in range(helper._ANTIBOT_BATCH_CONCURRENCY + 5)
+    ]}, headers={"Authorization": "Bearer tok-a"})
+
+    assert resp.status_code == 200
+    assert len(resp.json()["responses"]) == helper._ANTIBOT_BATCH_CONCURRENCY + 5
+    assert peak > 1
+
+
 def test_antibot_batch_accepts_permalinks_and_messages(antibot, helper, monkeypatch):
     client, seen = antibot
 
