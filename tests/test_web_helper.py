@@ -151,6 +151,57 @@ def test_antibot_rejects_a_body_without_a_message(antibot):
     headers = {"Authorization": "Bearer tok-a"}
     assert client.post("/antibot/check", json={"text": "hi"}, headers=headers).status_code == 400
     assert client.post("/antibot/check", json={"permalink": "nope"}, headers=headers).status_code == 400
+    assert client.post("/antibot/check", json={"calls": "not-an-array"}, headers=headers).status_code == 400
+    assert client.post("/antibot/check", json={"calls": ["not-an-object"]}, headers=headers).status_code == 400
+
+
+def test_antibot_accepts_a_batch_of_messages(antibot):
+    client, seen = antibot
+    headers = {"Authorization": "Bearer tok-a"}
+    second = {"user": "U2", "ts": "1731510123.456790", "text": "bye", "blocks": []}
+
+    resp = client.post("/antibot/check", json={"calls": [
+        {"message": MESSAGE, "channel": "C1"},
+        {"message": second},
+    ]}, headers=headers)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"responses": [
+        {"verdict": "watch", "categories": ["ios"]},
+        {"verdict": "watch", "categories": ["ios"]},
+    ]}
+    assert [event["user"] for event in seen] == ["U1", "U2"]
+    assert seen[0]["channel"] == "C1"
+
+
+def test_antibot_accepts_an_empty_batch(antibot):
+    client, _ = antibot
+    resp = client.post("/antibot/check", json={"calls": []},
+                       headers={"Authorization": "Bearer tok-a"})
+    assert resp.status_code == 200
+    assert resp.json() == {"responses": []}
+
+
+def test_antibot_batch_accepts_permalinks_and_messages(antibot, helper, monkeypatch):
+    client, seen = antibot
+
+    class Resp:
+        def json(self):
+            return {"ok": True, "messages": [{"type": "message", "ts": "1794054500.000001", "user": "UPERM"}]}
+
+    monkeypatch.setattr(helper.requests, "get", lambda url, params, headers, timeout: Resp())
+    link = "https://x.slack.com/archives/C1/p1794054500000001"
+    resp = client.post("/antibot/check", json={"calls": [
+        {"permalink": link},
+        {"message": MESSAGE, "channel": "C2"},
+    ]}, headers={"Authorization": "Bearer tok-a"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"responses": [
+        {"verdict": "watch", "categories": ["ios"]},
+        {"verdict": "watch", "categories": ["ios"]},
+    ]}
+    assert [event["user"] for event in seen] == ["UPERM", "U1"]
 
 
 

@@ -103,11 +103,30 @@ def _antibot_verdict(event: dict) -> dict:
     return verdict(event)
 
 
+def _antibot_event(call: dict) -> dict:
+    """Turn one permalink or message call into the event passed to the anti-bot check."""
+    if isinstance(call.get("permalink"), str):
+        event = _message_from_permalink(call["permalink"])
+    elif isinstance(call.get("message"), dict):
+        event = dict(call["message"])
+        if isinstance(call.get("channel"), str) and not event.get("channel"):
+            event["channel"] = call["channel"]
+    else:
+        raise HTTPException(status_code=400, detail='Send "permalink" or "message"')
+    event.setdefault("type", "message")
+    return event
+
+
+def _antibot_response(call: dict) -> dict:
+    result = _antibot_verdict(_antibot_event(call))
+    return {"verdict": result["verdict"], "categories": list(result.get("categories") or [])}
+
+
 @app.post("/antibot/check")
 async def antibot_check(request: Request):
-    """Body: {"permalink": "<Slack message link>"} or {"message": {<Slack message>}, "channel"?:
-    "<its channel id>"}. Answers {"verdict": "flag" | "watch" | "none", "categories": [...]}:
-    the client categories behind the verdict, empty when none applies."""
+    """Check one call or a batch. A call is a {"permalink": ...} or
+    {"message": ..., "channel"?: ...} object. Batch bodies return
+    {"responses": [...]} in the same order as {"calls": [...]}."""
     if not _antibot_authorized(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
     try:
@@ -116,17 +135,16 @@ async def antibot_check(request: Request):
         raise HTTPException(status_code=400, detail="Body must be JSON") from e
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Body must be a JSON object")
-    if isinstance(body.get("permalink"), str):
-        event = _message_from_permalink(body["permalink"])
-    elif isinstance(body.get("message"), dict):
-        event = dict(body["message"])
-        if isinstance(body.get("channel"), str) and not event.get("channel"):
-            event["channel"] = body["channel"]
-    else:
-        raise HTTPException(status_code=400, detail='Send "permalink" or "message"')
-    event.setdefault("type", "message")
-    result = _antibot_verdict(event)
-    return {"verdict": result["verdict"], "categories": list(result.get("categories") or [])}
+
+    if "calls" in body:
+        calls = body["calls"]
+        if not isinstance(calls, list):
+            raise HTTPException(status_code=400, detail='"calls" must be a JSON array')
+        if any(not isinstance(call, dict) for call in calls):
+            raise HTTPException(status_code=400, detail='Every item in "calls" must be a JSON object')
+        return {"responses": [_antibot_response(call) for call in calls]}
+
+    return _antibot_response(body)
 
 
 # Routes kept out of the public repo, served when their module is deployed alongside.
