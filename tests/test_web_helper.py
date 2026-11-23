@@ -174,6 +174,30 @@ def test_antibot_accepts_a_batch_of_messages(antibot):
     assert seen[0]["channel"] == "C1"
 
 
+def test_antibot_batch_isolates_errors(antibot, helper, monkeypatch):
+    client, _ = antibot
+    from fastapi import HTTPException
+
+    def response(call):
+        if call["message"]["text"] == "bad":
+            raise HTTPException(status_code=404, detail="Couldn't read that message")
+        return {"verdict": "none", "categories": []}
+
+    monkeypatch.setattr(helper, "_antibot_response", response)
+    resp = client.post("/antibot/check", json={"calls": [
+        {"message": {**MESSAGE, "text": "good"}},
+        {"message": {**MESSAGE, "text": "bad"}},
+        {"message": {**MESSAGE, "text": "good"}},
+    ]}, headers={"Authorization": "Bearer tok-a"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"responses": [
+        {"verdict": "none", "categories": []},
+        {"error": {"status": 404, "detail": "Couldn't read that message"}},
+        {"verdict": "none", "categories": []},
+    ]}
+
+
 def test_antibot_accepts_an_empty_batch(antibot):
     client, _ = antibot
     resp = client.post("/antibot/check", json={"calls": []},

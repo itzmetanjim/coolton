@@ -132,7 +132,10 @@ async def _antibot_batch_response(calls: list) -> dict:
 
     async def run(call: dict) -> dict:
         async with semaphore:
-            return await asyncio.to_thread(_antibot_response, call)
+            try:
+                return await asyncio.to_thread(_antibot_response, call)
+            except HTTPException as e:
+                return {"error": {"status": e.status_code, "detail": e.detail}}
 
     responses = await asyncio.gather(*(run(call) for call in calls))
     return {"responses": responses}
