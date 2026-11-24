@@ -137,13 +137,40 @@ def test_antibot_reads_a_permalinks_message_from_slack(antibot, helper, monkeypa
         def json(self):
             return {"ok": True, "messages": [{"type": "message", "ts": "1794054500.000001", "user": "U2"}]}
 
-    monkeypatch.setattr(helper.requests, "get", lambda url, params, headers, timeout: asked.update(params) or Resp())
+    monkeypatch.setattr(helper.requests, "get", lambda url, params, headers, timeout: asked.update({"url": url, **params}) or Resp())
     link = "https://x.slack.com/archives/C1/p1794054500000001?thread_ts=1794054476.315909&cid=C1"
     resp = client.post("/antibot/check", json={"permalink": link}, headers={"Authorization": "Bearer tok-a"})
 
     assert resp.json() == {"verdict": "watch", "categories": ["ios"]}
-    assert (asked["channel"], asked["ts"], asked["oldest"]) == ("C1", "1794054476.315909", "1794054500.000001")
+    assert asked["url"].endswith("/conversations.history")
+    assert (asked["channel"], asked["oldest"], asked["latest"]) == ("C1", "1794054500.000001", "1794054500.000001")
     assert seen[0]["channel"] == "C1" and seen[0]["user"] == "U2"
+
+
+def test_antibot_thread_permalink_falls_back_to_replies(antibot, helper, monkeypatch):
+    client, seen = antibot
+    asked = []
+
+    def get(url, params, headers, timeout):
+        asked.append((url, params))
+        class Resp:
+            def json(self):
+                if url.endswith("conversations.history"):
+                    return {"ok": True, "messages": []}
+                return {"ok": True, "messages": [{"type": "message", "ts": "1794054500.000001", "user": "U3"}]}
+        return Resp()
+
+    monkeypatch.setattr(helper.requests, "get", get)
+    link = "https://x.slack.com/archives/C1/p1794054500000001?thread_ts=1794054476.315909"
+    resp = client.post("/antibot/check", json={"permalink": link},
+                       headers={"Authorization": "Bearer tok-a"})
+
+    assert resp.status_code == 200
+    assert asked[0][0].endswith("conversations.history")
+    assert asked[1][0].endswith("conversations.replies")
+    assert asked[1][1]["ts"] == "1794054476.315909"
+    assert asked[1][1]["oldest"] == "1794054500.000001"
+    assert seen[0]["user"] == "U3"
 
 
 def test_antibot_rejects_a_body_without_a_message(antibot):

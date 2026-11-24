@@ -81,14 +81,29 @@ def _message_from_permalink(link: str) -> dict:
     channel, ts = match.group(1), f"{match.group(2)}.{match.group(3)}"
     thread = re.search(r"[?&]thread_ts=(\d+\.\d+)", link)
     token = os.environ.get("SLACK_USER_TOKEN") or os.environ.get("SLACK_BOT_TOKEN", "")
-    params = {"channel": channel, "ts": thread.group(1) if thread else ts,
-              "oldest": ts, "latest": ts, "inclusive": "true", "limit": 1}
+    if not token:
+        raise HTTPException(status_code=503, detail="No Slack token is configured")
+
+    headers = {"Authorization": f"Bearer {token}"}
     try:
-        data = requests.get("https://slack.com/api/conversations.replies", params=params,
-                            headers={"Authorization": f"Bearer {token}"}, timeout=15).json()
+        # history is the user-token-compatible way to read ordinary/public-channel
+        # messages and parent messages, even when the user/bot is not in the channel.
+        history_params = {"channel": channel, "oldest": ts, "latest": ts,
+                          "inclusive": "true", "limit": 1}
+        data = requests.get("https://slack.com/api/conversations.history", params=history_params,
+                            headers=headers, timeout=15).json()
+        message = next((m for m in data.get("messages") or [] if m.get("ts") == ts), None)
+
+        # A reply is not normally returned by history. If the permalink names a
+        # thread, fetch the thread and find the exact reply timestamp.
+        if thread and not message:
+            replies_params = {"channel": channel, "ts": thread.group(1),
+                              "oldest": ts, "latest": ts, "inclusive": "true", "limit": 1000}
+            data = requests.get("https://slack.com/api/conversations.replies", params=replies_params,
+                                headers=headers, timeout=15).json()
+            message = next((m for m in data.get("messages") or [] if m.get("ts") == ts), None)
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail="Couldn't reach Slack") from e
-    message = next((m for m in data.get("messages") or [] if m.get("ts") == ts), None)
     if not data.get("ok") or not message:
         raise HTTPException(status_code=404, detail="Couldn't read that message")
     return {**message, "channel": channel}
