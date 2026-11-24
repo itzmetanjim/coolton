@@ -58,6 +58,27 @@ def test_root_serves_the_app_for_auth_error_param_even_without_a_session(client)
     assert resp.status_code == 200
 
 
+def test_websocket_rejects_a_signed_out_viewer(client):
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws/conversations/missing?after=0"):
+            pass
+
+
+def test_websocket_accepts_a_signed_in_conversation(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("COOLTON_WEB_SECRET", "test-secret")
+    monkeypatch.setenv("WEB_CONVERSATIONS_DIR", str(tmp_path))
+    from web import conversation_log as log
+    monkeypatch.setattr(log, "STORE_DIR", str(tmp_path))
+    conversation_id = log.create_conversation("U1")
+    log.append_event(conversation_id, {"type": "turn_status", "text": "Working"})
+
+    token = auth.create_session_token("U1")
+    client.cookies.set(auth.SESSION_COOKIE, token)
+    with client.websocket_connect(f"/ws/conversations/{conversation_id}?after=0") as websocket:
+        event = websocket.receive_json()
+        assert event["type"] == "turn_status"
+
+
 def test_a_write_from_another_site_is_refused(monkeypatch):
     """A page on another *.tanjim.org host is the same site, so SameSite cookies would
     still ride along; its Origin gives it away."""

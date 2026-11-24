@@ -477,24 +477,18 @@
   }
 
   function connectStream(id, after) {
-    // The server never sends an SSE "id:" field, so a native EventSource
-    // reconnect (a network blip, the tab being backgrounded, a server
-    // restart) just reopens this exact URL — including the "after" it was
-    // built with at the very first connect, frozen forever. Every reconnect
-    // then replays the whole turn from that stale watermark, and nothing
-    // dedupes it, which is why a turn could render itself several times
-    // over. Closing the EventSource ourselves in onerror (instead of letting
-    // it auto-reconnect) and reopening with an advancing "after" fixes the
-    // replay; the seenSeqs check is a second guard against the server's own
-    // replay-vs-live-queue overlap (see stream_events' own comment) landing
-    // on this same connection.
     let lastSeq = after;
+    let socket = null;
+    let reconnectTimer = null;
     const seenSeqs = new Set();
 
     function open() {
-      eventSource = new EventSource(`/api/conversations/${id}/events?after=${lastSeq}`);
-      eventSource.onmessage = (msg) => {
-        if (!msg.data) return;
+      if (id !== currentConversationId || document.hidden) return;
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(`${protocol}//${location.host}/ws/conversations/${encodeURIComponent(id)}?after=${lastSeq}`);
+      eventSource = socket;
+
+      socket.onmessage = (msg) => {
         let ev;
         try { ev = JSON.parse(msg.data); } catch (e) { return; }
         if (id !== currentConversationId) return;
@@ -507,13 +501,31 @@
         handleEvent(ev);
         scrollToBottomIfNearBottom();
       };
-      eventSource.onerror = () => {
+
+      socket.onclose = () => {
         if (id !== currentConversationId) return;
-        eventSource.close();
-        setTimeout(() => { if (id === currentConversationId) open(); }, 2000);
+        if (eventSource === socket) eventSource = null;
+        clearTimeout(reconnectTimer);
+        if (!document.hidden) reconnectTimer = setTimeout(open, 2000);
       };
+      socket.onerror = () => socket.close();
     }
+
     open();
+
+    window.addEventListener('beforeunload', () => {
+      clearTimeout(reconnectTimer);
+      if (socket) socket.close();
+    }, { once: true });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        clearTimeout(reconnectTimer);
+        if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+      } else if (id === currentConversationId && (!socket || socket.readyState !== WebSocket.OPEN)) {
+        clearTimeout(reconnectTimer);
+        open();
+      }
+    });
   }
 
   function scrollToBottom() {
@@ -1581,9 +1593,11 @@
     } catch (err) {
       console.error('Failed to initialize coolton web UI', err);
     }
-    // Only the currently-open conversation has a live SSE stream, so a turn
-    // finishing in any other one is otherwise invisible until this polls it.
-    setInterval(refreshSidebarMeta, 10000);
+    // Only the currently-open conversation has a live stream, so a turn
+    // finishing in another one is otherwise invisible until this polls it.
+    setInterval(() => {
+      if (!document.hidden) refreshSidebarMeta();
+    }, 10000);
   }
   init();
 })();

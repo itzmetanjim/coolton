@@ -10,7 +10,7 @@ import mimetypes
 import os
 import re
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -179,6 +179,43 @@ async def stream_events(conversation_id: str, request: Request, after: int = 0):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.websocket("/ws/conversations/{conversation_id}")
+async def stream_events_ws(websocket: WebSocket, conversation_id: str, after: int = 0):
+    """Live conversation events over WebSocket. Cookies authenticate the socket."""
+    owner_id = require_slack_id(websocket)
+    if not owner_id:
+        await websocket.close(code=4401)
+        return
+    if not log.is_owner(conversation_id, owner_id):
+        await websocket.close(code=4404)
+        return
+
+    await websocket.accept()
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def on_event(event: dict) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    unsubscribe = log.subscribe(conversation_id, on_event)
+    last_seq = after
+    try:
+        for event in log.read_events(conversation_id, after=after):
+            last_seq = max(last_seq, event.get("seq", last_seq))
+            await websocket.send_json(event)
+
+        while True:
+            event = await queue.get()
+            if event.get("seq", 0) <= last_seq:
+                continue
+            last_seq = event["seq"]
+            await websocket.send_json(event)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        unsubscribe()
 
 
 # ---------------------------------------------------------------------------
