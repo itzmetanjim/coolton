@@ -59,10 +59,11 @@ A code channel is a workspace for one task:
 - **Plans as canvases:** for multi-step work, put the plan in a canvas tab, ask people to comment
   on it, read the comments with `code_channel_read_canvas_tool` before revising, then update the
   same tab (comments on unchanged sections are kept).
-- **Context bar** (`code_channel_context_bar_tool`): pin up to 5 links at the top (repo, branch,
+- **Context bar** (`code_channel_context_bar_tool`): pin up to 5 items at the top (repo, branch,
   PR, CI). Send the full set every time and keep it current ("PR #42 merged"). An item with
-  `item_type: "action"` (instead of a url) is a button: when someone clicks it, you get a
-  message saying so, with the item's key.
+  `item_type: "action"` (instead of a url) is rendered as a button. The app manifest requests
+  the `code_channel_action` event so clicks reach coolton. This partner-only event may be
+  rejected by Slack's public manifest validator; verify installation before relying on actions.
 - **Session status** (`code_channel_status_tool`): a turn already flips the session between
   `processing` (while you work) and `active` (when you finish) on its own. Set `suspended`
   when you've asked the user something and need their answer before continuing (it sticks,

@@ -172,6 +172,7 @@ def test_context_bar_action_items_are_kept(slack, monkeypatch):
     tool must not strip it (it used to)."""
     calls, responses = slack
     assert tools.set_context_bar("CCODE", '[{"key": "x", "label": "y", "item_type": "banana"}]').startswith("Error")
+    assert tools.set_context_bar("CCODE", '[{"key": "x", "label": "y", "url": "https://example.com", "item_type": "action"}]').startswith("Error")
     assert tools.set_context_bar("CCODE", '[{"key": "x", "label": "y", "icon": "hierarchy", "item_type": "action"}]') \
         == "Context bar updated."
     assert calls[-1][1]["code_channel"]["context_bar_items"][0]["item_type"] == "action"

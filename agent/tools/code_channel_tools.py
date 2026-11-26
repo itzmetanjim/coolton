@@ -303,6 +303,8 @@ def set_context_bar(channel_id: str, items: str) -> str:
         item_type = item.get("item_type")
         if item_type is not None and item_type not in CONTEXT_BAR_ITEM_TYPES:
             return f"Error: item_type must be one of {', '.join(CONTEXT_BAR_ITEM_TYPES)}."
+        if item_type == "action" and item.get("url"):
+            return 'Error: an "action" context-bar item cannot also have a URL.'
         if item.get("icon") and item["icon"] not in CONTEXT_BAR_ICONS:
             return f"Error: icon must be one of {', '.join(CONTEXT_BAR_ICONS)}."
     response = call("agents.conversations.setProperties", channel_id=channel_id,

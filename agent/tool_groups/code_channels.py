@@ -193,8 +193,9 @@ def code_channel_context_bar_tool(ctx: RunContext[AgentDeps], items: str) -> str
     """Set this code channel's context bar: up to 5 items pinned at the top (the repo, the
     branch, the PR, CI status...). Each call replaces all of them, so send the full set,
     and keep it current as things change ("PR #42 merged"). An item with item_type
-    "action" (instead of a url) becomes a button: when someone clicks it, you get a
-    message saying so, with the item's key.
+    "action" (instead of a url) is rendered as a button. The app manifest requests the
+    code_channel_action event so clicks reach coolton; this partner-only event may be
+    rejected by Slack's public manifest validator, so verify installation before relying on it.
 
     Args:
         items: JSON array string of {"key", "label", "icon"?, "url"?, "item_type"?}. key
