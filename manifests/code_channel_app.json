@@ -48,8 +48,7 @@
     "event_subscriptions": {
       "bot_events": [
         "agent_session_stopped",
-        "app_mention",
-        "code_channel_action"
+        "app_mention"
       ]
     },
     "token_rotation_enabled": false
