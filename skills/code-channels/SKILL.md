@@ -60,7 +60,23 @@ A code channel is a workspace for one task:
   on it, read the comments with `code_channel_read_canvas_tool` before revising, then update the
   same tab (comments on unchanged sections are kept).
 - **Context bar** (`code_channel_context_bar_tool`): pin up to 5 links at the top (repo, branch,
-  PR, CI). Send the full set every time and keep it current ("PR #42 merged").
+  PR, CI). Send the full set every time and keep it current ("PR #42 merged"). An item with
+  `item_type: "action"` (instead of a url) is a button: when someone clicks it, you get a
+  message saying so, with the item's key.
+- **Session status** (`code_channel_status_tool`): a turn already flips the session between
+  `processing` (while you work) and `active` (when you finish) on its own. Set `suspended`
+  when you've asked the user something and need their answer before continuing (it sticks,
+  the end of the turn won't flip it back), or `closed` when the work is done. `processing`,
+  `active`, `suspended` and `closed` are the only values.
+- **Pull request status** (`code_channel_pr_status_tool`): for a channel whose pull_request tab
+  you attached, keep `pr_status` current as the PR moves: `draft` -> `open` -> `blocked`
+  (changes requested, failing checks, merge conflicts) -> `merged`/`closed`, and `""` when no
+  status applies. It's one value for the whole channel; with several PRs, roll them up
+  (blocked if any is blocked, else open if any is open, else draft if any is a draft, else
+  merged if any was merged, else closed).
+- **External resource** (`code_channel_resource_tool`): when the session is about something that
+  isn't code (a design doc, a dashboard, a ticket), set it as the channel's `agent_resource`
+  (url, resource_type, title, provider). Only the fields you give change.
 - **Slash commands** (`code_channel_commands_tool`): register commands that fit the task (like
   `/run-tests`, `/create-pr`). When someone runs one, you get a message from them that starts with
   the command, e.g. "/run-tests auth", and a note in the channel says they ran it.

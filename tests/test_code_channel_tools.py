@@ -166,6 +166,52 @@ def test_context_bar_items_are_checked(slack, items, ok):
     assert (tools.set_context_bar("CCODE", items) == "Context bar updated.") is ok
 
 
+def test_context_bar_action_items_are_kept(slack, monkeypatch):
+    """A context bar item with item_type "action" is a button Slack delivers as a
+    code_channel_action event (which listeners.code_channel_app hands to coolton); the
+    tool must not strip it (it used to)."""
+    calls, responses = slack
+    assert tools.set_context_bar("CCODE", '[{"key": "x", "label": "y", "item_type": "banana"}]').startswith("Error")
+    assert tools.set_context_bar("CCODE", '[{"key": "x", "label": "y", "icon": "hierarchy", "item_type": "action"}]') \
+        == "Context bar updated."
+    assert calls[-1][1]["code_channel"]["context_bar_items"][0]["item_type"] == "action"
+
+
+def test_pr_status_is_validated_and_sets_the_channels_property(slack):
+    calls, responses = slack
+    assert tools.set_pr_status("CCODE", "Open").startswith("Error")
+    assert tools.set_pr_status("CCODE", " open ").startswith("Error")
+
+    assert tools.set_pr_status("CCODE", "draft") == "Pull request status updated."
+    assert tools.set_pr_status("CCODE", "") == "Pull request status cleared."
+    assert calls == [
+        ("agents.conversations.setProperties", {"channel_id": "CCODE", "code_channel": {"pr_status": "draft"}}),
+        ("agents.conversations.setProperties", {"channel_id": "CCODE", "code_channel": {"pr_status": ""}}),
+    ]
+
+
+def test_agent_resource_is_partial_and_needs_at_least_one_field(slack):
+    calls, responses = slack
+    assert tools.set_agent_resource("CCODE").startswith("Error")
+
+    tools.set_agent_resource("CCODE", url="https://example.com/doc", title="Design doc")
+    assert calls[-1] == ("agents.conversations.setProperties", {
+        "channel_id": "CCODE", "agent_resource": {"url": "https://example.com/doc", "title": "Design doc"}})
+
+
+def test_session_status_is_set_through_thread_status_with_a_pin(monkeypatch):
+    """The code-channel session belongs to the code channels app, so the call goes through
+    agent.thread_status (channel-level), which pins suspended/closed so the turn's end
+    doesn't flip them back to active."""
+    sent = []
+    monkeypatch.setattr("agent.code_channel_api.call", lambda method, **p: sent.append((method, p)) or {"ok": True})
+    monkeypatch.setattr(tools, "is_code_channel", lambda c: c == "CCODE")
+
+    assert tools.set_session_status("CCODE", "watching").startswith("Error")
+    assert tools.set_session_status("CCODE", "suspended") == "Session status set to suspended."
+    assert sent == [("agents.sessions.setStatus", {"channel_id": "CCODE", "status": "suspended"})]
+
+
 def test_slash_commands_lose_a_leading_slash_and_bad_names_are_refused(slack):
     calls, _ = slack
     tools.set_commands("CCODE", '[{"name": "/run-tests", "description": "Run the tests"}]')
