@@ -178,12 +178,26 @@
   const tplUserMessage = $('tpl-user-message');
   const tplTurn = $('tpl-turn');
   const tplSpineNode = $('tpl-spine-node');
+  const tplPolicyPrompt = $('tpl-policy-prompt');
+  const mdToolbar = $('mdToolbar');
+
+  // ---------------------------------------------------------------------
+  // Local persistence: composer drafts and sidebar width. Both are just the
+  // user's own browser state — nothing sensitive, nothing server-side.
+  // ---------------------------------------------------------------------
+
+  const DRAFT_PREFIX = 'coolton.web.draft.';
+
+  function draftKey() {
+    return DRAFT_PREFIX + (currentConversationId || 'new');
+  }
 
   // ---------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------
 
   let me = null;
+  let settingsController = null;
   let currentConversationId = null;
   let eventSource = null;
   let activeTurnEl = null;
@@ -191,6 +205,7 @@
   let stepStartTs = new Map();
   let messageElBySeq = new Map();
   let pendingAttachments = []; // [{id, url, name, mime, size}]
+  let pendingOptimistic = []; // user messages rendered locally before their server event arrives
   let isWorking = false;
   let isStopping = false;
 
@@ -235,10 +250,14 @@
     img.alt = '';
     const name = document.createElement('span');
     name.textContent = me.display_name;
-    const logout = document.createElement('a');
-    logout.href = '/oauth/logout';
-    logout.textContent = 'Sign out';
-    userFooterEl.append(img, name, logout);
+    const settingsBtn = document.createElement('button');
+    settingsBtn.type = 'button';
+    settingsBtn.className = 'footer-settings';
+    settingsBtn.title = 'Settings';
+    settingsBtn.setAttribute('aria-label', 'Open settings');
+    settingsBtn.appendChild(icon('i-settings'));
+    settingsBtn.addEventListener('click', () => settingsController.open());
+    userFooterEl.append(img, name, settingsBtn);
   }
 
   async function loadConversations(selectId, selectOpts) {
@@ -370,8 +389,12 @@
   }
 
   async function createConversation() {
+    const fromDraft = !currentConversationId;
     const meta = await apiJson('/api/conversations', { method: 'POST' });
-    await loadConversations(meta.id);
+    await loadConversations(meta.id, { skipDraftRestore: fromDraft });
+    if (fromDraft) {
+      try { localStorage.removeItem(DRAFT_PREFIX + 'new'); } catch (e) { }
+    }
     closeDrawer();
     composerInput.focus();
     return meta.id;
@@ -398,8 +421,10 @@
   // nothing hits the network) until the first message actually sends — see
   // the composer submit handler, the only place that calls createConversation.
   function showDraftState(opts) {
+    saveCurrentDraftBeforeSwitch();
     if (eventSource) { eventSource.close(); eventSource = null; }
     currentConversationId = null;
+    restoreDraft();
     activeTurnEl = null;
     spineNodeByStepId = new Map();
     stepStartTs = new Map();
@@ -430,8 +455,10 @@
   }
 
   async function selectConversation(id, opts) {
+    if (id !== currentConversationId) saveCurrentDraftBeforeSwitch();
     if (eventSource) { eventSource.close(); eventSource = null; }
     currentConversationId = id;
+    if (!(opts && opts.skipDraftRestore)) restoreDraft();
     activeTurnEl = null;
     spineNodeByStepId = new Map();
     stepStartTs = new Map();
@@ -543,7 +570,8 @@
 
   function handleEvent(ev, opts) {
     switch (ev.type) {
-      case 'user_message': return renderUserMessage(ev);
+      case 'user_message': return renderUserMessage(ev, opts);
+      case 'policy_prompt': return renderPolicyPrompt(ev, opts);
       case 'turn_start': return startTurn(ev, opts);
       case 'turn_status': return setTurnStatus(ev, opts);
       case 'step': return handleStep(ev);
@@ -554,20 +582,26 @@
     }
   }
 
-  function renderUserMessage(ev) {
-    const node = tplUserMessage.content.firstElementChild.cloneNode(true);
-    node.dataset.seq = ev.seq;
-    node.querySelector('.row-time').textContent = fmtClock(ev.ts);
+  function renderUserMessage(ev, opts) {
+    // Optimistic send: a message we rendered the moment Enter was pressed has
+    // its server event arrive here. Match it FIFO (the server appends user
+    // messages in the same order) and morph the local copy into the real one
+    // instead of rendering a second row. A mismatch (or a replay) falls
+    // through to a normal render.
+    if (!(opts && opts.replay) && pendingOptimistic.length) {
+      const optimistic = pendingOptimistic.shift();
+      if (optimistic.text === ev.text && optimistic.attachments === (ev.attachments || []).length) {
+        optimistic.node.dataset.seq = ev.seq;
+        optimistic.node.classList.remove('pending');
+        optimistic.node.querySelector('.row-time').textContent = fmtClock(ev.ts);
+        messageElBySeq.set(ev.seq, optimistic.node);
+        messageElBySeq.delete('optimistic');
+        return;
+      }
+      optimistic.node.remove();
+    }
 
-    const img = node.querySelector('.actor-avatar');
-    const mine = me && ev.user_id === me.slack_id;
-    img.src = mine ? me.avatar_url : `https://cachet.dunkirk.sh/users/${encodeURIComponent(ev.user_id || '')}/r`;
-    node.querySelector('.actor-name').textContent = mine ? (me.display_name || 'You') : (ev.user_id || 'Someone');
-    node.querySelector('.row-text').textContent = ev.text || '';
-
-    const attachEl = node.querySelector('.row-attachments');
-    for (const a of ev.attachments || []) attachEl.appendChild(renderAttachmentChip(a));
-
+    const node = buildUserMessageNode(ev);
     transcriptEl.appendChild(node);
     messageElBySeq.set(ev.seq, node);
     // A message sent while a turn is still running is steering, not a new
@@ -578,6 +612,91 @@
     // touches activeTurnEl) leaves the first row animating "working" forever.
     if (!activeTurnEl || !activeTurnEl.classList.contains('working')) {
       activeTurnEl = null;
+    }
+  }
+
+  function buildUserMessageNode(ev) {
+    const node = tplUserMessage.content.firstElementChild.cloneNode(true);
+    node.dataset.seq = ev.seq;
+    node.querySelector('.row-time').textContent = fmtClock(ev.ts);
+
+    const img = node.querySelector('.actor-avatar');
+    const mine = me && ev.user_id === me.slack_id;
+    img.src = mine ? me.avatar_url : `https://cachet.dunkirk.sh/users/${encodeURIComponent(ev.user_id || '')}/r`;
+    node.querySelector('.actor-name').textContent = mine ? (me.display_name || 'You') : (ev.user_id || 'Someone');
+    // User messages render markdown exactly like coolton's own — the toolbar
+    // inserts the syntax, but typing it by hand works the same way.
+    const textEl = node.querySelector('.row-text');
+    textEl.classList.add('md');
+    textEl.innerHTML = renderMarkdown(convertShortcodesHTML(ev.text || ''));
+    linkifyExternal(textEl);
+
+    const attachEl = node.querySelector('.row-attachments');
+    for (const a of ev.attachments || []) attachEl.appendChild(renderAttachmentChip(a));
+    return node;
+  }
+
+  // A local copy of the message being sent, so the transcript updates the
+  // instant Enter is pressed instead of waiting for the server round-trip.
+  function renderOptimisticUserMessage(text, attachments) {
+    const node = buildUserMessageNode({
+      seq: null, ts: Date.now() / 1000, text,
+      user_id: me ? me.slack_id : null, attachments,
+    });
+    node.classList.add('pending');
+    node.querySelector('.row-time').textContent = '';
+    transcriptEl.appendChild(node);
+    messageElBySeq.set('optimistic', node);
+    pendingOptimistic.push({ node, text, attachments: (attachments || []).length });
+    scrollToBottom();
+    return node;
+  }
+
+  function renderPolicyPrompt(ev) {
+    if (me && me.policy_consent) return;
+    const node = tplTurn.content.firstElementChild.cloneNode(true);
+    node.classList.remove('working');
+    node.querySelector('.spine-group').remove();
+    node.querySelector('.row-time').textContent = fmtClock(ev.ts);
+    const content = node.querySelector('.turn-content');
+    const prompt = tplPolicyPrompt.content.firstElementChild.cloneNode(true);
+    const link = prompt.querySelector('a');
+    link.href = policyUrl();
+    link.textContent = 'Coolton policy';
+    const join = prompt.querySelector('.policy-join');
+    const nojoin = prompt.querySelector('.policy-nojoin');
+    join.addEventListener('click', () => acceptPolicy(true, node));
+    nojoin.addEventListener('click', () => acceptPolicy(false, node));
+    content.appendChild(prompt);
+    transcriptEl.appendChild(node);
+  }
+
+  let _policyUrl = '';
+  function policyUrl() {
+    return _policyUrl || 'https://hackclub.enterprise.slack.com/docs/T0266FRGM/F0BQMKLK5MJ';
+  }
+
+  async function acceptPolicy(join, promptNode, afterSuccess) {
+    try {
+      await apiJson('/api/settings/policy/opt-in', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ join }),
+      });
+      if (me) me.policy_consent = true;
+      document.querySelectorAll('.policy-prompt').forEach((p) => {
+        const row = p.closest('.row');
+        if (row && row.parentElement === transcriptEl) row.remove();
+      });
+      if (afterSuccess) await afterSuccess();
+      else if (settingsController) await settingsController.refreshIfOpen();
+    } catch (err) {
+      if (promptNode) {
+        const note = document.createElement('div');
+        note.className = 'policy-prompt-note';
+        note.textContent = 'Something went wrong recording your opt-in — please try again.';
+        promptNode.appendChild(note);
+      }
     }
   }
 
@@ -607,6 +726,7 @@
     spineNodeByStepId = new Map();
     stepStartTs = new Map();
     if (opts && opts.replay) return;
+    startThinking(node);
     isWorking = true;
     isStopping = false;
     updateComposerState();
@@ -636,6 +756,25 @@
     }
   }
 
+  function startThinking(turn) {
+    if (!turn || turn.querySelector('.thinking')) return;
+    const think = document.createElement('div');
+    think.className = 'thinking';
+    think.setAttribute('aria-label', 'coolton is thinking');
+    think.append(
+      el('span', 'thinking-dot', '●'),
+      el('span', 'thinking-dot', '●'),
+      el('span', 'thinking-dot', '●')
+    );
+    turn.querySelector('.turn-content').appendChild(think);
+  }
+
+  function clearThinking(turn) {
+    if (!turn) return;
+    const think = turn.querySelector('.thinking');
+    if (think) think.remove();
+  }
+
   function showSpineGroup(turn) {
     turn.querySelector('.spine-group').hidden = false;
     return turn.querySelector('.spine');
@@ -657,6 +796,7 @@
   function handleStep(ev) {
     const turn = ensureTurn();
     const spine = showSpineGroup(turn);
+    clearThinking(turn);
 
     if (ev.kind === 'model') {
       const node = newSpineNode('complete', 'model');
@@ -1170,6 +1310,7 @@
   function handleAgentMessage(ev) {
     const turn = ensureTurn();
     const content = turn.querySelector('.turn-content');
+    clearThinking(turn);
 
     if (ev.variant === 'final') {
       const div = document.createElement('div');
@@ -1284,6 +1425,7 @@
 
   function endTurn(ev, opts) {
     const turn = activeTurnEl || ensureTurn();
+    clearThinking(turn);
     turn.classList.remove('working');
     const failed = ev.state === 'error' || ev.state === 'stopped';
     if (failed) turn.classList.add('failed');
@@ -1424,25 +1566,109 @@
     composerInput.style.height = 'auto';
     composerInput.style.height = Math.min(composerInput.scrollHeight, 200) + 'px';
   }
-  composerInput.addEventListener('input', autoGrow);
+
+  // ---------------------------------------------------------------------
+  // Drafts: what's typed but not sent, per session, in localStorage — so a
+  // closed tab or a session switch never loses it. The empty "new session"
+  // state has its own key, restored whenever you're back on a fresh draft.
+  // ---------------------------------------------------------------------
+
+  function saveDraft() {
+    try { localStorage.setItem(draftKey(), composerInput.value); } catch (e) { /* full? give up */ }
+  }
+
+  function clearDraft() {
+    try { localStorage.removeItem(draftKey()); } catch (e) { }
+  }
+
+  function restoreDraft() {
+    try { composerInput.value = localStorage.getItem(draftKey()) || ''; } catch (e) { }
+    autoGrow();
+  }
+
+  function saveCurrentDraftBeforeSwitch() {
+    saveDraft();
+  }
+
+  composerInput.addEventListener('input', () => { autoGrow(); saveDraft(); });
+
   composerInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       composerEl.requestSubmit();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'i')) {
+      e.preventDefault();
+      applyMdAction(e.key === 'b' ? 'bold' : 'italic');
     }
   });
 
-  async function sendText(text, attachments) {
+  // ---------------------------------------------------------------------
+  // Formatting toolbar: inserts markdown around the selection (or a
+  // placeholder when there's no selection). Typing markdown by hand renders
+  // exactly the same way.
+  // ---------------------------------------------------------------------
+
+  function applyMdAction(type) {
+    const ta = composerInput;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const selected = ta.value.slice(start, end);
+
+    if (type === 'ul' || type === 'ol' || type === 'quote') {
+      const prefix = type === 'ul' ? '- ' : type === 'ol' ? '1. ' : '> ';
+      const lines = selected.split('\n');
+      const prefixed = lines.map((line, i) => {
+        if (!line.trim()) return line;
+        return type === 'ol' ? `${i + 1}. ${line}` : prefix + line;
+      }).join('\n');
+      ta.setRangeText(prefixed, start, end, 'end');
+      ta.focus();
+      autoGrow();
+      saveDraft();
+      return;
+    }
+
+    const defs = {
+      bold: ['**', '**', 'bold text'],
+      italic: ['*', '*', 'italic text'],
+      strike: ['~~', '~~', 'strikethrough'],
+      code: ['`', '`', 'code'],
+      codeblock: ['\n```\n', '\n```\n', 'code'],
+      link: ['[', '](https://example.com)', 'link text'],
+    };
+    const [before, after, placeholder] = defs[type] || [];
+    if (!before) return;
+    const content = selected || placeholder;
+    ta.setRangeText(before + content + after, start, end, 'end');
+    const cursor = start + before.length;
+    ta.focus();
+    ta.selectionStart = cursor;
+    ta.selectionEnd = cursor + content.length;
+    autoGrow();
+    saveDraft();
+  }
+
+  mdToolbar.addEventListener('click', (e) => {
+    const btn = e.target.closest('.md-tool');
+    if (!btn) return;
+    applyMdAction(btn.dataset.md);
+  });
+
+  async function sendText(text, attachments, propagateErrors = false) {
     if (!currentConversationId) await createConversation();
-    if (!currentConversationId) return;
+    if (!currentConversationId) throw new Error('No conversation is selected');
     try {
-      await api(`/api/conversations/${currentConversationId}/messages`, {
+      const response = await api(`/api/conversations/${currentConversationId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, attachment_ids: (attachments || []).map((a) => a.id) }),
       });
+      if (!response.ok) throw new Error(`/api/conversations/${currentConversationId}/messages -> ${response.status}`);
     } catch (err) {
       console.error('Failed to send message', err);
+      if (propagateErrors) throw err;
     }
   }
   cardPromptSender = sendText;
@@ -1452,12 +1678,45 @@
     const text = composerInput.value.trim();
     if (!text && !pendingAttachments.length) return;
 
+    // Create/select the first conversation before inserting the optimistic row:
+    // selectConversation clears the transcript while loading its history.
+    if (!currentConversationId) {
+      try {
+        await createConversation();
+      } catch (err) {
+        console.error('Failed to create a conversation', err);
+        saveDraft();
+        return;
+      }
+    }
+
     const attachments = pendingAttachments;
     pendingAttachments = [];
     renderAttachmentTray();
+
+    // Optimistic: show the message the instant Enter is pressed; the server
+    // event morphs this row into the confirmed one when it lands (see
+    // renderUserMessage), so an empty "waiting" gap never appears.
+    const optimisticNode = renderOptimisticUserMessage(text, attachments);
+
     composerInput.value = '';
     autoGrow();
-    await sendText(text, attachments);
+    clearDraft();
+
+    try {
+      await sendText(text, attachments, true);
+    } catch (err) {
+      console.error('Failed to send message', err);
+      pendingOptimistic = pendingOptimistic.filter((p) => p.node !== optimisticNode);
+      optimisticNode.remove();
+      pendingAttachments = [...attachments, ...pendingAttachments];
+      renderAttachmentTray();
+      if (!composerInput.value.trim()) {
+        composerInput.value = text;
+        autoGrow();
+        saveDraft();
+      }
+    }
   });
 
   stopBtn.addEventListener('click', async () => {
@@ -1544,6 +1803,11 @@
   function closeDrawer() { appEl.classList.remove('drawer-open'); }
   drawerToggle.addEventListener('click', () => appEl.classList.toggle('drawer-open'));
   backdrop.addEventListener('click', closeDrawer);
+
+  settingsController = window.createCooltonSettingsController({
+    apiJson, el, icon, policyUrl, acceptPolicy,
+    setPolicyConsent: (consent) => { if (me) me.policy_consent = consent; },
+  });
 
   // ---------------------------------------------------------------------
   // Init
