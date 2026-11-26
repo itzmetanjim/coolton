@@ -178,6 +178,27 @@
   const tplUserMessage = $('tpl-user-message');
   const tplTurn = $('tpl-turn');
   const tplSpineNode = $('tpl-spine-node');
+  const tplPolicyPrompt = $('tpl-policy-prompt');
+  const mdToolbar = $('mdToolbar');
+  const sidebarResizer = $('sidebarResizer');
+  const settingsModal = $('settingsModal');
+  const settingsNav = $('settingsNav');
+  const settingsBody = $('settingsBody');
+  const settingsCloseBtn = $('settingsClose');
+
+  // ---------------------------------------------------------------------
+  // Local persistence: composer drafts and sidebar width. Both are just the
+  // user's own browser state — nothing sensitive, nothing server-side.
+  // ---------------------------------------------------------------------
+
+  const DRAFT_PREFIX = 'coolton.web.draft.';
+  const SIDEBAR_W_KEY = 'coolton.web.sidebarW';
+  const SIDEBAR_MIN = 190;
+  const SIDEBAR_MAX = 480;
+
+  function draftKey() {
+    return DRAFT_PREFIX + (currentConversationId || 'new');
+  }
 
   // ---------------------------------------------------------------------
   // State
@@ -191,6 +212,7 @@
   let stepStartTs = new Map();
   let messageElBySeq = new Map();
   let pendingAttachments = []; // [{id, url, name, mime, size}]
+  let pendingOptimistic = []; // user messages rendered locally before their server event arrives
   let isWorking = false;
   let isStopping = false;
 
@@ -235,10 +257,14 @@
     img.alt = '';
     const name = document.createElement('span');
     name.textContent = me.display_name;
-    const logout = document.createElement('a');
-    logout.href = '/oauth/logout';
-    logout.textContent = 'Sign out';
-    userFooterEl.append(img, name, logout);
+    const settingsBtn = document.createElement('button');
+    settingsBtn.type = 'button';
+    settingsBtn.className = 'footer-settings';
+    settingsBtn.title = 'Settings';
+    settingsBtn.setAttribute('aria-label', 'Open settings');
+    settingsBtn.appendChild(icon('i-settings'));
+    settingsBtn.addEventListener('click', openSettings);
+    userFooterEl.append(img, name, settingsBtn);
   }
 
   async function loadConversations(selectId, selectOpts) {
@@ -543,7 +569,8 @@
 
   function handleEvent(ev, opts) {
     switch (ev.type) {
-      case 'user_message': return renderUserMessage(ev);
+      case 'user_message': return renderUserMessage(ev, opts);
+      case 'policy_prompt': return renderPolicyPrompt(ev, opts);
       case 'turn_start': return startTurn(ev, opts);
       case 'turn_status': return setTurnStatus(ev, opts);
       case 'step': return handleStep(ev);
@@ -554,20 +581,26 @@
     }
   }
 
-  function renderUserMessage(ev) {
-    const node = tplUserMessage.content.firstElementChild.cloneNode(true);
-    node.dataset.seq = ev.seq;
-    node.querySelector('.row-time').textContent = fmtClock(ev.ts);
+  function renderUserMessage(ev, opts) {
+    // Optimistic send: a message we rendered the moment Enter was pressed has
+    // its server event arrive here. Match it FIFO (the server appends user
+    // messages in the same order) and morph the local copy into the real one
+    // instead of rendering a second row. A mismatch (or a replay) falls
+    // through to a normal render.
+    if (!(opts && opts.replay) && pendingOptimistic.length) {
+      const optimistic = pendingOptimistic.shift();
+      if (optimistic.text === ev.text && optimistic.attachments === (ev.attachments || []).length) {
+        optimistic.node.dataset.seq = ev.seq;
+        optimistic.node.classList.remove('pending');
+        optimistic.node.querySelector('.row-time').textContent = fmtClock(ev.ts);
+        messageElBySeq.set(ev.seq, optimistic.node);
+        messageElBySeq.delete('optimistic');
+        return;
+      }
+      optimistic.node.remove();
+    }
 
-    const img = node.querySelector('.actor-avatar');
-    const mine = me && ev.user_id === me.slack_id;
-    img.src = mine ? me.avatar_url : `https://cachet.dunkirk.sh/users/${encodeURIComponent(ev.user_id || '')}/r`;
-    node.querySelector('.actor-name').textContent = mine ? (me.display_name || 'You') : (ev.user_id || 'Someone');
-    node.querySelector('.row-text').textContent = ev.text || '';
-
-    const attachEl = node.querySelector('.row-attachments');
-    for (const a of ev.attachments || []) attachEl.appendChild(renderAttachmentChip(a));
-
+    const node = buildUserMessageNode(ev);
     transcriptEl.appendChild(node);
     messageElBySeq.set(ev.seq, node);
     // A message sent while a turn is still running is steering, not a new
@@ -578,6 +611,90 @@
     // touches activeTurnEl) leaves the first row animating "working" forever.
     if (!activeTurnEl || !activeTurnEl.classList.contains('working')) {
       activeTurnEl = null;
+    }
+  }
+
+  function buildUserMessageNode(ev) {
+    const node = tplUserMessage.content.firstElementChild.cloneNode(true);
+    node.dataset.seq = ev.seq;
+    node.querySelector('.row-time').textContent = fmtClock(ev.ts);
+
+    const img = node.querySelector('.actor-avatar');
+    const mine = me && ev.user_id === me.slack_id;
+    img.src = mine ? me.avatar_url : `https://cachet.dunkirk.sh/users/${encodeURIComponent(ev.user_id || '')}/r`;
+    node.querySelector('.actor-name').textContent = mine ? (me.display_name || 'You') : (ev.user_id || 'Someone');
+    // User messages render markdown exactly like coolton's own — the toolbar
+    // inserts the syntax, but typing it by hand works the same way.
+    const textEl = node.querySelector('.row-text');
+    textEl.classList.add('md');
+    textEl.innerHTML = renderMarkdown(convertShortcodesHTML(ev.text || ''));
+    linkifyExternal(textEl);
+
+    const attachEl = node.querySelector('.row-attachments');
+    for (const a of ev.attachments || []) attachEl.appendChild(renderAttachmentChip(a));
+    return node;
+  }
+
+  // A local copy of the message being sent, so the transcript updates the
+  // instant Enter is pressed instead of waiting for the server round-trip.
+  function renderOptimisticUserMessage(text, attachments) {
+    const node = buildUserMessageNode({
+      seq: null, ts: Date.now() / 1000, text,
+      user_id: me ? me.slack_id : null, attachments,
+    });
+    node.classList.add('pending');
+    node.querySelector('.row-time').textContent = '';
+    transcriptEl.appendChild(node);
+    messageElBySeq.set('optimistic', node);
+    pendingOptimistic.push({ node, text, attachments: (attachments || []).length });
+    scrollToBottom();
+    return node;
+  }
+
+  function renderPolicyPrompt(ev) {
+    if (me && me.policy_consent) return;
+    const node = tplTurn.content.firstElementChild.cloneNode(true);
+    node.classList.remove('working');
+    node.querySelector('.spine-group').remove();
+    node.querySelector('.row-time').textContent = fmtClock(ev.ts);
+    const content = node.querySelector('.turn-content');
+    const prompt = tplPolicyPrompt.content.firstElementChild.cloneNode(true);
+    const link = prompt.querySelector('a');
+    link.href = policyUrl();
+    link.textContent = 'Coolton policy';
+    const join = prompt.querySelector('.policy-join');
+    const nojoin = prompt.querySelector('.policy-nojoin');
+    join.addEventListener('click', () => acceptPolicy(true, node));
+    nojoin.addEventListener('click', () => acceptPolicy(false, node));
+    content.appendChild(prompt);
+    transcriptEl.appendChild(node);
+  }
+
+  let _policyUrl = '';
+  function policyUrl() {
+    return _policyUrl || 'https://hackclub.enterprise.slack.com/docs/T0266FRGM/F0BQMKLK5MJ';
+  }
+
+  async function acceptPolicy(join, promptNode) {
+    try {
+      await apiJson('/api/settings/policy/opt-in', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ join }),
+      });
+      me.policy_consent = true;
+      document.querySelectorAll('.policy-prompt').forEach((p) => {
+        const row = p.closest('.row');
+        if (row && row.parentElement === transcriptEl) row.remove();
+      });
+      if (!settingsModal.hidden) refreshSettings();
+    } catch (err) {
+      if (promptNode) {
+        const note = document.createElement('div');
+        note.className = 'policy-prompt-note';
+        note.textContent = 'Something went wrong recording your opt-in — please try again.';
+        promptNode.appendChild(note);
+      }
     }
   }
 
@@ -607,6 +724,7 @@
     spineNodeByStepId = new Map();
     stepStartTs = new Map();
     if (opts && opts.replay) return;
+    startThinking(node);
     isWorking = true;
     isStopping = false;
     updateComposerState();
@@ -636,6 +754,25 @@
     }
   }
 
+  function startThinking(turn) {
+    if (!turn || turn.querySelector('.thinking')) return;
+    const think = document.createElement('div');
+    think.className = 'thinking';
+    think.setAttribute('aria-label', 'coolton is thinking');
+    think.append(
+      el('span', 'thinking-dot', '●'),
+      el('span', 'thinking-dot', '●'),
+      el('span', 'thinking-dot', '●')
+    );
+    turn.querySelector('.turn-content').appendChild(think);
+  }
+
+  function clearThinking(turn) {
+    if (!turn) return;
+    const think = turn.querySelector('.thinking');
+    if (think) think.remove();
+  }
+
   function showSpineGroup(turn) {
     turn.querySelector('.spine-group').hidden = false;
     return turn.querySelector('.spine');
@@ -657,6 +794,7 @@
   function handleStep(ev) {
     const turn = ensureTurn();
     const spine = showSpineGroup(turn);
+    clearThinking(turn);
 
     if (ev.kind === 'model') {
       const node = newSpineNode('complete', 'model');
@@ -1170,6 +1308,7 @@
   function handleAgentMessage(ev) {
     const turn = ensureTurn();
     const content = turn.querySelector('.turn-content');
+    clearThinking(turn);
 
     if (ev.variant === 'final') {
       const div = document.createElement('div');
@@ -1284,6 +1423,7 @@
 
   function endTurn(ev, opts) {
     const turn = activeTurnEl || ensureTurn();
+    clearThinking(turn);
     turn.classList.remove('working');
     const failed = ev.state === 'error' || ev.state === 'stopped';
     if (failed) turn.classList.add('failed');
@@ -1424,12 +1564,99 @@
     composerInput.style.height = 'auto';
     composerInput.style.height = Math.min(composerInput.scrollHeight, 200) + 'px';
   }
-  composerInput.addEventListener('input', autoGrow);
+
+  // ---------------------------------------------------------------------
+  // Drafts: what's typed but not sent, per session, in localStorage — so a
+  // closed tab or a session switch never loses it. The empty "new session"
+  // state has its own key, restored whenever you're back on a fresh draft.
+  // ---------------------------------------------------------------------
+
+  function saveDraft() {
+    try { localStorage.setItem(draftKey(), composerInput.value); } catch (e) { /* full? give up */ }
+  }
+
+  function clearDraft() {
+    try { localStorage.removeItem(draftKey()); } catch (e) { }
+  }
+
+  function restoreDraft() {
+    try { composerInput.value = localStorage.getItem(draftKey()) || ''; } catch (e) { }
+    autoGrow();
+  }
+
+  function saveCurrentDraftBeforeSwitch() {
+    if (composerInput !== document.activeElement) {
+      // The user is mid-typing; the switch is just a click on the sidebar.
+      // Saving on every input already covered this, but capture the final
+      // keystroke anyway in case the blur hasn't flushed.
+    }
+    saveDraft();
+  }
+
+  composerInput.addEventListener('input', () => { autoGrow(); saveDraft(); });
+
   composerInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       composerEl.requestSubmit();
+      return;
     }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'i')) {
+      e.preventDefault();
+      applyMdAction(e.key === 'b' ? 'bold' : 'italic');
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Formatting toolbar: inserts markdown around the selection (or a
+  // placeholder when there's no selection). Typing markdown by hand renders
+  // exactly the same way.
+  // ---------------------------------------------------------------------
+
+  function applyMdAction(type) {
+    const ta = composerInput;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const selected = ta.value.slice(start, end);
+
+    if (type === 'ul' || type === 'ol' || type === 'quote') {
+      const prefix = type === 'ul' ? '- ' : type === 'ol' ? '1. ' : '> ';
+      const lines = selected.split('\n');
+      const prefixed = lines.map((line, i) => {
+        if (!line.trim()) return line;
+        return type === 'ol' ? `${i + 1}. ${line}` : prefix + line;
+      }).join('\n');
+      ta.setRangeText(prefixed, start, end, 'end');
+      ta.focus();
+      autoGrow();
+      saveDraft();
+      return;
+    }
+
+    const defs = {
+      bold: ['**', '**', 'bold text'],
+      italic: ['*', '*', 'italic text'],
+      strike: ['~~', '~~', 'strikethrough'],
+      code: ['`', '`', 'code'],
+      codeblock: ['\n```\n', '\n```\n', 'code'],
+      link: ['[', '](https://example.com)', 'link text'],
+    };
+    const [before, after, placeholder] = defs[type] || [];
+    if (!before) return;
+    const content = selected || placeholder;
+    ta.setRangeText(before + content + after, start, end, 'end');
+    const cursor = start + before.length;
+    ta.focus();
+    ta.selectionStart = cursor;
+    ta.selectionEnd = cursor + content.length;
+    autoGrow();
+    saveDraft();
+  }
+
+  mdToolbar.addEventListener('click', (e) => {
+    const btn = e.target.closest('.md-tool');
+    if (!btn) return;
+    applyMdAction(btn.dataset.md);
   });
 
   async function sendText(text, attachments) {
@@ -1455,9 +1682,28 @@
     const attachments = pendingAttachments;
     pendingAttachments = [];
     renderAttachmentTray();
+
+    // Optimistic: show the message the instant Enter is pressed; the server
+    // event morphs this row into the confirmed one when it lands (see
+    // renderUserMessage), so an empty "waiting" gap never appears.
+    const optimisticNode = renderOptimisticUserMessage(text, attachments);
+
     composerInput.value = '';
     autoGrow();
-    await sendText(text, attachments);
+    clearDraft();
+
+    try {
+      await sendText(text, attachments);
+    } catch (err) {
+      console.error('Failed to send message', err);
+      pendingOptimistic = pendingOptimistic.filter((p) => p.node !== optimisticNode);
+      optimisticNode.remove();
+      if (!composerInput.value.trim()) {
+        composerInput.value = text;
+        autoGrow();
+        saveDraft();
+      }
+    }
   });
 
   stopBtn.addEventListener('click', async () => {
@@ -1544,6 +1790,572 @@
   function closeDrawer() { appEl.classList.remove('drawer-open'); }
   drawerToggle.addEventListener('click', () => appEl.classList.toggle('drawer-open'));
   backdrop.addEventListener('click', closeDrawer);
+
+  // ---------------------------------------------------------------------
+  // Settings popup: mirrors the Slack App Home controls (policy consent,
+  // BYOK endpoints, instructions, reminders, fallback cache, MCP servers)
+  // as REST-backed sections. Same stores, same validation as the Slack
+  // handlers — a change made here is immediately visible there and back.
+  // ---------------------------------------------------------------------
+
+  let settingsData = null;
+  let settingsSection = 'policy';
+  let byokEditId = null;
+
+  const SETTINGS_SECTIONS = [
+    { id: 'policy', label: 'Policy consent', icon: 'i-shield' },
+    { id: 'endpoints', label: 'BYOK endpoints', icon: 'i-key' },
+    { id: 'instructions', label: 'Instructions', icon: 'i-book' },
+    { id: 'reminders', label: 'Reminders', icon: 'i-bell' },
+    { id: 'cache', label: 'Fallback cache', icon: 'i-zap' },
+    { id: 'mcp', label: 'MCP servers', icon: 'i-plug' },
+  ];
+
+  async function openSettings() {
+    try {
+      settingsData = await apiJson('/api/settings');
+    } catch (err) {
+      return;
+    }
+    renderSettingsNav();
+    renderSettingsSection();
+    settingsModal.hidden = false;
+    settingsCloseBtn.focus();
+  }
+
+  function closeSettings() {
+    settingsModal.hidden = true;
+  }
+
+  async function refreshSettings() {
+    try {
+      settingsData = await apiJson('/api/settings');
+    } catch (err) {
+      return;
+    }
+    renderSettingsSection();
+  }
+
+  function renderSettingsNav() {
+    settingsNav.innerHTML = '';
+    const head = el('div', 'settings-nav-head');
+    const img = document.createElement('img');
+    img.src = settingsData.avatar_url;
+    img.alt = '';
+    head.append(img, el('span', '', settingsData.display_name));
+    settingsNav.append(head);
+
+    const list = el('div', 'settings-nav-list');
+    for (const s of SETTINGS_SECTIONS) {
+      const btn = el('button', 'settings-nav-item');
+      btn.type = 'button';
+      btn.dataset.section = s.id;
+      btn.classList.toggle('active', s.id === settingsSection);
+      btn.append(icon(s.icon), el('span', '', s.label));
+      btn.addEventListener('click', () => {
+        settingsSection = s.id;
+        renderSettingsNav();
+        renderSettingsSection();
+      });
+      list.appendChild(btn);
+    }
+    settingsNav.append(list);
+
+    const signout = document.createElement('a');
+    signout.className = 'settings-nav-signout';
+    signout.href = '/oauth/logout';
+    signout.append(icon('i-user'), el('span', '', 'Sign out'));
+    settingsNav.append(signout);
+  }
+
+  function renderSettingsSection() {
+    settingsBody.innerHTML = '';
+    if (!settingsData) return;
+    const renderers = {
+      policy: renderSectionPolicy,
+      endpoints: renderSectionEndpoints,
+      instructions: renderSectionInstructions,
+      reminders: renderSectionReminders,
+      cache: renderSectionCache,
+      mcp: renderSectionMcp,
+    };
+    (renderers[settingsSection] || renderSectionPolicy)();
+  }
+
+  function settingsNote(text, kind) {
+    return el('div', 'settings-note' + (kind ? ' ' + kind : ''), text);
+  }
+
+  function settingsError(text) {
+    return settingsNote(text, 'err');
+  }
+
+  function renderSectionPolicy() {
+    const box = el('div');
+    box.append(el('h2', 'settings-section-title', 'Policy consent'));
+    box.append(el('p', 'settings-section-sub',
+      'What Coolton may do with your data and messages, and the rules for using it. The full policy lives in the Slack canvas linked below.'));
+
+    const row = el('div', 'settings-row');
+    const label = el('div', 'settings-row-label');
+    label.append(el('div', 'settings-row-title', settingsData.policy.consent ? 'You’re opted in' : 'You haven’t opted in yet'));
+    label.append(el('div', 'settings-row-sub', settingsData.policy.consent
+      ? 'Coolton can process your requests under the policy.'
+      : 'Opt in before asking coolton to do anything — it won’t run without consent.'));
+    row.appendChild(label);
+
+    const actions = el('div', 'settings-actions');
+    if (settingsData.policy.consent) {
+      const out = el('button', 'settings-btn danger', 'Opt out');
+      out.addEventListener('click', async () => {
+        try {
+          await apiJson('/api/settings/policy/opt-out', { method: 'POST' });
+          settingsData.policy.consent = false;
+          renderSettingsSection();
+        } catch (err) {
+          settingsBody.appendChild(settingsError('Couldn’t record opt-out.'));
+        }
+      });
+      actions.appendChild(out);
+    } else {
+      const join = el('button', 'settings-btn primary', 'Opt in and join channel');
+      const nojoin = el('button', 'settings-btn', 'Opt in without joining');
+      join.addEventListener('click', () => acceptPolicy(true, null));
+      nojoin.addEventListener('click', () => acceptPolicy(false, null));
+      actions.append(join, nojoin);
+    }
+    row.appendChild(actions);
+    box.appendChild(row);
+
+    const link = document.createElement('a');
+    link.href = policyUrl();
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.className = 'settings-btn';
+    link.append(icon('i-book'), el('span', '', 'Read the policy'));
+    box.appendChild(link);
+    settingsBody.appendChild(box);
+  }
+
+  function renderSectionEndpoints() {
+    const box = el('div');
+    box.append(el('h2', 'settings-section-title', 'BYOK endpoints'));
+    box.append(el('p', 'settings-section-sub',
+      'Bring-your-own-key: OpenAI-compatible endpoints used instead of the global key, for text and/or image generation.'));
+
+    const eps = settingsData.endpoints || [];
+    if (!eps.length) {
+      box.append(el('p', 'settings-empty', 'No endpoints configured.'));
+    } else {
+      for (const ep of eps) {
+        const row = el('div', 'settings-row');
+        const label = el('div', 'settings-row-label');
+        const title = el('div', 'settings-row-title', ep.name);
+        const tags = [];
+        if (ep.id === settingsData.text_endpoint_id) tags.push('text');
+        if (ep.id === settingsData.image_endpoint_id) tags.push('image');
+        if (tags.length) title.append(' ', el('span', 'settings-note ok', `[${tags.join(', ')}]`));
+        label.append(title, el('div', 'settings-row-sub', `${ep.model || 'default model'} · ${ep.base_url}`));
+        row.appendChild(label);
+
+        const actions = el('div', 'settings-actions');
+        const edit = el('button', 'settings-btn', 'Edit');
+        edit.addEventListener('click', () => { byokEditId = ep.id; renderSettingsSection(); });
+        const del = el('button', 'settings-btn danger', 'Delete');
+        del.addEventListener('click', async () => {
+          del.disabled = true;
+          try {
+            await apiJson(`/api/settings/byok/${ep.id}`, { method: 'DELETE' });
+            byokEditId = null;
+            await refreshSettings();
+          } catch (err) {
+            settingsBody.appendChild(settingsError('Couldn’t delete endpoint.'));
+            del.disabled = false;
+          }
+        });
+        actions.append(edit, del);
+        row.appendChild(actions);
+        box.appendChild(row);
+      }
+    }
+
+    box.append(el('h3', 'settings-sec-title', 'Default models'));
+    box.appendChild(renderDefaultSelect('text', 'Text model', settingsData.text_endpoint_id, eps));
+    box.appendChild(renderDefaultSelect('image', 'Image model', settingsData.image_endpoint_id, eps));
+
+    box.append(el('h3', 'settings-sec-title', byokEditId ? 'Edit endpoint' : 'Add endpoint'));
+    const target = byokEditId ? eps.find((e) => e.id === byokEditId) : null;
+    box.appendChild(renderByokForm(target));
+    settingsBody.appendChild(box);
+  }
+
+  function renderDefaultSelect(kind, labelText, currentId, eps) {
+    const field = el('div', 'settings-field');
+    field.append(el('label', '', labelText));
+    const select = document.createElement('select');
+    select.className = 'settings-input';
+    const noneOpt = document.createElement('option');
+    noneOpt.value = 'none';
+    noneOpt.textContent = kind === 'text' ? 'Use global key (no BYOK)' : 'Disable image generation';
+    select.appendChild(noneOpt);
+    for (const ep of eps) {
+      const opt = document.createElement('option');
+      opt.value = ep.id;
+      opt.textContent = `${ep.name} — ${ep.model || 'default'}`;
+      select.appendChild(opt);
+    }
+    select.value = currentId || 'none';
+    select.addEventListener('change', async () => {
+      try {
+        await apiJson(`/api/settings/byok/${kind}-default`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint_id: select.value }),
+        });
+        settingsData[kind === 'text' ? 'text_endpoint_id' : 'image_endpoint_id'] =
+          select.value === 'none' ? null : select.value;
+        renderSettingsSection();
+      } catch (err) {
+        settingsBody.appendChild(settingsError(`Couldn’t set ${kind} default.`));
+        select.value = currentId || 'none';
+      }
+    });
+    field.appendChild(select);
+    return field;
+  }
+
+  function renderByokForm(target) {
+    const form = el('div', 'settings-formgrid');
+    const mkField = (labelText, value, placeholder, type) => {
+      const field = el('div', 'settings-field');
+      field.append(el('label', '', labelText));
+      const input = document.createElement('input');
+      input.className = 'settings-input';
+      input.type = type || 'text';
+      input.value = value || '';
+      input.placeholder = placeholder || '';
+      field.appendChild(input);
+      return { field, input };
+    };
+    const nameF = mkField('Name', target && target.name, 'My endpoint');
+    const urlF = mkField('Base URL', target && target.base_url, 'https://api.example.com/v1');
+    const keyF = mkField('API key', '', 'sk-…', 'password');
+    const modelF = mkField('Model', target && target.model, 'gpt-4o-mini');
+    form.append(nameF.field, urlF.field, keyF.field, modelF.field);
+
+    const actions = el('div', 'settings-actions');
+    const submit = el('button', 'settings-btn primary', target ? 'Save changes' : 'Add endpoint');
+    const cancel = el('button', 'settings-btn', 'Cancel');
+    cancel.addEventListener('click', () => { byokEditId = null; renderSettingsSection(); });
+    submit.addEventListener('click', async () => {
+      const name = nameF.input.value.trim();
+      const baseUrl = urlF.input.value.trim();
+      if (!name || !baseUrl) {
+        settingsBody.appendChild(settingsError('Name and base URL are required.'));
+        return;
+      }
+      submit.disabled = true;
+      try {
+        if (target) {
+          const patch = { name, base_url: baseUrl, model: modelF.input.value.trim() };
+          if (keyF.input.value) patch.api_key = keyF.input.value;
+          await apiJson(`/api/settings/byok/${target.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patch),
+          });
+        } else {
+          await apiJson('/api/settings/byok', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name,
+              base_url: baseUrl,
+              api_key: keyF.input.value,
+              model: modelF.input.value.trim(),
+            }),
+          });
+        }
+        byokEditId = null;
+        await refreshSettings();
+      } catch (err) {
+        settingsBody.appendChild(settingsError('Couldn’t save endpoint — check the URL.'));
+        submit.disabled = false;
+      }
+    });
+    actions.append(submit, cancel);
+    form.appendChild(actions);
+    return form;
+  }
+
+  function renderSectionInstructions() {
+    const box = el('div');
+    box.append(el('h2', 'settings-section-title', 'Custom instructions'));
+    box.append(el('p', 'settings-section-sub', 'Shapes how coolton talks to you. Same effect as setting them on Slack.'));
+
+    const field = el('div', 'settings-field');
+    field.append(el('label', '', 'Instructions'));
+    const ta = document.createElement('textarea');
+    ta.className = 'settings-input';
+    ta.rows = 6;
+    ta.value = settingsData.instructions || '';
+    ta.placeholder = 'e.g. always reply in lowercase, call me Cap…';
+    field.appendChild(ta);
+    box.appendChild(field);
+
+    const actions = el('div', 'settings-actions');
+    const save = el('button', 'settings-btn primary', 'Save');
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        await apiJson('/api/settings/instructions', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: ta.value }),
+        });
+        settingsBody.appendChild(settingsNote('Saved.', 'ok'));
+      } catch (err) {
+        settingsBody.appendChild(settingsError('Couldn’t save instructions.'));
+      } finally {
+        save.disabled = false;
+      }
+    });
+    actions.appendChild(save);
+    box.appendChild(actions);
+    settingsBody.appendChild(box);
+  }
+
+  function renderSectionReminders() {
+    const box = el('div');
+    box.append(el('h2', 'settings-section-title', 'Reminders'));
+    box.append(el('p', 'settings-section-sub', 'One-shot reminders coolton will DM you. Set new ones from Slack (“remind me in 10 minutes to …”).'));
+
+    const pending = (settingsData.reminders || []).filter((r) => !r.sent && !r.failed);
+    if (!pending.length) {
+      box.append(el('p', 'settings-empty', 'No pending reminders.'));
+    } else {
+      for (const r of pending.slice(0, 20)) {
+        const row = el('div', 'settings-row');
+        const label = el('div', 'settings-row-label');
+        label.append(el('div', 'settings-row-title', r.text));
+        const due = new Date(r.due_at * 1000);
+        const dueStr = due.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        label.append(el('div', 'settings-row-sub', `#${r.id} · due ${dueStr}`));
+        row.appendChild(label);
+        box.appendChild(row);
+      }
+    }
+    settingsBody.appendChild(box);
+  }
+
+  function renderSectionCache() {
+    const box = el('div');
+    box.append(el('h2', 'settings-section-title', 'AI fallback cache'));
+    box.append(el('p', 'settings-section-sub',
+      'Every 30 minutes coolton re-tests each AI provider and caches which one to try first, so it doesn’t wait or retry when one is down. Clearing wipes that and re-probes immediately.'));
+
+    const actions = el('div', 'settings-actions');
+    const clear = el('button', 'settings-btn danger', 'Clear fallback cache');
+    clear.addEventListener('click', async () => {
+      clear.disabled = true;
+      try {
+        await apiJson('/api/settings/fallback-cache/clear', { method: 'POST' });
+        settingsBody.appendChild(settingsNote('Cache cleared.', 'ok'));
+      } catch (err) {
+        settingsBody.appendChild(settingsError('Couldn’t clear the cache.'));
+      } finally {
+        clear.disabled = false;
+      }
+    });
+    actions.appendChild(clear);
+
+    if (settingsData.is_admin) {
+      const test = el('button', 'settings-btn primary', 'Test all providers');
+      test.addEventListener('click', async () => {
+        test.disabled = true;
+        test.textContent = 'Testing…';
+        try {
+          const res = await apiJson('/api/settings/providers/test', { method: 'POST' });
+          const results = el('div', 'settings-note mono');
+          const list = res.results || [];
+          if (!list.length) {
+            results.textContent = 'No providers configured.';
+          } else {
+            for (const p of list) {
+              results.appendChild(document.createTextNode(`${p.ok ? '✓' : '✕'} ${p.provider} — ${p.display} (${p.elapsed}s)\n`));
+            }
+          }
+          settingsBody.appendChild(results);
+        } catch (err) {
+          settingsBody.appendChild(settingsError('Provider test failed.'));
+        } finally {
+          test.disabled = false;
+          test.textContent = 'Test all providers';
+        }
+      });
+      actions.appendChild(test);
+    }
+    box.appendChild(actions);
+    settingsBody.appendChild(box);
+  }
+
+  function renderSectionMcp() {
+    const box = el('div');
+    box.append(el('h2', 'settings-section-title', 'MCP servers'));
+    box.append(el('p', 'settings-section-sub',
+      'Model Context Protocol servers give coolton extra tools (Notion, Linear, …). Managed from here, same as Slack App Home.'));
+
+    const slack = el('div', 'settings-row');
+    const slackLabel = el('div', 'settings-row-label');
+    slackLabel.append(el('div', 'settings-row-title', 'Slack MCP server'));
+    slackLabel.append(el('div', 'settings-row-sub', settingsData.mcp_is_connected ? 'Connected' : 'Disconnected'));
+    slack.appendChild(slackLabel);
+    box.appendChild(slack);
+
+    const servers = settingsData.mcp_servers || [];
+    if (!servers.length) {
+      box.append(el('p', 'settings-empty', 'No custom MCP servers.'));
+    } else {
+      for (const s of servers) {
+        const row = el('div', 'settings-row');
+        const label = el('div', 'settings-row-label');
+        label.append(el('div', 'settings-row-title', s.name));
+        label.append(el('div', 'settings-row-sub', `${s.url} · ${s.transport === 'sse' ? 'SSE' : 'Streamable HTTP'}`));
+        row.appendChild(label);
+
+        const actions = el('div', 'settings-actions');
+        const rm = el('button', 'settings-btn danger', 'Remove');
+        rm.addEventListener('click', async () => {
+          rm.disabled = true;
+          try {
+            await apiJson(`/api/settings/mcp/${s.id}`, { method: 'DELETE' });
+            await refreshSettings();
+          } catch (err) {
+            settingsBody.appendChild(settingsError('Couldn’t remove server.'));
+            rm.disabled = false;
+          }
+        });
+        actions.appendChild(rm);
+        row.appendChild(actions);
+        box.appendChild(row);
+      }
+    }
+
+    box.append(el('h3', 'settings-sec-title', 'Add MCP server'));
+    const form = el('div', 'settings-formgrid');
+    const mkField = (labelText, value, placeholder, type, tag) => {
+      const field = el('div', 'settings-field');
+      field.append(el('label', '', labelText));
+      const input = document.createElement(tag || 'input');
+      input.className = 'settings-input';
+      if (tag === 'textarea') {
+        input.rows = 3;
+        input.placeholder = placeholder || '';
+      } else {
+        input.type = type || 'text';
+        input.placeholder = placeholder || '';
+      }
+      input.value = value || '';
+      field.appendChild(input);
+      return { field, input };
+    };
+    const nameF = mkField('Name', '', 'Notion');
+    const urlF = mkField('URL', '', 'https://mcp.example.com/sse');
+    const tokF = mkField('Token (optional)', '', 'secret', 'password');
+    const headerF = mkField('Headers (optional)', '', 'Authorization: Bearer …', '', 'textarea');
+    const transportF = (() => {
+      const field = el('div', 'settings-field');
+      field.append(el('label', '', 'Transport'));
+      const select = document.createElement('select');
+      select.className = 'settings-input';
+      for (const [v, t] of [['auto', 'Auto'], ['http', 'Streamable HTTP'], ['sse', 'SSE']]) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = t;
+        select.appendChild(opt);
+      }
+      field.appendChild(select);
+      return { field, input: select };
+    })();
+    form.append(nameF.field, urlF.field, tokF.field, transportF.field, headerF.field);
+
+    const actions = el('div', 'settings-actions');
+    const submit = el('button', 'settings-btn primary', 'Connect server');
+    submit.addEventListener('click', async () => {
+      if (!nameF.input.value.trim() || !urlF.input.value.trim()) {
+        settingsBody.appendChild(settingsError('Name and URL are required.'));
+        return;
+      }
+      submit.disabled = true;
+      try {
+        await apiJson('/api/settings/mcp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: nameF.input.value.trim(),
+            url: urlF.input.value.trim(),
+            token: tokF.input.value,
+            transport: transportF.input.value,
+            headers: headerF.input.value,
+          }),
+        });
+        await refreshSettings();
+      } catch (err) {
+        settingsBody.appendChild(settingsError('Couldn’t connect — check the URL and token.'));
+        submit.disabled = false;
+      }
+    });
+    actions.appendChild(submit);
+    form.appendChild(actions);
+    box.appendChild(form);
+    settingsBody.appendChild(box);
+  }
+
+  settingsCloseBtn.addEventListener('click', closeSettings);
+  settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) closeSettings();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !settingsModal.hidden) closeSettings();
+  });
+
+  // ---------------------------------------------------------------------
+  // Sidebar resizer
+  // ---------------------------------------------------------------------
+
+  (function initSidebarResizer() {
+    try {
+      const saved = Number(localStorage.getItem(SIDEBAR_W_KEY));
+      if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) {
+        document.documentElement.style.setProperty('--sidebar-w', `${saved}px`);
+      }
+    } catch (e) { /* storage unavailable */ }
+    let dragging = false;
+    const stop = () => {
+      if (!dragging) return;
+      dragging = false;
+      sidebarResizer.classList.remove('resizing');
+      document.body.classList.remove('resizing-sidebar');
+      const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'), 10);
+      if (w >= SIDEBAR_MIN && w <= SIDEBAR_MAX) {
+        try { localStorage.setItem(SIDEBAR_W_KEY, String(w)); } catch (e) { }
+      }
+    };
+    sidebarResizer.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      e.preventDefault();
+      sidebarResizer.classList.add('resizing');
+      document.body.classList.add('resizing-sidebar');
+      sidebarResizer.setPointerCapture(e.pointerId);
+    });
+    sidebarResizer.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const w = Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, e.clientX)));
+      document.documentElement.style.setProperty('--sidebar-w', `${w}px`);
+    });
+    sidebarResizer.addEventListener('pointerup', stop);
+    sidebarResizer.addEventListener('pointercancel', stop);
+  })();
 
   // ---------------------------------------------------------------------
   // Init
