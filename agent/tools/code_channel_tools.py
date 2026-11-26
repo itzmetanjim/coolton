@@ -15,9 +15,13 @@ from agent.code_channel_store import (
     views as stored_views,
 )
 from agent.keyed_locks import KeyedLocks
+from agent import thread_status
 
 VIEW_TYPES = ("html", "diff", "block_kit", "canvas", "pull_request")
 CONTEXT_BAR_ICONS = ("branch", "folder", "hierarchy", "life-ring", "link", "globe", "terminal", "code", "search", "lock")
+CONTEXT_BAR_ITEM_TYPES = ("info", "action")
+SESSION_STATUSES = ("processing", "active", "suspended", "closed")
+PR_STATUSES = ("open", "draft", "blocked", "merged", "closed", "")
 # One setView at a time per channel: Slack fails tab creations that race each other in
 # the same channel with view_creation_failed (seen live when coolton made several tabs
 # with parallel tool calls).
@@ -296,12 +300,73 @@ def set_context_bar(channel_id: str, items: str) -> str:
     for item in parsed:
         if not isinstance(item, dict) or not item.get("key") or not item.get("label"):
             return "Error: every item needs a key and a label."
-        item.pop("item_type", None)  # action items can't reach coolton yet (listeners.code_channel_app)
+        item_type = item.get("item_type")
+        if item_type is not None and item_type not in CONTEXT_BAR_ITEM_TYPES:
+            return f"Error: item_type must be one of {', '.join(CONTEXT_BAR_ITEM_TYPES)}."
+        if item_type == "action" and item.get("url"):
+            return 'Error: an "action" context-bar item cannot also have a URL.'
         if item.get("icon") and item["icon"] not in CONTEXT_BAR_ICONS:
             return f"Error: icon must be one of {', '.join(CONTEXT_BAR_ICONS)}."
     response = call("agents.conversations.setProperties", channel_id=channel_id,
                     code_channel={"context_bar_items": parsed})
     return "Context bar updated." if response.get("ok") else error_text(response)
+
+
+def set_pr_status(channel_id: str, pr_status: str) -> str:
+    """The channel's pull request status (code_channel.pr_status): one value for the
+    whole channel, shown in the sidebar and the conversations list. It mirrors the pull
+    request(s) the channel's pull_request tabs point at, and you move it as they do:
+    draft -> open -> blocked (changes requested, failing checks, merge conflicts) ->
+    merged or closed. Clear it with "" when none applies. See the pull request lifecycle
+    in Slack's code channel docs for the exact mapping."""
+    denied = not_a_code_channel(channel_id)
+    if denied:
+        return denied
+    if pr_status not in PR_STATUSES:
+        return (f"Error: pr_status must be one of {', '.join(PR_STATUSES[:-1])}, or an empty "
+                f"string \"\" to clear it (sent exactly as shown; \"Open\" or surrounding "
+                f"whitespace are refused).")
+    response = call("agents.conversations.setProperties", channel_id=channel_id,
+                    code_channel={"pr_status": pr_status})
+    if not response.get("ok"):
+        return error_text(response)
+    return "Pull request status updated." if pr_status else "Pull request status cleared."
+
+
+def set_agent_resource(channel_id: str, url: str = "", resource_type: str = "", title: str = "",
+                       provider: str = "") -> str:
+    """This channel's external resource (agent_resource): what the session is about when
+    it isn't git, e.g. a design doc, a dashboard or a ticket. Partial: only the fields
+    you give change, so to clear one, pass a field you can't meaningfully clear otherwise
+    (Slack has no "clear resource" call; sending a new url replaces the old resource)."""
+    denied = not_a_code_channel(channel_id)
+    if denied:
+        return denied
+    fields = {k: v.strip() for k, v in (("url", url), ("resource_type", resource_type),
+                                         ("title", title), ("provider", provider)) if v.strip()}
+    if not fields:
+        return "Error: give at least one of url, resource_type, title, provider."
+    response = call("agents.conversations.setProperties", channel_id=channel_id, agent_resource=fields)
+    if not response.get("ok"):
+        return error_text(response)
+    return "External resource set."
+
+
+def set_session_status(channel_id: str, status: str) -> str:
+    """Set the session's status (agents.sessions.setStatus): processing (working), active
+    (ready for the next prompt), suspended (blocked on the user: needs clarification, a
+    decision or a tool approval), or closed (done, no longer responds). A turn flips
+    between processing and active on its own; use suspended when you've asked the user
+    something and need their answer before continuing, closed when the work is finished
+    (archiving when asked is still how a channel is wrapped up). Suspended/closed stick:
+    the end of the turn won't flip the session back to active."""
+    denied = not_a_code_channel(channel_id)
+    if denied:
+        return denied
+    if status not in SESSION_STATUSES:
+        return f"Error: status must be one of {', '.join(SESSION_STATUSES)}."
+    thread_status.set_status(None, channel_id, "", status)
+    return f"Session status set to {status}."
 
 
 def set_commands(channel_id: str, commands: str) -> str:

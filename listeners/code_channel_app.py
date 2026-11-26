@@ -170,8 +170,10 @@ def handle_block_action(body: dict, app_client: WebClient, coolton: WebClient) -
 
 def handle_context_bar_action(event: dict, app_client: WebClient, coolton: WebClient) -> None:
     """Someone clicked an "action" item in a code channel's context bar. Slack documents
-    this event but its manifest validator doesn't accept a subscription to it yet, so it
-    may never arrive; handled in case Slack delivers it anyway."""
+    the code_channel_action event (context bar items with item_type "action"; see
+    agent.tools.code_channel_tools.set_context_bar), but its manifest validator hasn't
+    accepted a subscription to it yet, so it may never arrive; handled in case Slack
+    delivers it anyway (the type is registered below)."""
     channel_id = event.get("channel") or event.get("channel_id") or ""
     user_id = event.get("user") or event.get("user_id") or ""
     key = event.get("key") or (event.get("item") or {}).get("key") or "?"

@@ -30,6 +30,10 @@ _REFRESH_SECONDS = 30 * 60.0
 
 _lock = threading.Lock()
 _state: dict[tuple[str, str], dict] = {}
+# A status the model set explicitly (suspended while waiting on the user, closed when
+# done) that the turn's stop() should honor instead of flipping back to active
+# (agent.thread_status.set_status).
+_pinned: dict[tuple[str, str], dict] = {}
 
 
 def _title(text: str) -> str:
@@ -99,6 +103,7 @@ def start(client, channel_id: str, thread_ts: str, request_text: str = "") -> No
         if old and old.get("timer"):
             old["timer"].cancel()
         _state[key] = {"client": client, "timer": None}
+        _pinned.pop(key, None)  # a new turn is processing again, pin or not
         _arm_refresh(key)
     if not thread_ts:
         # A code channel's session title is the channel's name, so it's left alone (renaming
@@ -110,19 +115,40 @@ def start(client, channel_id: str, thread_ts: str, request_text: str = "") -> No
     _call(client, "agents.sessions.rename", channel_id, thread_ts, title=title)
 
 
+def set_status(client, channel_id: str, thread_ts: str, status: str) -> None:
+    """Set a session's status explicitly, e.g. `suspended` while the agent waits on the
+    user's answer or `closed` once the work is done (see agent.tools.code_channel_tools
+    for the code-channel tool that calls this). A suspended/closed status is pinned: the
+    turn's own stop() honors it instead of flipping the session back to `active`, so the
+    end-of-turn cleanup can't clobber it. A later turn's start() unpins it (processing
+    again). Never raises: a flaky status API must not block the actual turn."""
+    key = (channel_id, thread_ts)
+    with _lock:
+        if status in ("suspended", "closed"):
+            _pinned[key] = {"client": client, "status": status}
+        else:
+            _pinned.pop(key, None)
+    _call(client, "agents.sessions.setStatus", channel_id, thread_ts, status=status)
+
+
 def stop(channel_id: str, thread_ts: str) -> None:
-    """End of turn: set the session `active` and drop state so the keep-alive timer
-    never outlives the turn."""
+    """End of turn: set the session `active` (or a pinned suspended/closed status) and
+    drop state so the keep-alive timer never outlives the turn."""
     with _lock:
         entry = _state.pop((channel_id, thread_ts), None)
         if entry and entry.get("timer"):
             entry["timer"].cancel()
-    if entry is None:
+        pinned = _pinned.pop((channel_id, thread_ts), None)
+    if entry is None and pinned is None:
         return
-    _call(entry["client"], "agents.sessions.setStatus", channel_id, thread_ts, status="active")
+    client = entry["client"] if entry else pinned["client"]
+    status = pinned["status"] if pinned else "active"
+    _call(client, "agents.sessions.setStatus", channel_id, thread_ts, status=status)
 
 
 def end_session_now(client, channel_id: str, thread_ts: str) -> None:
     """Take the session out of `processing` right away (the stop button). The turn's
     own stop() still runs when the halted run finishes."""
+    with _lock:
+        _pinned.pop((channel_id, thread_ts), None)
     _call(client, "agents.sessions.setStatus", channel_id, thread_ts, status="active")

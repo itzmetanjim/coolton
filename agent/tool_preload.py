@@ -57,10 +57,11 @@ TOOL_GROUPS: dict[str, tuple[str, frozenset[str]]] = {
     "scheduled_tasks": ("Does this involve doing something on a schedule: a recurring task (every day, every week, every hour, a cron job), or listing, changing, pausing, resuming or deleting scheduled tasks?", frozenset({
         "create_scheduled_task_tool", "list_scheduled_tasks_tool", "pause_scheduled_task_tool",
         "resume_scheduled_task_tool", "delete_scheduled_task_tool"})),
-    "code_channels": ("Does this involve a code channel: creating one, or working in one (its tabs, context bar, canvas, slash commands, renaming or archiving it)?", frozenset({
+    "code_channels": ("Does this involve a code channel: creating one, or working in one (its tabs, context bar, session status, pull request status, external resource, canvas, slash commands, renaming or archiving it)?", frozenset({
         "create_code_channel_tool", "code_channel_create_view_tool", "code_channel_list_views_tool",
         "code_channel_read_view_tool", "code_channel_remove_view_tool", "code_channel_read_canvas_tool",
-        "code_channel_context_bar_tool", "block_kit_validate_tool",
+        "code_channel_context_bar_tool", "code_channel_status_tool", "code_channel_pr_status_tool",
+        "code_channel_resource_tool", "block_kit_validate_tool",
         "code_channel_commands_tool", "code_channel_rename_tool", "code_channel_archive_tool"})),
     "data_analysis": ("Does this involve analyzing data: a CSV, Excel or spreadsheet file, a SQL query, statistics, or charts and graphs of numbers?", frozenset({
         "analyze_csv_tool", "run_sql_on_csv_tool", "run_python_data_analysis_tool"})),

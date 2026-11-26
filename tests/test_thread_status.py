@@ -25,8 +25,10 @@ class _FakeTimer:
 def _fake_timer(monkeypatch):
     monkeypatch.setattr(ts.threading, "Timer", _FakeTimer)
     ts._state.clear()
+    ts._pinned.clear()
     yield
     ts._state.clear()
+    ts._pinned.clear()
 
 
 def calls(client):
@@ -92,6 +94,33 @@ def test_a_failing_status_api_never_breaks_the_turn():
     client.api_call.side_effect = Exception("status api down")
     ts.start(client, "C1", "1.1")
     ts.stop("C1", "1.1")
+
+
+def test_an_explicit_suspended_status_survives_the_turns_end():
+    """An agent that has posted a question is suspended, not active: the turn's own stop()
+    must not flip it back (agent.thread_status.set_status pins it)."""
+    client = Mock()
+    ts.start(client, "C1", "1.1")
+    client.api_call.reset_mock()
+    ts.set_status(client, "C1", "1.1", "suspended")
+    ts.stop("C1", "1.1")
+    # set_status sets it, and the turn's stop() re-asserts it instead of flipping to active.
+    assert calls(client) == [("agents.sessions.setStatus", {"channel_id": "C1", "thread_ts": "1.1", "status": "suspended"})] * 2
+
+
+def test_a_pinned_status_is_unpinned_by_the_next_turn_and_by_active():
+    client = Mock()
+    ts.start(client, "C1", "1.1")
+    ts.set_status(client, "C1", "1.1", "suspended")
+    ts.stop("C1", "1.1")
+    client.api_call.reset_mock()
+    ts.start(client, "C1", "1.1", request_text="hi")
+    assert calls(client)[0] == ("agents.sessions.setStatus", {"channel_id": "C1", "thread_ts": "1.1", "status": "processing", "title": "hi"})
+
+    client.api_call.reset_mock()
+    ts.set_status(client, "C1", "1.1", "active")
+    ts.stop("C1", "1.1")
+    assert calls(client) == [("agents.sessions.setStatus", {"channel_id": "C1", "thread_ts": "1.1", "status": "active"})] * 2
 
 
 @pytest.mark.parametrize("running", [True, False])

@@ -192,16 +192,65 @@ def code_channel_read_canvas_tool(ctx: RunContext[AgentDeps], view_key: str, inc
 def code_channel_context_bar_tool(ctx: RunContext[AgentDeps], items: str) -> str:
     """Set this code channel's context bar: up to 5 items pinned at the top (the repo, the
     branch, the PR, CI status...). Each call replaces all of them, so send the full set,
-    and keep it current as things change ("PR #42 merged").
+    and keep it current as things change ("PR #42 merged"). An item with item_type
+    "action" (instead of a url) is rendered as a button. The click handler is ready, but
+    this app's manifest does not subscribe to code_channel_action yet; click events won't
+    reach coolton until that listener subscription can be added.
 
     Args:
-        items: JSON array string of {"key", "label", "icon"?, "url"?}. key is a unique id
-            (max 64 chars), label the text (max 128); icon is one of branch, folder,
-            hierarchy, life-ring, link, globe, terminal, code, search, lock.
+        items: JSON array string of {"key", "label", "icon"?, "url"?, "item_type"?}. key
+            is a unique id (max 64 chars), label the text (max 128); icon is one of
+            branch, folder, hierarchy, life-ring, link, globe, terminal, code, search,
+            lock; item_type is "info" (default) or "action" (not with a url).
     """
     from agent.tools.code_channel_tools import set_context_bar
 
     return set_context_bar(ctx.deps.channel_id, items)
+
+
+def code_channel_status_tool(ctx: RunContext[AgentDeps], status: str) -> str:
+    """Set this code channel's session status: processing (working), active (ready for the
+    next prompt), suspended (waiting on the user), or closed (done). Turns flip between
+    processing and active automatically; use suspended when you've asked the user
+    something and need their answer before continuing, closed when the work is done.
+
+    Args:
+        status: One of "processing", "active", "suspended", "closed".
+    """
+    from agent.tools.code_channel_tools import set_session_status
+
+    return set_session_status(ctx.deps.channel_id, status)
+
+
+def code_channel_pr_status_tool(ctx: RunContext[AgentDeps], pr_status: str) -> str:
+    """Set this code channel's pull request status (shown in the sidebar and the
+    conversations list, one value for the whole channel): draft, open, blocked, merged or
+    closed, as the pull request(s) in the channel move. Clear it with "" when none
+    applies.
+
+    Args:
+        pr_status: "draft", "open", "blocked", "merged", "closed", or "" to clear.
+    """
+    from agent.tools.code_channel_tools import set_pr_status
+
+    return set_pr_status(ctx.deps.channel_id, pr_status)
+
+
+def code_channel_resource_tool(ctx: RunContext[AgentDeps], url: str = "", resource_type: str = "",
+                               title: str = "", provider: str = "") -> str:
+    """Set this code channel's external resource: what the session is about when it isn't
+    code (a design doc, a dashboard, a ticket). Only the fields you give change; give at
+    least one.
+
+    Args:
+        url: URL of the external resource.
+        resource_type: Type of the resource (e.g. "doc", "dashboard", "ticket").
+        title: Display title.
+        provider: Provider (e.g. "google_drive", "figma").
+    """
+    from agent.tools.code_channel_tools import set_agent_resource
+
+    return set_agent_resource(ctx.deps.channel_id, url, resource_type, title, provider)
 
 
 def code_channel_commands_tool(ctx: RunContext[AgentDeps], commands: str) -> str:
