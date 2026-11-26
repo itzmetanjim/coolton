@@ -76,8 +76,9 @@ def submit_message(conversation_id: str, user_id: str, text: str, attachments: l
     # consent through /api/settings/policy/opt-in.
     from agent.policy_consent import has_consent
     if not has_consent(user_id):
+        # No run was started, so a turn_end would have no matching turn_start
+        # and the UI would render a phantom failed-turn row after the opt-in prompt.
         log.append_event(conversation_id, {"type": "policy_prompt"})
-        log.append_event(conversation_id, {"type": "turn_end", "state": "error", "reason": "no policy consent"})
         return
 
     # Name the conversation after the message that opened it, so the sidebar

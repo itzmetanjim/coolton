@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -225,12 +226,26 @@ def set_instructions(body: InstructionsBody, request: Request):
 # ---------------------------------------------------------------------------
 
 
+def _refresh_fallback_cache():
+    try:
+        from agent.provider_probe import refresh_fallback_cache
+
+        refresh_fallback_cache()
+    except Exception:
+        logger.exception("Manual fallback cache refresh after web settings clear failed")
+
+
 @router.post("/fallback-cache/clear")
 def fallback_cache_clear(request: Request):
     _require_user(request)
     from agent.fallback_cache import clear_cache
 
     clear_cache()
+    threading.Thread(
+        target=_refresh_fallback_cache,
+        name="web-fallback-cache-refresh",
+        daemon=True,
+    ).start()
     return {"ok": True}
 
 

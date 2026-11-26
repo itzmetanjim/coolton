@@ -213,8 +213,7 @@ def test_submit_message_without_policy_consent_never_starts_a_turn(conversation_
     # same two buttons as the Slack flow) and records consent through
     # /api/settings/policy/opt-in.
     assert events[1]["type"] == "policy_prompt"
-    assert events[-1]["type"] == "turn_end"
-    assert events[-1]["state"] == "error"
+    assert [event["type"] for event in events] == ["user_message", "policy_prompt"]
 
 
 def test_submit_message_names_an_unnamed_conversation_after_the_first_message(monkeypatch):
