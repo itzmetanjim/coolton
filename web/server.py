@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from web import auth, bot_oauth, conversation_log as log, conversations, settings
+from web import auth, bot_oauth, conversation_log as log, conversations
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,6 @@ async def _same_origin_writes(request: Request, call_next):
 
 app.include_router(auth.router)
 app.include_router(conversations.router)
-app.include_router(settings.router)
 app.include_router(bot_oauth.router)
 
 

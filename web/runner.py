@@ -70,15 +70,18 @@ def submit_message(conversation_id: str, user_id: str, text: str, attachments: l
     # proxy, slack_api_call as SLACK_USER_TOKEN) without ever giving the
     # consent Slack requires first. ensure_consent itself needs a Slack `say`
     # to post interactive opt-in buttons into, which the web surface has none
-    # of — check the cheap, file-backed has_consent() directly and log a
-    # policy_prompt event instead: the web UI renders the same opt-in prompt
-    # (same wording, same Slack canvas link, same two buttons) and records
-    # consent through /api/settings/policy/opt-in.
-    from agent.policy_consent import has_consent
+    # of — check the cheap, file-backed has_consent() directly and point the
+    # user at the Slack flow instead of trying to reproduce it here.
+    from agent.policy_consent import POLICY_URL, has_consent
     if not has_consent(user_id):
-        # No run was started, so a turn_end would have no matching turn_start
-        # and the UI would render a phantom failed-turn row after the opt-in prompt.
-        log.append_event(conversation_id, {"type": "policy_prompt"})
+        log.append_event(conversation_id, {
+            "type": "agent_message", "variant": "final",
+            "text": (
+                f"you need to opt in to the [Coolton policy]({POLICY_URL}) before using coolton here. "
+                "DM coolton on Slack once to opt in, then come back."
+            ),
+        })
+        log.append_event(conversation_id, {"type": "turn_end", "state": "error", "reason": "no policy consent"})
         return
 
     # Name the conversation after the message that opened it, so the sidebar

@@ -40,13 +40,11 @@ def get_me(request: Request):
     if not owner_id:
         raise HTTPException(401, "Not signed in")
     from agent.agent import _get_user_display_info
-    from agent.policy_consent import has_consent
     name, _pfp = _get_user_display_info(owner_id)
     return {
         "slack_id": owner_id,
         "display_name": name or owner_id,
         "avatar_url": f"https://cachet.dunkirk.sh/users/{owner_id}/r",
-        "policy_consent": has_consent(owner_id),
     }
 
 
